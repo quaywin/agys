@@ -20,29 +20,43 @@ func IsAuto(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), AutoProfileKeyword)
 }
 
-// Calculate5HQuotaScore extracts the highest remaining 5-hour quota fraction from a QuotaSummary.
+// Calculate5HQuotaScore extracts the highest remaining 5-hour quota fraction for Gemini models from a QuotaSummary.
+// It prioritizes Gemini model groups over non-Gemini model groups (e.g. Claude/GPT models).
 // Returns -1.0 if no valid 5h quota bucket is found.
 func Calculate5HQuotaScore(summary *QuotaSummary) float64 {
 	if summary == nil || len(summary.Groups) == 0 {
 		return -1.0
 	}
 
-	bestFraction := -1.0
+	bestGeminiFraction := -1.0
+	bestAnyFraction := -1.0
+
 	for _, group := range summary.Groups {
+		gName := strings.ToLower(strings.TrimSpace(group.DisplayName))
+		gDesc := strings.ToLower(strings.TrimSpace(group.Description))
+
 		for _, bucket := range group.Buckets {
 			w := strings.ToLower(strings.TrimSpace(bucket.Window))
 			d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
 			b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
 
 			if w == "5h" || strings.Contains(w, "5h") || strings.Contains(d, "5h") || strings.Contains(b, "5h") {
-				if bucket.RemainingFraction > bestFraction {
-					bestFraction = bucket.RemainingFraction
+				isGemini := strings.Contains(gName, "gemini") || strings.Contains(gDesc, "gemini") || strings.Contains(d, "gemini") || strings.Contains(b, "gemini")
+
+				if bucket.RemainingFraction > bestAnyFraction {
+					bestAnyFraction = bucket.RemainingFraction
+				}
+				if isGemini && bucket.RemainingFraction > bestGeminiFraction {
+					bestGeminiFraction = bucket.RemainingFraction
 				}
 			}
 		}
 	}
 
-	return bestFraction
+	if bestGeminiFraction >= 0 {
+		return bestGeminiFraction
+	}
+	return bestAnyFraction
 }
 
 // ProfileScore holds quota scoring results for a profile.

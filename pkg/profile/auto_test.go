@@ -67,6 +67,32 @@ func TestCalculate5HQuotaScore(t *testing.T) {
 		}
 	})
 
+	t.Run("prioritize Gemini group over Claude/GPT group", func(t *testing.T) {
+		summary := &QuotaSummary{
+			Groups: []QuotaGroup{
+				{
+					DisplayName: "Gemini Models",
+					Buckets: []QuotaBucket{
+						{Window: "5h", RemainingFraction: 0.854},
+						{Window: "weekly", RemainingFraction: 0.971},
+					},
+				},
+				{
+					DisplayName: "Claude and GPT models",
+					Buckets: []QuotaBucket{
+						{Window: "5h", RemainingFraction: 1.0},
+						{Window: "weekly", RemainingFraction: 0.644},
+					},
+				},
+			},
+		}
+
+		score := Calculate5HQuotaScore(summary)
+		if score != 0.854 {
+			t.Errorf("expected Gemini 5h score 0.854, got %f", score)
+		}
+	})
+
 	t.Run("no 5h window buckets", func(t *testing.T) {
 		summary := &QuotaSummary{
 			Groups: []QuotaGroup{
