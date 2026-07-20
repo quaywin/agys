@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/quaywin/agys/pkg/profile"
 	"github.com/spf13/cobra"
@@ -112,11 +113,25 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		return err
 	}
 
+	// Capture latest conversation info before execution
+	idBefore, timeBefore, _ := profile.GetLatestConversationFileInfo(targetProfile)
+
 	execCmd := profile.BuildCmd(profileDir, agyArgs...)
-	if err := execCmd.Run(); err != nil {
-		return err
+	runErr := execCmd.Run()
+
+	// Capture latest conversation info after execution
+	idAfter, timeAfter, _ := profile.GetLatestConversationFileInfo(targetProfile)
+
+	if idAfter != "" {
+		isNew := idBefore != idAfter
+		isUpdated := timeAfter.After(timeBefore.Add(1 * time.Second))
+		if isNew || isUpdated {
+			fmt.Printf("\n[agys] Tip: To resume this session with agys, run:\n")
+			fmt.Printf("       agys run -- --conversation %s\n", idAfter)
+		}
 	}
-	return nil
+
+	return runErr
 }
 
 func init() {

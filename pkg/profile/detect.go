@@ -85,3 +85,46 @@ func FindProfileByLatestConversation() (string, error) {
 
 	return latestProfile, nil
 }
+
+// GetLatestConversationFileInfo returns the ID and modification time of the latest conversation in a profile.
+func GetLatestConversationFileInfo(profileName string) (string, time.Time, error) {
+	profileDir, err := GetProfileDir(profileName)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	brainDir := filepath.Join(profileDir, ".gemini", "antigravity-cli", "brain")
+	entries, err := os.ReadDir(brainDir)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	var latestID string
+	var latestTime time.Time
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		dirPath := filepath.Join(brainDir, entry.Name())
+		info, err := os.Stat(dirPath)
+		if err != nil {
+			continue
+		}
+
+		checkPath := filepath.Join(dirPath, ".system_generated", "logs", "transcript.jsonl")
+		checkInfo, err := os.Stat(checkPath)
+		mTime := info.ModTime()
+		if err == nil {
+			mTime = checkInfo.ModTime()
+		}
+
+		if mTime.After(latestTime) {
+			latestTime = mTime
+			latestID = entry.Name()
+		}
+	}
+
+	return latestID, latestTime, nil
+}
