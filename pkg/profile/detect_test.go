@@ -83,3 +83,32 @@ func TestFindProfileByLatestConversation(t *testing.T) {
 		t.Errorf("Expected latest profile to be %q, got %q (err: %v)", p1, latest, err)
 	}
 }
+
+func TestSaveGetLastConversation(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	// Test default state: empty cache
+	id, err := GetLastConversation()
+	if err != nil {
+		t.Fatalf("GetLastConversation failed: %v", err)
+	}
+	if id != "" {
+		t.Errorf("Expected empty last conversation, got %q", id)
+	}
+
+	// Test save
+	testID := "test-conv-abc"
+	if err := SaveLastConversation(testID); err != nil {
+		t.Fatalf("SaveLastConversation failed: %v", err)
+	}
+
+	// Test read back
+	id, err = GetLastConversation()
+	if err != nil {
+		t.Fatalf("GetLastConversation failed: %v", err)
+	}
+	if id != testID {
+		t.Errorf("Expected conversation ID %q, got %q", testID, id)
+	}
+}

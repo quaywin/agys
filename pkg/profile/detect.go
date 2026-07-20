@@ -3,8 +3,44 @@ package profile
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+const lastConversationFilename = "last_conversation"
+
+// SaveLastConversation saves the last active conversation ID to a global cache file.
+func SaveLastConversation(convID string) error {
+	if convID == "" {
+		return nil
+	}
+	agysDir, err := GetAgysDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(agysDir, 0700); err != nil {
+		return err
+	}
+	cacheFile := filepath.Join(agysDir, lastConversationFilename)
+	return os.WriteFile(cacheFile, []byte(strings.TrimSpace(convID)+"\n"), 0600)
+}
+
+// GetLastConversation retrieves the last active conversation ID from the global cache file.
+func GetLastConversation() (string, error) {
+	agysDir, err := GetAgysDir()
+	if err != nil {
+		return "", err
+	}
+	cacheFile := filepath.Join(agysDir, lastConversationFilename)
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
 
 // FindProfileByConversation looks up which profile contains the given conversation ID in its brain directory.
 // Returns the profile name, or empty string if not found.
@@ -36,7 +72,17 @@ func FindProfileByConversation(convID string) (string, error) {
 
 // FindProfileByLatestConversation scans all profiles and returns the profile name
 // that has the most recently modified conversation in its brain directory.
+// It attempts to use the global last active conversation cache file first for O(1) performance.
 func FindProfileByLatestConversation() (string, error) {
+	// Try reading cache first for O(1) performance
+	lastConvID, err := GetLastConversation()
+	if err == nil && lastConvID != "" {
+		p, err := FindProfileByConversation(lastConvID)
+		if err == nil && p != "" {
+			return p, nil
+		}
+	}
+
 	profiles, err := List()
 	if err != nil {
 		return "", err

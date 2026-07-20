@@ -126,6 +126,9 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		isNew := idBefore != idAfter
 		isUpdated := timeAfter.After(timeBefore.Add(1 * time.Second))
 		if isNew || isUpdated {
+			// Save to cache for O(1) next-time startup
+			_ = profile.SaveLastConversation(idAfter)
+
 			// Filter out conversation-triggering arguments from original args to preserve other flags
 			var preservedFlags []string
 			for i := 0; i < len(agyArgs); i++ {
