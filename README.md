@@ -11,6 +11,7 @@
 
 - **Profile Isolation**: Each profile gets its own home directory (`~/.antigravity-profiles/<profile_name>/`).
 - **Interactive Terminal Support**: Preserves `os.Stdin`, `os.Stdout`, and `os.Stderr` streaming so interactive logins and typing token responses work seamlessly.
+- **Model Quota Tracking**: Real-time quota status and refresh windows across profiles in parallel (with optional JSON output).
 - **Cross-Platform**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures.
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
@@ -66,13 +67,43 @@ Execute any `agy` command isolated to a specific profile:
 agys run work -- status
 ```
 
-### 4. Delete a Profile
+### 4. Rename a Profile
+Rename an existing profile directory:
+
+```bash
+agys rename work company
+# or
+agys mv work company
+```
+
+### 5. Delete a Profile
 Remove a profile directory:
 
 ```bash
 agys delete work
 # or skip confirmation prompt:
 agys delete work --force
+```
+
+### 6. Check Quota Status
+Display the remaining model quota and refresh windows for one or all profiles:
+
+```bash
+# Check detailed quota for all profiles in parallel
+agys quota
+# or
+agys q
+
+# Check quota for a specific profile
+agys quota work
+
+# Output detailed quota in JSON format for automation
+agys quota --json
+
+# Show a compact quota summary directly when listing profiles
+agys list -q
+# or
+agys ls --quota
 ```
 
 ---
@@ -90,6 +121,8 @@ Available Commands:
   add         Create a new profile and perform agy login
   delete      Delete a profile directory (alias: rm)
   list        List all active profile directories (alias: ls)
+  quota       Check model quota and usage for profile(s) (alias: q)
+  rename      Rename an existing profile directory (alias: mv)
   run         Execute agy command with specified profile
 
 Flags:

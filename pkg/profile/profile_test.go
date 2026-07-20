@@ -82,3 +82,59 @@ func TestProfileLifecycle(t *testing.T) {
 		t.Errorf("Expected profile to be deleted")
 	}
 }
+
+func TestProfileRename(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	oldName := "profile-old"
+	newName := "profile-new"
+
+	// Create profile
+	_, err := Create(oldName)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// Rename profile
+	err = Rename(oldName, newName)
+	if err != nil {
+		t.Fatalf("Rename error: %v", err)
+	}
+
+	// Old should not exist
+	existsOld, _, err := Exists(oldName)
+	if err != nil {
+		t.Fatalf("Exists old error: %v", err)
+	}
+	if existsOld {
+		t.Errorf("Expected old profile to not exist")
+	}
+
+	// New should exist
+	existsNew, _, err := Exists(newName)
+	if err != nil {
+		t.Fatalf("Exists new error: %v", err)
+	}
+	if !existsNew {
+		t.Errorf("Expected new profile to exist")
+	}
+
+	// Rename non-existent profile should fail
+	err = Rename("non-existent", "another-name")
+	if err == nil {
+		t.Errorf("Expected error when renaming non-existent profile")
+	}
+
+	// Create another profile and test collision
+	otherName := "other-profile"
+	_, err = Create(otherName)
+	if err != nil {
+		t.Fatalf("Create other profile error: %v", err)
+	}
+
+	err = Rename(newName, otherName)
+	if err == nil {
+		t.Errorf("Expected error when renaming to existing profile name")
+	}
+}

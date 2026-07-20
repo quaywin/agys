@@ -24,6 +24,11 @@
   - Validates profile existence.
   - Prepares `exec.Cmd` executing `agy [agy_commands...]` with `HOME=~/.antigravity-profiles/<profile_name>`.
   - Directs `os.Stdin`, `os.Stdout`, `os.Stderr` to preserve terminal interactive behaviors and TTY features.
+- `agys quota [profile_name]` (alias `q`):
+  - Checks model quota and usage for one or all profiles.
+  - Queries Google's internal APIs using the profile's OAuth token.
+  - Displays remaining quota percentage and refresh windows.
+  - Supports `--json` flag to output results in JSON format.
 
 ## Project Structure
 ```text
@@ -42,10 +47,13 @@ agys/
 │   ├── add.go
 │   ├── list.go
 │   ├── delete.go
-│   └── run.go
+│   ├── run.go
+│   └── quota.go
 ├── pkg/
 │   └── profile/
-│       └── profile.go
+│       ├── profile.go
+│       ├── quota.go
+│       └── profile_test.go
 ├── install.sh
 ├── main.go
 └── go.mod

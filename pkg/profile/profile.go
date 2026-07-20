@@ -127,6 +127,37 @@ func Delete(name string) error {
 	return nil
 }
 
+// Rename renames an existing profile directory to a new profile name.
+func Rename(oldName, newName string) error {
+	if err := ValidateName(oldName); err != nil {
+		return fmt.Errorf("invalid old profile name: %w", err)
+	}
+	if err := ValidateName(newName); err != nil {
+		return fmt.Errorf("invalid new profile name: %w", err)
+	}
+
+	exists, oldDir, err := Exists(oldName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("profile %q does not exist", oldName)
+	}
+
+	newExists, newDir, err := Exists(newName)
+	if err != nil {
+		return err
+	}
+	if newExists {
+		return fmt.Errorf("profile %q already exists", newName)
+	}
+
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return fmt.Errorf("failed to rename profile directory from %s to %s: %w", oldDir, newDir, err)
+	}
+	return nil
+}
+
 // BuildCmd constructs an exec.Cmd for running `agy` with the modified HOME environment variable.
 func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	cmd := exec.Command("agy", args...)
