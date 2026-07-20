@@ -16,6 +16,7 @@
 - **Default Active Profile**: Set a default profile (`agys use work` or `agys use auto`) to run commands (`agys run -- status`) without re-typing profile names.
 - **Model Quota Tracking**: Real-time quota status and refresh windows across profiles in parallel (with optional JSON output).
 - **Shell Auto-Completion & Aliases**: Built-in completion generator for `bash`, `zsh`, `fish`, `powershell` with tab-completion for profile names, plus shell alias generation (`agys alias`).
+- **Profile Cloning, Export & Import**: Duplicate a profile instantly (`agys clone`), or pack/unpack profiles to archives (`agys export` / `agys import`) with built-in path-traversal safety checks.
 - **Cross-Platform**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures.
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
@@ -129,7 +130,36 @@ agys delete work
 agys delete work --force
 ```
 
-### 7. Check Quota Status
+### 7. Clone a Profile
+Duplicate an existing profile's configuration and credentials:
+
+```bash
+agys clone work work-copy
+# or using alias
+agys cp work work-copy
+```
+
+### 8. Export & Import Profiles
+Package configurations for backups or migrating setup between computers:
+
+```bash
+# Export a single profile to a compressed .tar.gz archive
+agys export work -o work_profile.tar.gz
+
+# Export all profiles into a single archive
+agys export --all -o all_profiles.tar.gz
+
+# Import a single profile from a compressed archive (inferred profile name "work_profile")
+agys import work_profile.tar.gz
+
+# Import a profile with an explicit target name, overwriting if it exists
+agys import work_profile.tar.gz personal-backup --force
+
+# Import all profiles from a bulk archive, overwriting existing ones
+agys import all_profiles.tar.gz --all --force
+```
+
+### 9. Check Quota Status
 Display the remaining model quota and refresh windows for one or all profiles:
 
 ```bash
@@ -150,7 +180,7 @@ agys list -q
 agys ls --quota
 ```
 
-### 8. Shell Aliases & Auto-Completion
+### 10. Shell Aliases & Auto-Completion
 
 ```bash
 # Generate shell aliases for your profiles (e.g. alias agy-work="agys run work --")
@@ -162,7 +192,7 @@ source <(agys completion zsh)
 source <(agys completion bash)
 ```
 
-### 9. Version & Upgrading
+### 11. Version & Upgrading
 
 ```bash
 # Check installed version
@@ -215,8 +245,11 @@ Available Commands:
   add         Create a new profile and perform agy login
   alias       Generate shell aliases for configured profiles
   auto        Execute agy command automatically using profile with the best 5h Gemini quota
+  clone       Clone an existing profile to a new profile (alias: cp)
   completion  Generate shell completion scripts
   delete      Delete a profile directory (alias: rm)
+  export      Export a profile to a gzipped tar archive
+  import      Import a profile from a gzipped tar archive
   list        List all active profile directories (alias: ls)
   priority    Manage profile priorities for auto profile selection (alias: prio, p)
   quota       Check model quota and usage for profile(s) (alias: q)
