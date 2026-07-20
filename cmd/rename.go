@@ -8,10 +8,11 @@ import (
 )
 
 var renameCmd = &cobra.Command{
-	Use:     "rename <old_name> <new_name>",
-	Aliases: []string{"mv"},
-	Short:   "Rename an existing profile directory",
-	Args:    cobra.ExactArgs(2),
+	Use:               "rename <old_name> <new_name>",
+	Aliases:           []string{"mv"},
+	Short:             "Rename an existing profile directory",
+	ValidArgsFunction: CompleteProfileNames,
+	Args:              cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		oldName := args[0]
 		newName := args[1]

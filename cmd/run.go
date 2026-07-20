@@ -8,19 +8,44 @@ import (
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run <profile_name> -- [agy_commands]",
-	Short: "Execute agy command with specified profile",
-	Args:  cobra.MinimumNArgs(1),
+	Use:               "run [profile_name] -- [agy_commands]",
+	Short:             "Execute agy command with specified or default profile",
+	ValidArgsFunction: CompleteProfileNames,
+	Args:              cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		profileName := args[0]
-		agyArgs := args[1:]
+		var profileName string
+		var agyArgs []string
 
-		exists, profileDir, err := profile.Exists(profileName)
+		firstArg := args[0]
+		exists, profileDir, err := profile.Exists(firstArg)
 		if err != nil {
 			return err
 		}
-		if !exists {
-			return fmt.Errorf("profile %q does not exist. Use `agys add %s` to create it", profileName, profileName)
+
+		if exists {
+			profileName = firstArg
+			agyArgs = args[1:]
+		} else {
+			// Check if default profile is set
+			current, err := profile.GetCurrent()
+			if err != nil {
+				return err
+			}
+			if current != "" {
+				currentExists, currentDir, err := profile.Exists(current)
+				if err != nil {
+					return err
+				}
+				if currentExists {
+					profileName = current
+					profileDir = currentDir
+					agyArgs = args
+				}
+			}
+
+			if profileName == "" {
+				return fmt.Errorf("profile %q does not exist. Use `agys add %s` to create it, or set a default profile with `agys use <profile_name>`", firstArg, firstArg)
+			}
 		}
 
 		execCmd := profile.BuildCmd(profileDir, agyArgs...)

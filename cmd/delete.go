@@ -13,10 +13,11 @@ import (
 var forceDelete bool
 
 var deleteCmd = &cobra.Command{
-	Use:     "delete <profile_name>",
-	Aliases: []string{"rm"},
-	Short:   "Delete a profile directory",
-	Args:    cobra.ExactArgs(1),
+	Use:               "delete <profile_name>",
+	Aliases:           []string{"rm"},
+	Short:             "Delete a profile directory",
+	ValidArgsFunction: CompleteProfileNames,
+	Args:              cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		profileName := args[0]
 

@@ -17,10 +17,11 @@ var (
 )
 
 var quotaCmd = &cobra.Command{
-	Use:     "quota [profile_name]",
-	Aliases: []string{"q"},
-	Short:   "Check model quota and usage for profile(s)",
-	Long:    `Retrieve and display remaining quota percentage and refresh windows for one or all profiles.`,
+	Use:               "quota [profile_name]",
+	Aliases:           []string{"q"},
+	Short:             "Check model quota and usage for profile(s)",
+	Long:              `Retrieve and display remaining quota percentage and refresh windows for one or all profiles.`,
+	ValidArgsFunction: CompleteProfileNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()

@@ -12,13 +12,25 @@ import (
 
 var validProfileNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-// GetBaseDir returns the global base directory for storing antigravity profiles (~/.antigravity-profiles).
-func GetBaseDir() (string, error) {
+// GetAgysDir returns the root configuration directory (~/.agys or $AGYS_DIR).
+func GetAgysDir() (string, error) {
+	if custom := os.Getenv("AGYS_DIR"); custom != "" {
+		return custom, nil
+	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("unable to determine user home directory: %w", err)
 	}
-	return filepath.Join(homeDir, ".antigravity-profiles"), nil
+	return filepath.Join(homeDir, ".agys"), nil
+}
+
+// GetBaseDir returns the global base directory for storing profiles (~/.agys/profiles).
+func GetBaseDir() (string, error) {
+	agysDir, err := GetAgysDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(agysDir, "profiles"), nil
 }
 
 // GetProfileDir returns the directory path for a specific profile name.
@@ -124,6 +136,12 @@ func Delete(name string) error {
 	if err := os.RemoveAll(profileDir); err != nil {
 		return fmt.Errorf("failed to delete profile directory %s: %w", profileDir, err)
 	}
+
+	current, _ := GetCurrent()
+	if current == name {
+		_ = UnsetCurrent()
+	}
+
 	return nil
 }
 
@@ -152,8 +170,88 @@ func Rename(oldName, newName string) error {
 		return fmt.Errorf("profile %q already exists", newName)
 	}
 
+	current, _ := GetCurrent()
+
 	if err := os.Rename(oldDir, newDir); err != nil {
 		return fmt.Errorf("failed to rename profile directory from %s to %s: %w", oldDir, newDir, err)
+	}
+
+	if current == oldName {
+		_ = SetCurrent(newName)
+	}
+
+	return nil
+}
+
+const currentProfileFilename = "current"
+
+// GetCurrent returns the name of the currently configured default profile, or empty string if none.
+func GetCurrent() (string, error) {
+	agysDir, err := GetAgysDir()
+	if err != nil {
+		return "", err
+	}
+	currentFile := filepath.Join(agysDir, currentProfileFilename)
+	data, err := os.ReadFile(currentFile)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to read current profile file: %w", err)
+	}
+
+	name := strings.TrimSpace(string(data))
+	if name == "" {
+		return "", nil
+	}
+
+	// Verify profile still exists
+	exists, _, err := Exists(name)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", nil
+	}
+
+	return name, nil
+}
+
+// SetCurrent sets the default active profile.
+func SetCurrent(name string) error {
+	exists, _, err := Exists(name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("profile %q does not exist", name)
+	}
+
+	agysDir, err := GetAgysDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(agysDir, 0700); err != nil {
+		return fmt.Errorf("failed to create agys directory %s: %w", agysDir, err)
+	}
+
+	currentFile := filepath.Join(agysDir, currentProfileFilename)
+	if err := os.WriteFile(currentFile, []byte(name+"\n"), 0600); err != nil {
+		return fmt.Errorf("failed to write current profile file: %w", err)
+	}
+
+	return nil
+}
+
+// UnsetCurrent removes the default active profile setting.
+func UnsetCurrent() error {
+	agysDir, err := GetAgysDir()
+	if err != nil {
+		return err
+	}
+	currentFile := filepath.Join(agysDir, currentProfileFilename)
+	if err := os.Remove(currentFile); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove current profile file: %w", err)
 	}
 	return nil
 }

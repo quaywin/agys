@@ -44,7 +44,7 @@ func TestProfileLifecycle(t *testing.T) {
 		t.Fatalf("Expected profile to not exist")
 	}
 
-	expectedDir := filepath.Join(tempHome, ".antigravity-profiles", profileName)
+	expectedDir := filepath.Join(tempHome, ".agys", "profiles", profileName)
 	if dir != expectedDir {
 		t.Errorf("Expected dir %s, got %s", expectedDir, dir)
 	}
@@ -136,5 +136,100 @@ func TestProfileRename(t *testing.T) {
 	err = Rename(newName, otherName)
 	if err == nil {
 		t.Errorf("Expected error when renaming to existing profile name")
+	}
+}
+
+func TestCurrentProfile(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	// GetCurrent should be empty initially
+	curr, err := GetCurrent()
+	if err != nil {
+		t.Fatalf("GetCurrent error: %v", err)
+	}
+	if curr != "" {
+		t.Errorf("Expected empty current profile, got %q", curr)
+	}
+
+	// SetCurrent on non-existent profile should fail
+	err = SetCurrent("nonexistent")
+	if err == nil {
+		t.Errorf("Expected error setting non-existent current profile")
+	}
+
+	// Create profile
+	profile1 := "work"
+	profile2 := "personal"
+	_, _ = Create(profile1)
+	_, _ = Create(profile2)
+
+	// Set profile1 as current
+	if err := SetCurrent(profile1); err != nil {
+		t.Fatalf("SetCurrent error: %v", err)
+	}
+
+	curr, err = GetCurrent()
+	if err != nil {
+		t.Fatalf("GetCurrent error: %v", err)
+	}
+	if curr != profile1 {
+		t.Errorf("Expected current profile %q, got %q", profile1, curr)
+	}
+
+	// Rename profile1 to profile3 -> current profile should be updated
+	profile3 := "work-new"
+	if err := Rename(profile1, profile3); err != nil {
+		t.Fatalf("Rename error: %v", err)
+	}
+
+	curr, err = GetCurrent()
+	if err != nil {
+		t.Fatalf("GetCurrent error: %v", err)
+	}
+	if curr != profile3 {
+		t.Errorf("Expected current profile %q after rename, got %q", profile3, curr)
+	}
+
+	// Delete profile3 -> current profile should be unset
+	if err := Delete(profile3); err != nil {
+		t.Fatalf("Delete error: %v", err)
+	}
+
+	curr, err = GetCurrent()
+	if err != nil {
+		t.Fatalf("GetCurrent error: %v", err)
+	}
+	if curr != "" {
+		t.Errorf("Expected empty current profile after delete, got %q", curr)
+	}
+
+	// Set profile2 as current, then UnsetCurrent
+	if err := SetCurrent(profile2); err != nil {
+		t.Fatalf("SetCurrent error: %v", err)
+	}
+	if err := UnsetCurrent(); err != nil {
+		t.Fatalf("UnsetCurrent error: %v", err)
+	}
+	curr, err = GetCurrent()
+	if err != nil {
+		t.Fatalf("GetCurrent error: %v", err)
+	}
+	if curr != "" {
+		t.Errorf("Expected empty current profile after UnsetCurrent, got %q", curr)
+	}
+}
+
+func TestAgysDirEnv(t *testing.T) {
+	customDir := t.TempDir()
+	t.Setenv("AGYS_DIR", customDir)
+
+	baseDir, err := GetBaseDir()
+	if err != nil {
+		t.Fatalf("GetBaseDir error: %v", err)
+	}
+	expected := filepath.Join(customDir, "profiles")
+	if baseDir != expected {
+		t.Errorf("Expected base dir %s, got %s", expected, baseDir)
 	}
 }

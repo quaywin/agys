@@ -1,6 +1,6 @@
 # Antigravity CLI Switcher (`agys`)
 
-`agys` (Antigravity CLI Switcher) is an open-source CLI utility built in Go that isolates account profiles for the `agy` CLI tool. It dynamically overrides the `HOME` environment variable for `agy` execution to profile-specific base directories under `~/.antigravity-profiles/<profile_name>/`.
+`agys` (Antigravity CLI Switcher) is an open-source CLI utility built in Go that isolates account profiles for the `agy` CLI tool. It dynamically overrides the `HOME` environment variable for `agy` execution to profile-specific base directories under `~/.agys/profiles/<profile_name>/`.
 
 > [!NOTE]
 > Profile directories are kept fully isolated from your global home directory, ensuring separate auth tokens, configs, and application states for each profile.
@@ -9,9 +9,11 @@
 
 ## Features
 
-- **Profile Isolation**: Each profile gets its own home directory (`~/.antigravity-profiles/<profile_name>/`).
+- **Profile Isolation**: Each profile gets its own home directory (`~/.agys/profiles/<profile_name>/`).
 - **Interactive Terminal Support**: Preserves `os.Stdin`, `os.Stdout`, and `os.Stderr` streaming so interactive logins and typing token responses work seamlessly.
+- **Default Active Profile**: Set a default profile (`agys use work`) to run commands (`agys run -- status`) without re-typing profile names.
 - **Model Quota Tracking**: Real-time quota status and refresh windows across profiles in parallel (with optional JSON output).
+- **Shell Auto-Completion & Aliases**: Built-in completion generator for `bash`, `zsh`, `fish`, `powershell` with tab-completion for profile names, plus shell alias generation (`agys alias`).
 - **Cross-Platform**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures.
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
@@ -60,14 +62,32 @@ agys list
 agys ls
 ```
 
-### 3. Run Commands Under a Profile
-Execute any `agy` command isolated to a specific profile:
+### 3. Set a Default Profile
+Set an active default profile so you can omit the profile argument when executing commands:
 
 ```bash
-agys run work -- status
+# Set default profile
+agys use work
+
+# View current default profile
+agys use
+
+# Clear default profile
+agys use --unset
 ```
 
-### 4. Rename a Profile
+### 4. Run Commands Under a Profile
+Execute any `agy` command isolated to a specific profile or your configured default:
+
+```bash
+# Run command with explicit profile name
+agys run work -- status
+
+# Run command using default profile
+agys run -- status
+```
+
+### 5. Rename a Profile
 Rename an existing profile directory:
 
 ```bash
@@ -76,7 +96,7 @@ agys rename work company
 agys mv work company
 ```
 
-### 5. Delete a Profile
+### 6. Delete a Profile
 Remove a profile directory:
 
 ```bash
@@ -85,7 +105,7 @@ agys delete work
 agys delete work --force
 ```
 
-### 6. Check Quota Status
+### 7. Check Quota Status
 Display the remaining model quota and refresh windows for one or all profiles:
 
 ```bash
@@ -106,24 +126,59 @@ agys list -q
 agys ls --quota
 ```
 
+### 8. Shell Aliases & Auto-Completion
+
+```bash
+# Generate shell aliases for your profiles (e.g. alias agy-work="agys run work --")
+eval "$(agys alias)"
+
+# Enable tab-completion in Zsh / Bash / Fish
+source <(agys completion zsh)
+# or for bash:
+source <(agys completion bash)
+```
+
+---
+
+## Directory & Configuration Layout
+
+`agys` stores all data under `~/.agys/` by default (or the custom directory specified by the `AGYS_DIR` environment variable):
+
+```text
+~/.agys/
+├── current                  # Active default profile setting (created by `agys use`)
+└── profiles/                # Base directory storing isolated profiles
+    ├── work/                # Isolated HOME directory for profile "work"
+    └── personal/            # Isolated HOME directory for profile "personal"
+```
+
+To use a custom location for profiles:
+
+```bash
+export AGYS_DIR="/custom/path/to/.agys"
+```
+
 ---
 
 ## CLI Usage Reference
 
 ```text
 agys isolates account profiles by dynamically overriding the HOME environment
-variable for the agy command to profile-specific base directories (~/.antigravity-profiles/<profile_name>/).
+variable for the agy command to profile-specific base directories (~/.agys/profiles/<profile_name>/).
 
 Usage:
   agys [command]
 
 Available Commands:
   add         Create a new profile and perform agy login
+  alias       Generate shell aliases for configured profiles
+  completion  Generate shell completion scripts
   delete      Delete a profile directory (alias: rm)
   list        List all active profile directories (alias: ls)
   quota       Check model quota and usage for profile(s) (alias: q)
   rename      Rename an existing profile directory (alias: mv)
-  run         Execute agy command with specified profile
+  run         Execute agy command with specified or default profile
+  use         Set or display the default active profile
 
 Flags:
   -h, --help   help for agys
@@ -137,7 +192,7 @@ Flags:
 graph TD
     User[User Shell] -->|agys run work -- command| AGYS[agys CLI]
     AGYS -->|Validate Profile| Check[pkg/profile.Exists]
-    AGYS -->|Override HOME| Env[Set HOME=~/.antigravity-profiles/work]
+    AGYS -->|Override HOME| Env[Set HOME=~/.agys/profiles/work]
     AGYS -->|Exec| AGY[agy CLI Process]
-    AGY -->|Read/Write Config| Dir[~/.antigravity-profiles/work/]
+    AGY -->|Read/Write Config| Dir[~/.agys/profiles/work/]
 ```

@@ -5,3 +5,4 @@
 - [x] Task 5: Create POSIX installer script (`install.sh`)
 - [x] Task 6: Validate compilation and test execution
 - [x] Task 7: Integrate quota retrieval subcommand (`quota` / `q`) for individual and batch profile query
+- [x] Task 8: Implement shell auto-completion (`completion`), alias generator (`alias`), and default profile switcher (`use`)

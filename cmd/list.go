@@ -30,11 +30,17 @@ var listCmd = &cobra.Command{
 			return nil
 		}
 
+		currentProfile, _ := profile.GetCurrent()
+
 		if !listQuota {
 			fmt.Println("Active Profiles:")
 			for _, p := range profiles {
 				dir, _ := profile.GetProfileDir(p)
-				fmt.Printf("  - %s (%s)\n", p, dir)
+				defaultBadge := ""
+				if p == currentProfile {
+					defaultBadge = " (default)"
+				}
+				fmt.Printf("  - %s%s (%s)\n", p, defaultBadge, dir)
 			}
 			return nil
 		}
@@ -72,7 +78,11 @@ var listCmd = &cobra.Command{
 		fmt.Println("Active Profiles:")
 		for _, res := range results {
 			dir, _ := profile.GetProfileDir(res.ProfileName)
-			fmt.Printf("  - %s (%s)\n", res.ProfileName, dir)
+			defaultBadge := ""
+			if res.ProfileName == currentProfile {
+				defaultBadge = " (default)"
+			}
+			fmt.Printf("  - %s%s (%s)\n", res.ProfileName, defaultBadge, dir)
 			if !res.Active {
 				fmt.Printf("    └── [!] Error or not logged in: %s\n", res.Error)
 				continue
