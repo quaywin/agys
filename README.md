@@ -138,6 +138,23 @@ source <(agys completion zsh)
 source <(agys completion bash)
 ```
 
+### 9. Version & Upgrading
+
+```bash
+# Check installed version
+agys version
+# or
+agys --version
+
+# Upgrade to the latest release automatically
+agys upgrade
+# or
+agys update
+
+# Check if an update is available without installing
+agys upgrade --check
+```
+
 ---
 
 ## Directory & Configuration Layout
@@ -178,10 +195,13 @@ Available Commands:
   quota       Check model quota and usage for profile(s) (alias: q)
   rename      Rename an existing profile directory (alias: mv)
   run         Execute agy command with specified or default profile
+  upgrade     Upgrade agys CLI to the latest version (alias: update)
   use         Set or display the default active profile
+  version     Display version information for agys CLI
 
 Flags:
-  -h, --help   help for agys
+  -h, --help      help for agys
+  -v, --version   version for agys
 ```
 
 ---

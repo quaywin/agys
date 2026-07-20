@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/quaywin/agys/pkg/version"
 	"github.com/spf13/cobra"
 )
 
@@ -16,6 +17,7 @@ variable for the agy command to profile-specific base directories (~/.agys/profi
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 func Execute() {
+	rootCmd.Version = version.GetVersionInfo()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

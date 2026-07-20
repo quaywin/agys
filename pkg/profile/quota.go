@@ -9,8 +9,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+var httpClient = &http.Client{
+	Timeout: 10 * time.Second,
+}
+
+const projectIDFilename = "project_id"
 
 // OAuthToken represents the structure of antigravity-oauth-token file.
 type OAuthToken struct {
@@ -116,6 +123,30 @@ func RefreshToken(profileName string) error {
 	}
 }
 
+// GetCachedProjectID reads the cached project ID for a given profile, if it exists.
+func GetCachedProjectID(profileName string) (string, error) {
+	profileDir, err := GetProfileDir(profileName)
+	if err != nil {
+		return "", err
+	}
+	cachePath := filepath.Join(profileDir, projectIDFilename)
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// SaveCachedProjectID saves the project ID for a given profile.
+func SaveCachedProjectID(profileName string, projectID string) error {
+	profileDir, err := GetProfileDir(profileName)
+	if err != nil {
+		return err
+	}
+	cachePath := filepath.Join(profileDir, projectIDFilename)
+	return os.WriteFile(cachePath, []byte(strings.TrimSpace(projectID)+"\n"), 0600)
+}
+
 // FetchQuota retrieves the quota summary for a specific profile.
 func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) {
 	// 1. Read token
@@ -139,16 +170,30 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 		return nil, fmt.Errorf("access token is empty")
 	}
 
-	// 3. loadCodeAssist to get project ID
-	projectID, err := loadCodeAssist(ctx, accessToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load code assist project: %w", err)
+	// 3. Get project ID (check cache first, fallback to loadCodeAssist)
+	projectID, err := GetCachedProjectID(profileName)
+	if err != nil || projectID == "" {
+		projectID, err = loadCodeAssist(ctx, accessToken)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load code assist project: %w", err)
+		}
+		_ = SaveCachedProjectID(profileName, projectID)
 	}
 
 	// 4. retrieveUserQuotaSummary
 	summary, err := retrieveUserQuotaSummary(ctx, accessToken, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve user quota: %w", err)
+		// If failed (e.g. invalid cached project ID), try refreshing loadCodeAssist once
+		if cachedID, _ := GetCachedProjectID(profileName); cachedID != "" {
+			newProjectID, refreshErr := loadCodeAssist(ctx, accessToken)
+			if refreshErr == nil && newProjectID != "" {
+				_ = SaveCachedProjectID(profileName, newProjectID)
+				summary, err = retrieveUserQuotaSummary(ctx, accessToken, newProjectID)
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve user quota: %w", err)
+		}
 	}
 
 	return summary, nil
@@ -175,8 +220,7 @@ func loadCodeAssist(ctx context.Context, accessToken string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "antigravity/1.11.9 darwin/arm64")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -220,8 +264,7 @@ func retrieveUserQuotaSummary(ctx context.Context, accessToken, projectID string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "antigravity/1.11.9 darwin/arm64")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

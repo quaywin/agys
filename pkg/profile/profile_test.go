@@ -233,3 +233,36 @@ func TestAgysDirEnv(t *testing.T) {
 		t.Errorf("Expected base dir %s, got %s", expected, baseDir)
 	}
 }
+
+func TestProjectIDCache(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	profileName := "test-cache-profile"
+	_, err := Create(profileName)
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	// Initially no cached project ID
+	projectID, err := GetCachedProjectID(profileName)
+	if err == nil && projectID != "" {
+		t.Errorf("Expected empty cached project ID, got %q", projectID)
+	}
+
+	// Save project ID
+	expectedID := "cloudaicompanion-test-12345"
+	if err := SaveCachedProjectID(profileName, expectedID); err != nil {
+		t.Fatalf("SaveCachedProjectID error: %v", err)
+	}
+
+	// Read project ID back
+	cachedID, err := GetCachedProjectID(profileName)
+	if err != nil {
+		t.Fatalf("GetCachedProjectID error: %v", err)
+	}
+	if cachedID != expectedID {
+		t.Errorf("Expected cached project ID %q, got %q", expectedID, cachedID)
+	}
+}
+

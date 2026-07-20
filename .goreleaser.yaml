@@ -10,6 +10,8 @@ builds:
     main: ./main.go
     env:
       - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/quaywin/agys/pkg/version.Version={{.Version}}
     goos:
       - darwin
       - linux
