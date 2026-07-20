@@ -126,8 +126,13 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		isNew := idBefore != idAfter
 		isUpdated := timeAfter.After(timeBefore.Add(1 * time.Second))
 		if isNew || isUpdated {
-			fmt.Printf("\n[agys] Tip: To resume this session with agys, run:\n")
-			fmt.Printf("       agys run -- --conversation %s\n", idAfter)
+			// Clear the last two lines printed by agy:
+			// "Resume with -c (or command below):"
+			// "agy --conversation=..."
+			// using carriage return and cursor up ANSI codes.
+			fmt.Print("\r\033[K\033[A\033[K\033[A\033[K")
+			fmt.Println("Resume with -c (or command below):")
+			fmt.Printf("agys run -- --conversation=%s\n", idAfter)
 		}
 	}
 
