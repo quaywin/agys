@@ -35,6 +35,9 @@ func GetBaseDir() (string, error) {
 
 // GetProfileDir returns the directory path for a specific profile name.
 func GetProfileDir(name string) (string, error) {
+	if IsAuto(name) {
+		return "", fmt.Errorf("profile name %q is a reserved system keyword", name)
+	}
 	if err := ValidateName(name); err != nil {
 		return "", err
 	}
@@ -45,11 +48,14 @@ func GetProfileDir(name string) (string, error) {
 	return filepath.Join(baseDir, name), nil
 }
 
-// ValidateName ensures profile names contain only allowed characters.
+// ValidateName ensures profile names contain only allowed characters and are not reserved keywords.
 func ValidateName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("profile name cannot be empty")
+	}
+	if IsAuto(name) {
+		return fmt.Errorf("invalid profile name %q: reserved keyword", name)
 	}
 	if !validProfileNameRegex.MatchString(name) {
 		return fmt.Errorf("invalid profile name %q: must contain only letters, numbers, hyphens, and underscores", name)
@@ -236,6 +242,10 @@ func GetCurrent() (string, error) {
 		return "", nil
 	}
 
+	if IsAuto(name) {
+		return AutoProfileKeyword, nil
+	}
+
 	// Verify profile still exists
 	exists, _, err := Exists(name)
 	if err != nil {
@@ -250,12 +260,16 @@ func GetCurrent() (string, error) {
 
 // SetCurrent sets the default active profile.
 func SetCurrent(name string) error {
-	exists, _, err := Exists(name)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("profile %q does not exist", name)
+	if IsAuto(name) {
+		name = AutoProfileKeyword
+	} else {
+		exists, _, err := Exists(name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("profile %q does not exist", name)
+		}
 	}
 
 	agysDir, err := GetAgysDir()

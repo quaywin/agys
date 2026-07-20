@@ -18,7 +18,8 @@ func CompleteProfileNames(cmd *cobra.Command, args []string, toComplete string) 
 		return nil, cobra.ShellCompDirectiveError
 	}
 
-	return profiles, cobra.ShellCompDirectiveNoFileComp
+	results := append([]string{profile.AutoProfileKeyword}, profiles...)
+	return results, cobra.ShellCompDirectiveNoFileComp
 }
 
 var completionCmd = &cobra.Command{

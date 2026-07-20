@@ -13,6 +13,8 @@ func TestValidateName(t *testing.T) {
 		{"valid-name", false},
 		{"valid_name_123", false},
 		{"work", false},
+		{"auto", true},
+		{"AUTO", true},
 		{"", true},
 		{"invalid name", true},
 		{"invalid/slash", true},
@@ -265,4 +267,22 @@ func TestProjectIDCache(t *testing.T) {
 		t.Errorf("Expected cached project ID %q, got %q", expectedID, cachedID)
 	}
 }
+
+func TestSetCurrentAuto(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	if err := SetCurrent("auto"); err != nil {
+		t.Fatalf("SetCurrent('auto') error = %v", err)
+	}
+
+	curr, err := GetCurrent()
+	if err != nil {
+		t.Fatalf("GetCurrent error = %v", err)
+	}
+	if curr != "auto" {
+		t.Errorf("Expected current profile 'auto', got %q", curr)
+	}
+}
+
 

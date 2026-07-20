@@ -10,8 +10,10 @@
 ## Features
 
 - **Profile Isolation**: Each profile gets its own home directory (`~/.agys/profiles/<profile_name>/`).
+- **Auto Profile Selection**: Dynamically selects the profile with the best 5-hour Gemini quota based on profile priorities (`agys auto` or `agys use auto`).
+- **Profile Priority & Quota Threshold**: Configure custom profile priorities (`agys priority set work 10`) with smart 50% quota threshold fallback.
 - **Interactive Terminal Support**: Preserves `os.Stdin`, `os.Stdout`, and `os.Stderr` streaming so interactive logins and typing token responses work seamlessly.
-- **Default Active Profile**: Set a default profile (`agys use work`) to run commands (`agys run -- status`) without re-typing profile names.
+- **Default Active Profile**: Set a default profile (`agys use work` or `agys use auto`) to run commands (`agys run -- status`) without re-typing profile names.
 - **Model Quota Tracking**: Real-time quota status and refresh windows across profiles in parallel (with optional JSON output).
 - **Shell Auto-Completion & Aliases**: Built-in completion generator for `bash`, `zsh`, `fish`, `powershell` with tab-completion for profile names, plus shell alias generation (`agys alias`).
 - **Cross-Platform**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures.
@@ -66,8 +68,11 @@ agys ls
 Set an active default profile so you can omit the profile argument when executing commands:
 
 ```bash
-# Set default profile
+# Set default profile to a specific profile
 agys use work
+
+# Set default profile to auto mode (picks best profile based on 5h Gemini quota)
+agys use auto
 
 # View current default profile
 agys use
@@ -76,14 +81,33 @@ agys use
 agys use --unset
 ```
 
-### 4. Run Commands Under a Profile
+### 4. Automatic Profile Selection & Priorities
+Instead of manually picking a profile, `agys` can automatically select the profile with the best 5-hour Gemini quota while respecting custom profile priorities and a 50% quota threshold:
+
+```bash
+# Execute agy command using auto-selected best profile
+agys auto -- status
+# or
+agys run auto -- status
+
+# Set custom priorities for your profiles (higher number = higher priority)
+agys priority set work 10
+agys priority set personal 5
+
+# List configured profile priorities
+agys priority list
+```
+
+> **How Auto Selection Works**: `agys` checks profiles starting from the highest priority. If a high-priority profile has **>= 50% 5h quota**, it is selected. If its quota drops below 50%, `agys` switches to a lower-priority profile that has >= 50% quota. If all profiles are below 50%, `agys` selects the profile with the highest remaining 5h quota overall.
+
+### 5. Run Commands Under a Profile
 Execute any `agy` command isolated to a specific profile or your configured default:
 
 ```bash
 # Run command with explicit profile name
 agys run work -- status
 
-# Run command using default profile
+# Run command using default profile (or auto mode if set via `agys use auto`)
 agys run -- status
 ```
 
@@ -164,6 +188,7 @@ agys upgrade --check
 ```text
 ~/.agys/
 ├── current                  # Active default profile setting (created by `agys use`)
+├── priorities.json          # Configured profile priorities (created by `agys priority set`)
 └── profiles/                # Base directory storing isolated profiles
     ├── work/                # Isolated HOME directory for profile "work"
     └── personal/            # Isolated HOME directory for profile "personal"
@@ -189,12 +214,14 @@ Usage:
 Available Commands:
   add         Create a new profile and perform agy login
   alias       Generate shell aliases for configured profiles
+  auto        Execute agy command automatically using profile with the best 5h Gemini quota
   completion  Generate shell completion scripts
   delete      Delete a profile directory (alias: rm)
   list        List all active profile directories (alias: ls)
+  priority    Manage profile priorities for auto profile selection (alias: prio, p)
   quota       Check model quota and usage for profile(s) (alias: q)
   rename      Rename an existing profile directory (alias: mv)
-  run         Execute agy command with specified or default profile
+  run         Execute agy command with specified profile, auto quota selection, or default profile
   upgrade     Upgrade agys CLI to the latest version (alias: update)
   use         Set or display the default active profile
   version     Display version information for agys CLI

@@ -14,7 +14,7 @@ var (
 var useCmd = &cobra.Command{
 	Use:               "use [profile_name]",
 	Short:             "Set or display the default active profile",
-	Long:              `Set or display the default active profile used when executing 'agys run -- [command]'.`,
+	Long:              `Set or display the default active profile used when executing 'agys run -- [command]'. Specify 'auto' to enable automatic 5h Gemini quota profile selection.`,
 	ValidArgsFunction: CompleteProfileNames,
 	Args:              cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -34,6 +34,8 @@ var useCmd = &cobra.Command{
 			if current == "" {
 				fmt.Println("No default profile set.")
 				fmt.Println("Use `agys use <profile_name>` to set one.")
+			} else if profile.IsAuto(current) {
+				fmt.Println("Current default profile: auto (automatic 5h Gemini quota selection)")
 			} else {
 				dir, _ := profile.GetProfileDir(current)
 				fmt.Printf("Current default profile: %s (%s)\n", current, dir)
@@ -46,8 +48,12 @@ var useCmd = &cobra.Command{
 			return err
 		}
 
-		dir, _ := profile.GetProfileDir(profileName)
-		fmt.Printf("Default profile set to %q (%s)\n", profileName, dir)
+		if profile.IsAuto(profileName) {
+			fmt.Println("Default profile set to \"auto\" (automatic 5h Gemini quota selection)")
+		} else {
+			dir, _ := profile.GetProfileDir(profileName)
+			fmt.Printf("Default profile set to %q (%s)\n", profileName, dir)
+		}
 		return nil
 	},
 }

@@ -31,6 +31,7 @@ var listCmd = &cobra.Command{
 		}
 
 		currentProfile, _ := profile.GetCurrent()
+		priorities, _ := profile.GetAllPriorities()
 
 		if !listQuota {
 			fmt.Println("Active Profiles:")
@@ -40,7 +41,8 @@ var listCmd = &cobra.Command{
 				if p == currentProfile {
 					defaultBadge = " (default)"
 				}
-				fmt.Printf("  - %s%s (%s)\n", p, defaultBadge, dir)
+				prio := priorities[p]
+				fmt.Printf("  - %s%s [prio: %d] (%s)\n", p, defaultBadge, prio, dir)
 			}
 			return nil
 		}
@@ -82,7 +84,8 @@ var listCmd = &cobra.Command{
 			if res.ProfileName == currentProfile {
 				defaultBadge = " (default)"
 			}
-			fmt.Printf("  - %s%s (%s)\n", res.ProfileName, defaultBadge, dir)
+			prio := priorities[res.ProfileName]
+			fmt.Printf("  - %s%s [prio: %d] (%s)\n", res.ProfileName, defaultBadge, prio, dir)
 			if !res.Active {
 				fmt.Printf("    └── [!] Error or not logged in: %s\n", res.Error)
 				continue
