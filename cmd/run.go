@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/quaywin/agys/pkg/profile"
 	"github.com/spf13/cobra"
@@ -113,21 +112,27 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		return err
 	}
 
-	// Capture latest conversation info before execution
-	idBefore, timeBefore, _ := profile.GetLatestConversationFileInfo(targetProfile)
-
 	execCmd := profile.BuildCmd(profileDir, agyArgs...)
 	runErr := execCmd.Run()
 
 	// Capture latest conversation info after execution
-	idAfter, timeAfter, _ := profile.GetLatestConversationFileInfo(targetProfile)
+	idAfter, _, _ := profile.GetLatestConversationFileInfo(targetProfile)
 
-	if idAfter != "" {
-		isNew := idBefore != idAfter
-		isUpdated := timeAfter.After(timeBefore.Add(1 * time.Second))
-		if isNew || isUpdated {
-			// Save to cache for O(1) next-time startup
-			_ = profile.SaveLastConversation(idAfter)
+	isInteractive := true
+	for _, arg := range agyArgs {
+		if arg == "models" || arg == "agents" || arg == "agent" || arg == "changelog" || arg == "update" || arg == "help" || arg == "install" {
+			isInteractive = false
+			break
+		}
+		if arg == "-p" || arg == "--print" || arg == "--prompt" {
+			isInteractive = false
+			break
+		}
+	}
+
+	if idAfter != "" && isInteractive {
+		// Save to cache for O(1) next-time startup
+		_ = profile.SaveLastConversation(idAfter)
 
 			// Filter out conversation-triggering arguments from original args to preserve other flags
 			var preservedFlags []string
@@ -160,7 +165,6 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 			fmt.Println("Resume with -c (or command below):")
 			fmt.Printf("agys run -- --conversation=%s%s\n", idAfter, extraFlags)
 		}
-	}
 
 	return runErr
 }
