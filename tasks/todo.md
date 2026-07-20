@@ -1,0 +1,6 @@
+- [x] Task 1: Initialize Go module `go.mod` and Cobra dependency
+- [x] Task 2: Implement `pkg/profile` for directory management and profile validation
+- [x] Task 3: Implement Cobra subcommands (`root`, `add`, `list`, `delete`, `run`) and `main.go`
+- [x] Task 4: Add GoReleaser configuration (`.goreleaser.yaml`) and GitHub Actions workflow (`.github/workflows/release.yml`)
+- [x] Task 5: Create POSIX installer script (`install.sh`)
+- [x] Task 6: Validate compilation and test execution
