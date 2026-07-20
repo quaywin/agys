@@ -100,8 +100,39 @@ func Create(name string) (string, error) {
 	return profileDir, nil
 }
 
+// MigrateLegacyProfiles migrates profiles from legacy ~/.antigravity-profiles to ~/.agys/profiles if present.
+func MigrateLegacyProfiles() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	legacyDir := filepath.Join(homeDir, ".antigravity-profiles")
+	entries, err := os.ReadDir(legacyDir)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+
+	baseDir, err := GetBaseDir()
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		oldPath := filepath.Join(legacyDir, entry.Name())
+		newPath := filepath.Join(baseDir, entry.Name())
+		if _, err := os.Stat(newPath); os.IsNotExist(err) {
+			_ = os.MkdirAll(baseDir, 0700)
+			_ = os.Rename(oldPath, newPath)
+		}
+	}
+}
+
 // List returns a sorted slice of available profile names.
 func List() ([]string, error) {
+	MigrateLegacyProfiles()
 	baseDir, err := GetBaseDir()
 	if err != nil {
 		return nil, err

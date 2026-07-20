@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -92,35 +94,52 @@ func IsTokenExpired(token *OAuthToken) bool {
 }
 
 // RefreshToken runs a harmless agy command to trigger agy's auto-refresh logic.
-func RefreshToken(profileName string) error {
+func RefreshToken(ctx context.Context, profileName string) error {
 	profileDir, err := GetProfileDir(profileName)
 	if err != nil {
 		return err
 	}
 
-	// Create context with timeout to run agy models
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-
-	cmd := BuildCmd(profileDir, "models")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.Stdin = nil
-
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- cmd.Run()
-	}()
-
-	select {
-	case <-ctx.Done():
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-		return fmt.Errorf("token refresh timed out")
-	case err := <-errChan:
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
 		return err
 	}
+	defer devNull.Close()
+
+	refreshCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(refreshCtx, "agy", "models")
+	cmd.Stdin = devNull
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+
+	// Set HOME environment variable while preserving other environment variables
+	env := os.Environ()
+	homeEnv := "HOME=" + profileDir
+	updated := false
+	for i, e := range env {
+		if strings.HasPrefix(e, "HOME=") {
+			env[i] = homeEnv
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		env = append(env, homeEnv)
+	}
+	cmd.Env = env
+
+	// Process group so killing parent kills any spawned sub-processes cleanly
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+
+	return cmd.Run()
 }
 
 // GetCachedProjectID reads the cached project ID for a given profile, if it exists.
@@ -155,45 +174,41 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 		return nil, err
 	}
 
-	// 2. If token is expired or close to it, try to refresh it
-	if IsTokenExpired(token) {
-		_ = RefreshToken(profileName) // Ignore error, try anyway
-		// Re-read token
-		token, err = ReadToken(profileName)
-		if err != nil {
-			return nil, fmt.Errorf("token expired and failed to refresh: %w", err)
-		}
-	}
-
 	accessToken := token.Token.AccessToken
 	if accessToken == "" {
 		return nil, fmt.Errorf("access token is empty")
 	}
 
-	// 3. Get project ID (check cache first, fallback to loadCodeAssist)
+	// 2. First attempt: try using existing access_token directly
 	projectID, err := GetCachedProjectID(profileName)
 	if err != nil || projectID == "" {
 		projectID, err = loadCodeAssist(ctx, accessToken)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load code assist project: %w", err)
+		if err == nil && projectID != "" {
+			_ = SaveCachedProjectID(profileName, projectID)
 		}
-		_ = SaveCachedProjectID(profileName, projectID)
 	}
 
-	// 4. retrieveUserQuotaSummary
-	summary, err := retrieveUserQuotaSummary(ctx, accessToken, projectID)
-	if err != nil {
-		// If failed (e.g. invalid cached project ID), try refreshing loadCodeAssist once
-		if cachedID, _ := GetCachedProjectID(profileName); cachedID != "" {
-			newProjectID, refreshErr := loadCodeAssist(ctx, accessToken)
-			if refreshErr == nil && newProjectID != "" {
-				_ = SaveCachedProjectID(profileName, newProjectID)
-				summary, err = retrieveUserQuotaSummary(ctx, accessToken, newProjectID)
+	var summary *QuotaSummary
+	if err == nil && projectID != "" {
+		summary, err = retrieveUserQuotaSummary(ctx, accessToken, projectID)
+	}
+
+	// 3. If direct fetch failed or token is marked expired, attempt refresh once via agy
+	if err != nil || IsTokenExpired(token) {
+		if refreshErr := RefreshToken(ctx, profileName); refreshErr == nil {
+			if refreshedToken, readErr := ReadToken(profileName); readErr == nil && refreshedToken.Token.AccessToken != "" {
+				accessToken = refreshedToken.Token.AccessToken
+				newProjectID, loadErr := loadCodeAssist(ctx, accessToken)
+				if loadErr == nil && newProjectID != "" {
+					_ = SaveCachedProjectID(profileName, newProjectID)
+					summary, err = retrieveUserQuotaSummary(ctx, accessToken, newProjectID)
+				}
 			}
 		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve user quota: %w", err)
-		}
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve user quota: %w", err)
 	}
 
 	return summary, nil
