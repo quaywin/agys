@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/quaywin/agys/pkg/config"
 	"github.com/quaywin/agys/pkg/profile"
 	"github.com/spf13/cobra"
 )
@@ -90,7 +91,15 @@ var runCmd = &cobra.Command{
 	},
 }
 
+var (
+	flagFailover   bool
+	flagNoFailover bool
+)
+
 func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) error {
+	cfg, _ := config.Load()
+	effectiveFailover := (cfg.AutoFailover || flagFailover) && !flagNoFailover
+
 	var targetProfile string
 	if profile.IsAuto(profileName) {
 		selected, score, err := profile.SelectBestProfile(cmd.Context())
@@ -107,13 +116,63 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		targetProfile = profileName
 	}
 
-	profileDir, err := profile.GetProfileDir(targetProfile)
-	if err != nil {
-		return err
+	visited := make(map[string]bool)
+	retries := 0
+	maxRetries := cfg.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
 	}
 
-	execCmd := profile.BuildCmd(profileDir, agyArgs...)
-	runErr := execCmd.Run()
+	var runErr error
+
+	for {
+		visited[targetProfile] = true
+
+		profileDir, err := profile.GetProfileDir(targetProfile)
+		if err != nil {
+			return err
+		}
+
+		execCmd := profile.BuildCmd(profileDir, agyArgs...)
+
+		var outWriter *profile.QuotaInterceptorWriter
+		var errWriter *profile.QuotaInterceptorWriter
+
+		if effectiveFailover {
+			outWriter = profile.NewQuotaInterceptorWriter(os.Stdout)
+			errWriter = profile.NewQuotaInterceptorWriter(os.Stderr)
+			execCmd.Stdout = outWriter
+			execCmd.Stderr = errWriter
+		}
+
+		runErr = execCmd.Run()
+
+		if effectiveFailover && runErr != nil {
+			capturedOutput := ""
+			if outWriter != nil {
+				capturedOutput += outWriter.String() + "\n"
+			}
+			if errWriter != nil {
+				capturedOutput += errWriter.String() + "\n"
+			}
+
+			if profile.IsQuotaError(capturedOutput) && retries < maxRetries {
+				nextProfile, score, failoverErr := profile.SelectNextBestProfile(cmd.Context(), visited)
+				if failoverErr == nil && nextProfile != "" {
+					retries++
+					scoreStr := fmt.Sprintf("%.1f%%", score*100)
+					if score < 0 {
+						scoreStr = "N/A"
+					}
+					fmt.Fprintf(os.Stderr, "\n[agys] ⚠️ Profile %q hit quota limit. Auto-failing over to profile %q (5h Gemini quota: %s) [Retry %d/%d]...\n\n", targetProfile, nextProfile, scoreStr, retries, maxRetries)
+					targetProfile = nextProfile
+					continue
+				}
+			}
+		}
+
+		break
+	}
 
 	// Capture latest conversation info after execution
 	idAfter, _, _ := profile.GetLatestConversationFileInfo(targetProfile)
@@ -170,7 +229,10 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 }
 
 func init() {
+	runCmd.Flags().BoolVarP(&flagFailover, "failover", "f", false, "Enable auto quota failover for this command")
+	runCmd.Flags().BoolVar(&flagNoFailover, "no-failover", false, "Disable auto quota failover for this command")
 	// Disable flag parsing for arguments after `--` to pass raw flags directly to agy
 	runCmd.DisableFlagParsing = false
 	rootCmd.AddCommand(runCmd)
 }
+
