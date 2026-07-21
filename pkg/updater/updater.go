@@ -274,7 +274,7 @@ func InstallBinary(newBinaryPath string) error {
 		}
 		_ = os.Remove(oldPath)
 	} else {
-		cmd := exec.Command("sh", "-c", fmt.Sprintf("sleep 0.1 && rm -f %q && mv %q %q", execPath, tmpPath, execPath))
+		cmd := exec.Command("sh", "-c", fmt.Sprintf("sleep 0.5 && rm -f %q && mv %q %q", execPath, tmpPath, execPath))
 		cmd.Stdout = nil
 		cmd.Stderr = nil
 		cmd.Stdin = nil
