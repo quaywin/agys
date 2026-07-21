@@ -134,37 +134,37 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		// Save to cache for O(1) next-time startup
 		_ = profile.SaveLastConversation(idAfter)
 
-			// Filter out conversation-triggering arguments from original args to preserve other flags
-			var preservedFlags []string
-			for i := 0; i < len(agyArgs); i++ {
-				arg := agyArgs[i]
-				if arg == "--conversation" {
-					i++ // Skip the value
-					continue
-				}
-				if strings.HasPrefix(arg, "--conversation=") {
-					continue
-				}
-				if arg == "-c" || arg == "--continue" {
-					continue
-				}
-				// Keep all other flags (like --dangerously-skip-permissions, --model, --sandbox, etc.)
-				preservedFlags = append(preservedFlags, arg)
+		// Filter out conversation-triggering arguments from original args to preserve other flags
+		var preservedFlags []string
+		for i := 0; i < len(agyArgs); i++ {
+			arg := agyArgs[i]
+			if arg == "--conversation" {
+				i++ // Skip the value
+				continue
 			}
-
-			var extraFlags string
-			if len(preservedFlags) > 0 {
-				extraFlags = " " + strings.Join(preservedFlags, " ")
+			if strings.HasPrefix(arg, "--conversation=") {
+				continue
 			}
-
-			// Clear the last two lines printed by agy:
-			// "Resume with -c (or command below):"
-			// "agy --conversation=..."
-			// using carriage return and cursor up ANSI codes.
-			fmt.Print("\r\033[K\033[A\033[K\033[A\033[K")
-			fmt.Println("Resume with -c (or command below):")
-			fmt.Printf("agys run -- --conversation=%s%s\n", idAfter, extraFlags)
+			if arg == "-c" || arg == "--continue" {
+				continue
+			}
+			// Keep all other flags (like --dangerously-skip-permissions, --model, --sandbox, etc.)
+			preservedFlags = append(preservedFlags, arg)
 		}
+
+		var extraFlags string
+		if len(preservedFlags) > 0 {
+			extraFlags = " " + strings.Join(preservedFlags, " ")
+		}
+
+		// Clear the last two lines printed by agy:
+		// "Resume with -c (or command below):"
+		// "agy --conversation=..."
+		// using carriage return and cursor up ANSI codes.
+		fmt.Print("\r\033[K\033[A\033[K\033[A\033[K")
+		fmt.Println("Resume with -c (or command below):")
+		fmt.Printf("agys run -- --conversation=%s%s\n", idAfter, extraFlags)
+	}
 
 	return runErr
 }

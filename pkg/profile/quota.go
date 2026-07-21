@@ -99,6 +99,7 @@ func RefreshToken(ctx context.Context, profileName string) error {
 	if err != nil {
 		return err
 	}
+	_ = EnsureKeychain(profileDir)
 
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {

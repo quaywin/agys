@@ -1,7 +1,9 @@
 package profile
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -285,4 +287,26 @@ func TestSetCurrentAuto(t *testing.T) {
 	}
 }
 
+func TestEnsureKeychain(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
 
+	profileName := "test-keychain-profile"
+	profileDir, err := Create(profileName)
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	err = EnsureKeychain(profileDir)
+	if err != nil {
+		t.Fatalf("EnsureKeychain error: %v", err)
+	}
+
+	// On macOS, verify the keychain file was created
+	if runtime.GOOS == "darwin" {
+		keychainFile := filepath.Join(profileDir, "Library", "Keychains", "login.keychain-db")
+		if _, err := os.Stat(keychainFile); os.IsNotExist(err) {
+			t.Errorf("Expected keychain file %s to be created, but it does not exist", keychainFile)
+		}
+	}
+}

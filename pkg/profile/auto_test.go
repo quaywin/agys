@@ -147,4 +147,3 @@ func TestPrioritySelectionAlgorithm(t *testing.T) {
 		t.Errorf("expected winner personal, got %s", winner.ProfileName)
 	}
 }
-

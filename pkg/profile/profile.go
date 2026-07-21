@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -303,6 +304,8 @@ func UnsetCurrent() error {
 
 // BuildCmd constructs an exec.Cmd for running `agy` with the modified HOME environment variable.
 func BuildCmd(profileDir string, args ...string) *exec.Cmd {
+	_ = EnsureKeychain(profileDir)
+
 	cmd := exec.Command("agy", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -325,4 +328,38 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	cmd.Env = env
 
 	return cmd
+}
+
+// EnsureKeychain creates a profile-specific keychain on macOS if it doesn't already exist.
+func EnsureKeychain(profileDir string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+
+	keychainsDir := filepath.Join(profileDir, "Library", "Keychains")
+	keychainFile := filepath.Join(keychainsDir, "login.keychain-db")
+	legacyKeychainFile := filepath.Join(keychainsDir, "login.keychain")
+
+	// Check if keychain already exists
+	if _, err := os.Stat(keychainFile); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(legacyKeychainFile); err == nil {
+		return nil
+	}
+
+	// Create Library/Keychains directory
+	if err := os.MkdirAll(keychainsDir, 0700); err != nil {
+		return fmt.Errorf("failed to create keychains directory: %w", err)
+	}
+
+	// Run security create-keychain
+	// We run it with HOME set to profileDir so it initializes the plist in the profileDir.
+	cmd := exec.Command("security", "create-keychain", "-p", "", keychainFile)
+	cmd.Env = append(os.Environ(), "HOME="+profileDir)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to create keychain via security CLI: %w", err)
+	}
+
+	return nil
 }

@@ -167,7 +167,7 @@ func ImportProfile(reader io.Reader, targetProfileName string, overwrite bool) e
 			if err != nil {
 				return fmt.Errorf("failed to create file %s: %w", targetPath, err)
 			}
-			
+
 			if _, err := io.Copy(file, tr); err != nil {
 				file.Close()
 				return fmt.Errorf("failed to write file %s: %w", targetPath, err)
@@ -340,7 +340,7 @@ func ImportAll(reader io.Reader, overwrite bool) error {
 			if err != nil {
 				return fmt.Errorf("failed to create file %s: %w", targetPath, err)
 			}
-			
+
 			if _, err := io.Copy(file, tr); err != nil {
 				file.Close()
 				return fmt.Errorf("failed to write file %s: %w", targetPath, err)
