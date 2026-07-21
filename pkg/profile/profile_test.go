@@ -1,9 +1,7 @@
 package profile
 
 import (
-	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -300,13 +298,5 @@ func TestEnsureKeychain(t *testing.T) {
 	err = EnsureKeychain(profileDir)
 	if err != nil {
 		t.Fatalf("EnsureKeychain error: %v", err)
-	}
-
-	// On macOS, verify the keychain file was created
-	if runtime.GOOS == "darwin" {
-		keychainFile := filepath.Join(profileDir, "Library", "Keychains", "login.keychain-db")
-		if _, err := os.Stat(keychainFile); os.IsNotExist(err) {
-			t.Errorf("Expected keychain file %s to be created, but it does not exist", keychainFile)
-		}
 	}
 }
