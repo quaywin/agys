@@ -166,7 +166,17 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 				capturedOutput += errWriter.String() + "\n"
 			}
 
-			if profile.IsQuotaError(capturedOutput) && retries < maxRetries {
+			isQuota := profile.IsQuotaError(capturedOutput)
+			if !isQuota && isInteractive {
+				if summary, err := profile.FetchQuota(cmd.Context(), targetProfile); err == nil {
+					score := profile.Calculate5HQuotaScore(summary)
+					if score <= 0 {
+						isQuota = true
+					}
+				}
+			}
+
+			if isQuota && retries < maxRetries {
 				nextProfile, score, failoverErr := profile.SelectNextBestProfile(cmd.Context(), visited)
 				if failoverErr == nil && nextProfile != "" {
 					retries++
