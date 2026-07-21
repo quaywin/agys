@@ -330,7 +330,7 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
-// EnsureKeychain creates a profile-specific keychain on macOS if it doesn't already exist.
+// EnsureKeychain creates a profile-specific keychain on macOS if it doesn't already exist, and ensures it is unlocked.
 func EnsureKeychain(profileDir string) error {
 	if runtime.GOOS != "darwin" {
 		return nil
@@ -340,26 +340,30 @@ func EnsureKeychain(profileDir string) error {
 	keychainFile := filepath.Join(keychainsDir, "login.keychain-db")
 	legacyKeychainFile := filepath.Join(keychainsDir, "login.keychain")
 
+	targetKeychain := keychainFile
+
 	// Check if keychain already exists
-	if _, err := os.Stat(keychainFile); err == nil {
-		return nil
-	}
 	if _, err := os.Stat(legacyKeychainFile); err == nil {
-		return nil
+		targetKeychain = legacyKeychainFile
+	} else if _, err := os.Stat(keychainFile); err != nil {
+		// Create Library/Keychains directory
+		if err := os.MkdirAll(keychainsDir, 0700); err != nil {
+			return fmt.Errorf("failed to create keychains directory: %w", err)
+		}
+
+		// Run security create-keychain
+		// We run it with HOME set to profileDir so it initializes the plist in the profileDir.
+		cmd := exec.Command("security", "create-keychain", "-p", "", keychainFile)
+		cmd.Env = append(os.Environ(), "HOME="+profileDir)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to create keychain via security CLI: %w", err)
+		}
 	}
 
-	// Create Library/Keychains directory
-	if err := os.MkdirAll(keychainsDir, 0700); err != nil {
-		return fmt.Errorf("failed to create keychains directory: %w", err)
-	}
-
-	// Run security create-keychain
-	// We run it with HOME set to profileDir so it initializes the plist in the profileDir.
-	cmd := exec.Command("security", "create-keychain", "-p", "", keychainFile)
-	cmd.Env = append(os.Environ(), "HOME="+profileDir)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create keychain via security CLI: %w", err)
-	}
+	// Always unlock the profile keychain silently with the empty password
+	unlockCmd := exec.Command("security", "unlock-keychain", "-p", "", targetKeychain)
+	unlockCmd.Env = append(os.Environ(), "HOME="+profileDir)
+	_ = unlockCmd.Run()
 
 	return nil
 }
