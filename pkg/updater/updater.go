@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -258,26 +259,30 @@ func InstallBinary(newBinaryPath string) error {
 		return fmt.Errorf("failed to set executable permissions: %w", err)
 	}
 
-	// Rename currently running binary to a backup path in the same directory.
-	// Unix/macOS allows renaming a running executable since the inode stays open.
-	oldPath := execPath + ".old"
-	_ = os.Remove(oldPath)
-
-	if err := os.Rename(execPath, oldPath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("failed to rename current binary to backup: %w", err)
+	// Move new binary to target via background command after process exits to prevent macOS kernel SIGKILL
+	if runtime.GOOS == "windows" {
+		oldPath := execPath + ".old"
+		_ = os.Remove(oldPath)
+		if err := os.Rename(execPath, oldPath); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("failed to rename current binary: %w", err)
+		}
+		if err := os.Rename(tmpPath, execPath); err != nil {
+			_ = os.Rename(oldPath, execPath)
+			os.Remove(tmpPath)
+			return fmt.Errorf("failed to replace binary: %w", err)
+		}
+		_ = os.Remove(oldPath)
+	} else {
+		cmd := exec.Command("sh", "-c", fmt.Sprintf("sleep 0.1 && rm -f %q && mv %q %q", execPath, tmpPath, execPath))
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		cmd.Stdin = nil
+		if err := cmd.Start(); err != nil {
+			// Fallback to direct rename if background process fails to start
+			return os.Rename(tmpPath, execPath)
+		}
 	}
-
-	// Rename the new binary into the original execution path
-	if err := os.Rename(tmpPath, execPath); err != nil {
-		// Rollback on failure
-		_ = os.Rename(oldPath, execPath)
-		os.Remove(tmpPath)
-		return fmt.Errorf("failed to replace binary at %s: %w", execPath, err)
-	}
-
-	// Remove the backup file (the kernel will unlink it, keeping the active process's inode alive)
-	_ = os.Remove(oldPath)
 
 	return nil
 }
