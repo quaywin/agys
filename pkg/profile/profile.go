@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -106,39 +107,8 @@ func Create(name string) (string, error) {
 	return profileDir, nil
 }
 
-// MigrateLegacyProfiles migrates profiles from legacy ~/.antigravity-profiles to ~/.agys/profiles if present.
-func MigrateLegacyProfiles() {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	legacyDir := filepath.Join(homeDir, ".antigravity-profiles")
-	entries, err := os.ReadDir(legacyDir)
-	if err != nil || len(entries) == 0 {
-		return
-	}
-
-	baseDir, err := GetBaseDir()
-	if err != nil {
-		return
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		oldPath := filepath.Join(legacyDir, entry.Name())
-		newPath := filepath.Join(baseDir, entry.Name())
-		if _, err := os.Stat(newPath); os.IsNotExist(err) {
-			_ = os.MkdirAll(baseDir, 0700)
-			_ = os.Rename(oldPath, newPath)
-		}
-	}
-}
-
 // List returns a sorted slice of available profile names.
 func List() ([]string, error) {
-	MigrateLegacyProfiles()
 	baseDir, err := GetBaseDir()
 	if err != nil {
 		return nil, err
@@ -329,8 +299,52 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
-// EnsureKeychain is a no-op on macOS as agy stores OAuth tokens in file-based storage ($HOME/.gemini/antigravity-cli/).
-// Invoking the macOS `security` CLI is unnecessary and triggers system keychain authorization popups.
+// EnsureKeychain links the profile's Library/Keychains directory to the user's main Library/Keychains on macOS.
+// This prevents macOS SecurityAgent from showing system UI popup dialogs ("A keychain cannot be found")
+// while avoiding running security CLI commands that prompt for passwords.
 func EnsureKeychain(profileDir string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	// Determine the real user home directory if HOME is currently overridden to a profile folder
+	if idx := strings.Index(userHome, "/.agys"); idx != -1 {
+		userHome = userHome[:idx]
+	}
+
+	realKeychainsDir := filepath.Join(userHome, "Library", "Keychains")
+	if _, err := os.Stat(realKeychainsDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	profileLibDir := filepath.Join(profileDir, "Library")
+	if err := os.MkdirAll(profileLibDir, 0700); err != nil {
+		return fmt.Errorf("failed to create Library directory in profile: %w", err)
+	}
+
+	profileKeychainsDir := filepath.Join(profileLibDir, "Keychains")
+
+	// If profileKeychainsDir exists, check if it's already symlinked correctly
+	if info, err := os.Lstat(profileKeychainsDir); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(profileKeychainsDir)
+			if err == nil && target == realKeychainsDir {
+				return nil
+			}
+		}
+		// If it's a directory or points to an outdated location, clean it up to replace with symlink
+		_ = os.RemoveAll(profileKeychainsDir)
+	}
+
+	// Create symlink from profile's Library/Keychains -> user's main Library/Keychains
+	if err := os.Symlink(realKeychainsDir, profileKeychainsDir); err != nil {
+		return fmt.Errorf("failed to symlink Keychains directory: %w", err)
+	}
+
 	return nil
 }

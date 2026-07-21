@@ -1,7 +1,9 @@
 package profile
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -295,8 +297,29 @@ func TestEnsureKeychain(t *testing.T) {
 		t.Fatalf("Create profile error: %v", err)
 	}
 
-	err = EnsureKeychain(profileDir)
-	if err != nil {
-		t.Fatalf("EnsureKeychain error: %v", err)
+	if runtime.GOOS == "darwin" {
+		realKeychainsDir := filepath.Join(tempHome, "Library", "Keychains")
+		if err := os.MkdirAll(realKeychainsDir, 0700); err != nil {
+			t.Fatalf("Failed to create mock keychains dir: %v", err)
+		}
+
+		err = EnsureKeychain(profileDir)
+		if err != nil {
+			t.Fatalf("EnsureKeychain error: %v", err)
+		}
+
+		profileKeychainsDir := filepath.Join(profileDir, "Library", "Keychains")
+		info, err := os.Lstat(profileKeychainsDir)
+		if err != nil {
+			t.Fatalf("Failed to lstat profile Keychains dir: %v", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("Expected %s to be a symlink", profileKeychainsDir)
+		}
+	} else {
+		err = EnsureKeychain(profileDir)
+		if err != nil {
+			t.Fatalf("EnsureKeychain error: %v", err)
+		}
 	}
 }
