@@ -125,6 +125,18 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 
 	var runErr error
 
+	isInteractive := true
+	for _, arg := range agyArgs {
+		if arg == "models" || arg == "agents" || arg == "agent" || arg == "changelog" || arg == "update" || arg == "help" || arg == "install" {
+			isInteractive = false
+			break
+		}
+		if arg == "-p" || arg == "--print" || arg == "--prompt" {
+			isInteractive = false
+			break
+		}
+	}
+
 	for {
 		visited[targetProfile] = true
 
@@ -141,11 +153,9 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		if effectiveFailover {
 			outWriter = profile.NewQuotaInterceptorWriter(os.Stdout)
 			errWriter = profile.NewQuotaInterceptorWriter(os.Stderr)
-			execCmd.Stdout = outWriter
-			execCmd.Stderr = errWriter
 		}
 
-		runErr = execCmd.Run()
+		runErr = profile.RunWithFailover(execCmd, outWriter, errWriter, effectiveFailover, isInteractive)
 
 		if effectiveFailover && runErr != nil {
 			capturedOutput := ""
@@ -176,18 +186,6 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 
 	// Capture latest conversation info after execution
 	idAfter, _, _ := profile.GetLatestConversationFileInfo(targetProfile)
-
-	isInteractive := true
-	for _, arg := range agyArgs {
-		if arg == "models" || arg == "agents" || arg == "agent" || arg == "changelog" || arg == "update" || arg == "help" || arg == "install" {
-			isInteractive = false
-			break
-		}
-		if arg == "-p" || arg == "--print" || arg == "--prompt" {
-			isInteractive = false
-			break
-		}
-	}
 
 	if idAfter != "" && isInteractive {
 		// Save to cache for O(1) next-time startup
