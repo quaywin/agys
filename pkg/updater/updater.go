@@ -258,12 +258,26 @@ func InstallBinary(newBinaryPath string) error {
 		return fmt.Errorf("failed to set executable permissions: %w", err)
 	}
 
-	// Perform atomic replacement
+	// Rename currently running binary to a backup path in the same directory.
+	// Unix/macOS allows renaming a running executable since the inode stays open.
+	oldPath := execPath + ".old"
+	_ = os.Remove(oldPath)
+
+	if err := os.Rename(execPath, oldPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename current binary to backup: %w", err)
+	}
+
+	// Rename the new binary into the original execution path
 	if err := os.Rename(tmpPath, execPath); err != nil {
-		// Fallback for cross-device or non-atomic move
+		// Rollback on failure
+		_ = os.Rename(oldPath, execPath)
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to replace binary at %s: %w", execPath, err)
 	}
+
+	// Remove the backup file (the kernel will unlink it, keeping the active process's inode alive)
+	_ = os.Remove(oldPath)
 
 	return nil
 }
