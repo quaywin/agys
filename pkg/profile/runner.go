@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"golang.org/x/term"
@@ -50,9 +51,33 @@ func RunWithFailover(execCmd *exec.Cmd, outWriter, errWriter *QuotaInterceptorWr
 			defer func() { _ = term.Restore(stdinFd, oldState) }()
 		}
 
-		// Copy user's stdin into PTY master
+		doneStdin := make(chan struct{})
+		defer func() {
+			close(doneStdin)
+			_ = os.Stdin.SetReadDeadline(time.Time{}) // Reset read deadline
+		}()
+
+		// Copy user's stdin into PTY master safely without leaving orphan background goroutines
 		go func() {
-			_, _ = io.Copy(ptmx, os.Stdin)
+			buf := make([]byte, 1024)
+			for {
+				select {
+				case <-doneStdin:
+					return
+				default:
+					_ = os.Stdin.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+					n, err := os.Stdin.Read(buf)
+					if n > 0 {
+						_, _ = ptmx.Write(buf[:n])
+					}
+					if err != nil {
+						if os.IsTimeout(err) {
+							continue
+						}
+						return
+					}
+				}
+			}
 		}()
 
 		// Copy PTY master output into both real os.Stdout AND interceptor writers
@@ -67,3 +92,4 @@ func RunWithFailover(execCmd *exec.Cmd, outWriter, errWriter *QuotaInterceptorWr
 	execCmd.Stderr = errWriter
 	return execCmd.Run()
 }
+
