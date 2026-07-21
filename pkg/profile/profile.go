@@ -104,6 +104,7 @@ func Create(name string) (string, error) {
 	if err := os.MkdirAll(profileDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create profile directory %s: %w", profileDir, err)
 	}
+	_ = EnsureKeychain(profileDir)
 	return profileDir, nil
 }
 
