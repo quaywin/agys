@@ -11,6 +11,7 @@
 
 - **Profile Isolation**: Each profile gets its own home directory (`~/.agys/profiles/<profile_name>/`).
 - **Auto Profile Selection**: Dynamically selects the profile with the best 5-hour Gemini quota based on profile priorities (`agys auto` or `agys use auto`).
+- **Auto Quota Failover & Global Config**: Seamlessly fails over to the next available profile if quota exhaustion (429 / `RESOURCE_EXHAUSTED`) is detected during command execution, configurable globally (`agys config set auto_failover true`) or per-command (`agys run -f -- ...`).
 - **Profile Priority & Quota Threshold**: Configure custom profile priorities (`agys priority set work 10`) with smart 50% quota threshold fallback.
 - **Interactive Terminal Support**: Preserves `os.Stdin`, `os.Stdout`, and `os.Stderr` streaming so interactive logins and typing token responses work seamlessly.
 - **Default Active Profile**: Set a default profile (`agys use work` or `agys use auto`) to run commands (`agys run -- status`) without re-typing profile names.
@@ -192,7 +193,7 @@ source <(agys completion zsh)
 source <(agys completion bash)
 ```
 
-### 11. Version & Upgrading
+### 13. Version & Upgrading
 
 ```bash
 # Check installed version
@@ -217,6 +218,7 @@ agys upgrade --check
 
 ```text
 ~/.agys/
+├── config.json              # Global configuration settings (created by `agys config`)
 ├── current                  # Active default profile setting (created by `agys use`)
 ├── priorities.json          # Configured profile priorities (created by `agys priority set`)
 └── profiles/                # Base directory storing isolated profiles
@@ -247,6 +249,7 @@ Available Commands:
   auto        Execute agy command automatically using profile with the best 5h Gemini quota
   clone       Clone an existing profile to a new profile (alias: cp)
   completion  Generate shell completion scripts
+  config      Manage agys global configuration settings (alias: cfg)
   delete      Delete a profile directory (alias: rm)
   export      Export a profile to a gzipped tar archive
   import      Import a profile from a gzipped tar archive
