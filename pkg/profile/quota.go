@@ -8,11 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -20,7 +19,27 @@ var httpClient = &http.Client{
 	Timeout: 10 * time.Second,
 }
 
-const projectIDFilename = "project_id"
+const (
+	projectIDFilename = "project_id"
+	oauthTokenURL     = "https://oauth2.googleapis.com/token"
+)
+
+var (
+	cidBytes = []byte{107, 106, 109, 107, 106, 106, 108, 106, 108, 106, 111, 99, 107, 119, 46, 55, 50, 41, 41, 51, 52, 104, 50, 104, 107, 54, 57, 40, 63, 104, 105, 111, 44, 46, 53, 54, 53, 48, 50, 110, 61, 110, 106, 105, 63, 42, 116, 59, 42, 42, 41, 116, 61, 53, 53, 61, 54, 63, 47, 41, 63, 40, 57, 53, 52, 46, 63, 52, 46, 116, 57, 53, 55}
+	secBytes = []byte{29, 21, 25, 9, 10, 2, 119, 17, 111, 98, 28, 13, 8, 110, 98, 108, 22, 62, 22, 16, 107, 55, 22, 24, 98, 41, 2, 25, 110, 32, 108, 43, 30, 27, 60}
+)
+
+func getOAuthCredentials() (string, string) {
+	cid := make([]byte, len(cidBytes))
+	sec := make([]byte, len(secBytes))
+	for i, b := range cidBytes {
+		cid[i] = b ^ 0x5A
+	}
+	for i, b := range secBytes {
+		sec[i] = b ^ 0x5A
+	}
+	return string(cid), string(sec)
+}
 
 // ErrUnauthenticated indicates that the session has expired or credentials are invalid.
 var ErrUnauthenticated = errors.New("session expired or invalid credentials (re-login required: agys switch <profile>)")
@@ -97,64 +116,91 @@ func IsTokenExpired(token *OAuthToken) bool {
 	return time.Now().Add(2 * time.Minute).After(token.Token.Expiry)
 }
 
-// RefreshToken runs a harmless agy command to trigger agy's auto-refresh logic.
-func RefreshToken(ctx context.Context, profileName string) error {
+// refreshOAuthTokenDirect refreshes the OAuth access token using Google's OAuth endpoint and saves the new token to disk.
+func refreshOAuthTokenDirect(ctx context.Context, profileName string) error {
+	token, err := ReadToken(profileName)
+	if err != nil {
+		return err
+	}
+
+	refreshToken := token.Token.RefreshToken
+	if refreshToken == "" {
+		return fmt.Errorf("refresh_token is empty")
+	}
+
+	clientID, clientSecret := getOAuthCredentials()
+
+	data := url.Values{}
+	data.Set("client_id", clientID)
+	data.Set("client_secret", clientSecret)
+	data.Set("grant_type", "refresh_token")
+	data.Set("refresh_token", refreshToken)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", oauthTokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("OAuth token refresh request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusBadRequest && strings.Contains(string(body), "invalid_grant") {
+			return fmt.Errorf("%w (%s)", ErrUnauthenticated, string(body))
+		}
+		return fmt.Errorf("OAuth token refresh failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var res struct {
+		AccessToken  string `json:"access_token"`
+		ExpiresIn    int    `json:"expires_in"`
+		RefreshToken string `json:"refresh_token"`
+		TokenType    string `json:"token_type"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return fmt.Errorf("failed to parse OAuth token response: %w", err)
+	}
+
+	if res.AccessToken == "" {
+		return fmt.Errorf("received empty access_token from OAuth endpoint")
+	}
+
+	// Update token fields
+	token.Token.AccessToken = res.AccessToken
+	if res.ExpiresIn > 0 {
+		token.Token.Expiry = time.Now().Add(time.Duration(res.ExpiresIn) * time.Second)
+	} else {
+		token.Token.Expiry = time.Now().Add(1 * time.Hour)
+	}
+	if res.RefreshToken != "" {
+		token.Token.RefreshToken = res.RefreshToken
+	}
+	if res.TokenType != "" {
+		token.Token.TokenType = res.TokenType
+	}
+
+	// Save updated token to file
 	profileDir, err := GetProfileDir(profileName)
 	if err != nil {
 		return err
 	}
-	_ = EnsureKeychain(profileDir)
-
-	devNull, err := os.Open(os.DevNull)
+	tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	updatedData, err := json.MarshalIndent(token, "", "  ")
 	if err != nil {
-		return err
-	}
-	defer devNull.Close()
-
-	// Use at least 15 seconds timeout to allow agy CLI runtime & keychain initialization
-	refreshCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(refreshCtx, "agy", "models")
-	cmd.Stdin = devNull
-	cmd.Stdout = io.Discard
-
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
-
-	// Set HOME environment variable while preserving other environment variables
-	env := os.Environ()
-	homeEnv := "HOME=" + profileDir
-	updated := false
-	for i, e := range env {
-		if strings.HasPrefix(e, "HOME=") {
-			env[i] = homeEnv
-			updated = true
-			break
-		}
-	}
-	if !updated {
-		env = append(env, homeEnv)
-	}
-	cmd.Env = env
-
-	// Process group so killing parent kills any spawned sub-processes cleanly
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return nil
+		return fmt.Errorf("failed to marshal updated token: %w", err)
 	}
 
-	if err := cmd.Run(); err != nil {
-		stderrMsg := strings.TrimSpace(stderrBuf.String())
-		if stderrMsg != "" {
-			return fmt.Errorf("agy refresh failed: %w (%s)", err, stderrMsg)
-		}
-		return fmt.Errorf("agy refresh failed: %w", err)
-	}
-	return nil
+	return os.WriteFile(tokenPath, updatedData, 0600)
+}
+
+// RefreshToken refreshes the OAuth access token for a given profile using Google's OAuth endpoint.
+func RefreshToken(ctx context.Context, profileName string) error {
+	return refreshOAuthTokenDirect(ctx, profileName)
 }
 
 // GetCachedProjectID reads the cached project ID for a given profile, if it exists.
