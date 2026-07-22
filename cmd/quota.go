@@ -88,88 +88,14 @@ var quotaCmd = &cobra.Command{
 			return encoder.Encode(results)
 		}
 
+		currentProfile, _ := profile.GetCurrent()
+		priorities, _ := profile.GetAllPriorities()
+
 		// Print text output
 		fmt.Println("Quota Status for Profiles:")
-		fmt.Println("==================================================")
-		for _, res := range results {
-			emailStr := ""
-			if res.Email != "" {
-				emailStr = fmt.Sprintf(" (%s)", res.Email)
-			}
-			fmt.Printf("\nProfile: %s%s\n", res.ProfileName, emailStr)
-			if !res.Active {
-				fmt.Printf("  [!] Error or not logged in: %s\n", res.Error)
-				continue
-			}
-
-			if res.Quota == nil || len(res.Quota.Groups) == 0 {
-				fmt.Println("  [!] No quota information available.")
-				continue
-			}
-
-			for _, group := range res.Quota.Groups {
-				fmt.Printf("  ● %s (%s):\n", group.DisplayName, group.Description)
-				for _, bucket := range group.Buckets {
-					pct := bucket.RemainingFraction * 100
-					bar := progressBar(bucket.RemainingFraction, 20)
-
-					resetStr := ""
-					if bucket.RemainingFraction < 1.0 {
-						resetStr = formatResetTime(bucket.ResetTime)
-						if resetStr != "" {
-							resetStr = " (" + resetStr + ")"
-						}
-					}
-
-					fmt.Printf("    ├── %s: [%s] %.1f%%%s\n", bucket.DisplayName, bar, pct, resetStr)
-				}
-				fmt.Println()
-			}
-		}
-
+		profile.RenderQuotaTable(os.Stdout, results, currentProfile, priorities)
 		return nil
 	},
-}
-
-func progressBar(fraction float64, width int) string {
-	if fraction < 0 {
-		fraction = 0
-	} else if fraction > 1 {
-		fraction = 1
-	}
-	filled := int(fraction * float64(width))
-	empty := width - filled
-
-	bar := ""
-	for i := 0; i < filled; i++ {
-		bar += "█"
-	}
-	for i := 0; i < empty; i++ {
-		bar += "░"
-	}
-	return bar
-}
-
-func formatResetTime(resetTime time.Time) string {
-	if resetTime.IsZero() {
-		return ""
-	}
-	duration := time.Until(resetTime)
-	if duration <= 0 {
-		return "refreshing soon"
-	}
-
-	days := int(duration.Hours()) / 24
-	hours := int(duration.Hours()) % 24
-	minutes := int(duration.Minutes()) % 60
-
-	if days > 0 {
-		return fmt.Sprintf("refreshes in %d days %d hours", days, hours)
-	}
-	if hours > 0 {
-		return fmt.Sprintf("refreshes in %d hours %d minutes", hours, minutes)
-	}
-	return fmt.Sprintf("refreshes in %d minutes", minutes)
 }
 
 func init() {

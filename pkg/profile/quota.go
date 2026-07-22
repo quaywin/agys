@@ -3,6 +3,7 @@ package profile
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +12,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 )
 
@@ -25,28 +28,74 @@ const (
 	oauthTokenURL     = "https://oauth2.googleapis.com/token"
 )
 
-// GetCachedEmail reads the cached Google account email for a given profile, if it exists.
+func calculateTokenFingerprint(token *OAuthToken) string {
+	if token == nil || token.Token.AccessToken == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(token.Token.RefreshToken + ":" + token.Token.AccessToken))
+	return fmt.Sprintf("%x", h[:16])
+}
+
+// GetCachedEmail reads the cached Google account email for a given profile, verifying it matches the current token.
 func GetCachedEmail(profileName string) (string, error) {
+	token, err := ReadToken(profileName)
+	if err != nil {
+		// Token doesn't exist or is unreadable -> invalidate cached email if present
+		if profileDir, dirErr := GetProfileDir(profileName); dirErr == nil {
+			_ = os.Remove(filepath.Join(profileDir, emailFilename))
+		}
+		return "", err
+	}
+
 	profileDir, err := GetProfileDir(profileName)
 	if err != nil {
 		return "", err
 	}
+
 	cachePath := filepath.Join(profileDir, emailFilename)
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(data)), nil
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 0 {
+		return "", fmt.Errorf("empty email cache file")
+	}
+
+	email := strings.TrimSpace(lines[0])
+	if email == "" {
+		return "", fmt.Errorf("empty email in cache file")
+	}
+
+	currentFP := calculateTokenFingerprint(token)
+	if len(lines) < 2 {
+		// Legacy single-line email cache file (no fingerprint) -> force re-verification
+		return "", fmt.Errorf("legacy email cache file without token fingerprint")
+	}
+
+	cachedFP := strings.TrimSpace(lines[1])
+	if currentFP == "" || cachedFP != currentFP {
+		// Fingerprint mismatch -> token changed or cache stale
+		return "", fmt.Errorf("token fingerprint mismatch (cached: %s, current: %s)", cachedFP, currentFP)
+	}
+
+	return email, nil
 }
 
-// SaveCachedEmail saves the cached Google account email for a given profile.
+// SaveCachedEmail saves the cached Google account email for a given profile with token fingerprint.
 func SaveCachedEmail(profileName string, email string) error {
 	profileDir, err := GetProfileDir(profileName)
 	if err != nil {
 		return err
 	}
+
+	token, _ := ReadToken(profileName)
+	fp := calculateTokenFingerprint(token)
+
 	cachePath := filepath.Join(profileDir, emailFilename)
-	return os.WriteFile(cachePath, []byte(strings.TrimSpace(email)+"\n"), 0600)
+	content := strings.TrimSpace(email) + "\n" + fp + "\n"
+	return os.WriteFile(cachePath, []byte(content), 0600)
 }
 
 // FetchProfileEmail retrieves the Google account email for a profile via userinfo endpoint.
@@ -480,4 +529,164 @@ func retrieveUserQuotaSummary(ctx context.Context, accessToken, projectID string
 
 	return &summary, nil
 }
+
+// FormatResetTime formats a reset timestamp into a human-readable remaining time string.
+func FormatResetTime(resetTime time.Time, fraction float64) string {
+	if fraction >= 1.0 || resetTime.IsZero() {
+		return "-"
+	}
+
+	duration := time.Until(resetTime)
+	if duration <= 0 {
+		return "refreshing"
+	}
+
+	days := int(duration.Hours()) / 24
+	hours := int(duration.Hours()) % 24
+	minutes := int(duration.Minutes()) % 60
+
+	if days > 0 {
+		if hours > 0 {
+			return fmt.Sprintf("in %dd %dh", days, hours)
+		}
+		return fmt.Sprintf("in %dd", days)
+	}
+	if hours > 0 {
+		if minutes > 0 {
+			return fmt.Sprintf("in %dh %dm", hours, minutes)
+		}
+		return fmt.Sprintf("in %dh", hours)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("in %dm", minutes)
+	}
+	return "in <1m"
+}
+
+// ProgressBar generates a text progress bar of given width representing fraction (0.0 to 1.0).
+func ProgressBar(fraction float64, width int) string {
+	if fraction < 0 {
+		fraction = 0
+	} else if fraction > 1 {
+		fraction = 1
+	}
+	filled := int(fraction * float64(width))
+	empty := width - filled
+
+	var bar strings.Builder
+	for i := 0; i < filled; i++ {
+		bar.WriteString("█")
+	}
+	for i := 0; i < empty; i++ {
+		bar.WriteString("░")
+	}
+	return bar.String()
+}
+
+// RenderQuotaTable renders a clean tabular view of profile quota information with remaining reset times.
+func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile string, priorities map[string]int) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "PROFILE\tPRIO\tEMAIL\tMODEL GROUP\t5H QUOTA\tRESET (5H)\tWEEKLY QUOTA\tRESET (WEEKLY)")
+
+	for _, res := range results {
+		pName := res.ProfileName
+		if pName == currentProfile {
+			pName += " (default)"
+		}
+
+		prioStr := "-"
+		if prio, ok := priorities[res.ProfileName]; ok {
+			prioStr = strconv.Itoa(prio)
+		}
+
+		emailStr := res.Email
+		if emailStr == "" {
+			emailStr = "-"
+		}
+
+		if !res.Active {
+			errStr := res.Error
+			if errStr == "" {
+				errStr = "Inactive or not logged in"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t[!] Error: %s\t-\t-\t-\t-\n", pName, prioStr, emailStr, errStr)
+			continue
+		}
+
+		if res.Quota == nil || len(res.Quota.Groups) == 0 {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t[!] No quota info available\t-\t-\t-\t-\n", pName, prioStr, emailStr)
+			continue
+		}
+
+		for gIdx, group := range res.Quota.Groups {
+			dispProfile := pName
+			dispPrio := prioStr
+			dispEmail := emailStr
+			if gIdx > 0 {
+				dispProfile = ""
+				dispPrio = ""
+				dispEmail = ""
+			}
+
+			var b5h, bWeekly *QuotaBucket
+
+			// First pass: exact match
+			for i := range group.Buckets {
+				b := &group.Buckets[i]
+				winLower := strings.ToLower(b.Window)
+				if winLower == "5h" {
+					b5h = b
+				} else if winLower == "weekly" {
+					bWeekly = b
+				}
+			}
+
+			// Second pass: substring match
+			if b5h == nil || bWeekly == nil {
+				for i := range group.Buckets {
+					b := &group.Buckets[i]
+					winLower := strings.ToLower(b.Window)
+					if b5h == nil && (strings.Contains(winLower, "5h") || strings.Contains(winLower, "5-hour")) {
+						b5h = b
+					}
+					if bWeekly == nil && strings.Contains(winLower, "week") {
+						bWeekly = b
+					}
+				}
+			}
+
+			// Third pass: fallback by index
+			if b5h == nil && bWeekly == nil && len(group.Buckets) > 0 {
+				b5h = &group.Buckets[0]
+				if len(group.Buckets) > 1 {
+					bWeekly = &group.Buckets[1]
+				}
+			}
+
+			q5h := "N/A"
+			r5h := "-"
+			if b5h != nil {
+				pct := b5h.RemainingFraction * 100
+				bar := ProgressBar(b5h.RemainingFraction, 10)
+				q5h = fmt.Sprintf("%5.1f%% [%s]", pct, bar)
+				r5h = FormatResetTime(b5h.ResetTime, b5h.RemainingFraction)
+			}
+
+			qWeekly := "N/A"
+			rWeekly := "-"
+			if bWeekly != nil {
+				pct := bWeekly.RemainingFraction * 100
+				bar := ProgressBar(bWeekly.RemainingFraction, 10)
+				qWeekly = fmt.Sprintf("%5.1f%% [%s]", pct, bar)
+				rWeekly = FormatResetTime(bWeekly.ResetTime, bWeekly.RemainingFraction)
+			}
+
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				dispProfile, dispPrio, dispEmail, group.DisplayName, q5h, r5h, qWeekly, rWeekly)
+		}
+	}
+
+	tw.Flush()
+}
+
 

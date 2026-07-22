@@ -3,7 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
+	"text/tabwriter"
 	"time"
 
 	"github.com/quaywin/agys/pkg/profile"
@@ -35,20 +37,22 @@ var listCmd = &cobra.Command{
 
 		if !listQuota {
 			fmt.Println("Active Profiles:")
+			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "PROFILE\tPRIO\tEMAIL\tPATH")
 			for _, p := range profiles {
 				dir, _ := profile.GetProfileDir(p)
-				defaultBadge := ""
+				pName := p
 				if p == currentProfile {
-					defaultBadge = " (default)"
+					pName += " (default)"
 				}
 				prio := priorities[p]
 				email, _ := profile.GetCachedEmail(p)
-				emailBadge := ""
-				if email != "" {
-					emailBadge = fmt.Sprintf(" (%s)", email)
+				if email == "" {
+					email = "-"
 				}
-				fmt.Printf("  - %s%s%s [prio: %d] (%s)\n", p, emailBadge, defaultBadge, prio, dir)
+				fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", pName, prio, email, dir)
 			}
+			tw.Flush()
 			return nil
 		}
 
@@ -85,51 +89,8 @@ var listCmd = &cobra.Command{
 
 		wg.Wait()
 
-		fmt.Println("Active Profiles:")
-		for _, res := range results {
-			dir, _ := profile.GetProfileDir(res.ProfileName)
-			defaultBadge := ""
-			if res.ProfileName == currentProfile {
-				defaultBadge = " (default)"
-			}
-			prio := priorities[res.ProfileName]
-			emailBadge := ""
-			if res.Email != "" {
-				emailBadge = fmt.Sprintf(" (%s)", res.Email)
-			}
-			fmt.Printf("  - %s%s%s [prio: %d] (%s)\n", res.ProfileName, emailBadge, defaultBadge, prio, dir)
-			if !res.Active {
-				fmt.Printf("    └── [!] Error or not logged in: %s\n", res.Error)
-				continue
-			}
-
-			if res.Quota == nil || len(res.Quota.Groups) == 0 {
-				fmt.Println("    └── [!] No quota information available.")
-				continue
-			}
-
-			for _, group := range res.Quota.Groups {
-				var limit5h, limitWeekly string
-				for _, bucket := range group.Buckets {
-					pct := bucket.RemainingFraction * 100
-					if bucket.Window == "5h" {
-						limit5h = fmt.Sprintf("%.1f%%", pct)
-					} else if bucket.Window == "weekly" {
-						limitWeekly = fmt.Sprintf("%.1f%%", pct)
-					}
-				}
-
-				if limit5h == "" {
-					limit5h = "N/A"
-				}
-				if limitWeekly == "" {
-					limitWeekly = "N/A"
-				}
-
-				fmt.Printf("    ├── %s: %s (5h) / %s (weekly)\n", group.DisplayName, limit5h, limitWeekly)
-			}
-		}
-
+		fmt.Println("Active Profiles & Quota Status:")
+		profile.RenderQuotaTable(os.Stdout, results, currentProfile, priorities)
 		return nil
 	},
 }

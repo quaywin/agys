@@ -32,7 +32,14 @@ func Clone(srcName, dstName string) error {
 		return fmt.Errorf("destination profile %q already exists", dstName)
 	}
 
-	return copyDir(srcDir, dstDir)
+	if err := copyDir(srcDir, dstDir); err != nil {
+		return err
+	}
+
+	// Remove copied cache files to ensure destination profile validates its own token
+	_ = os.Remove(filepath.Join(dstDir, emailFilename))
+	_ = os.Remove(filepath.Join(dstDir, projectIDFilename))
+	return nil
 }
 
 func copyDir(src, dst string) error {
