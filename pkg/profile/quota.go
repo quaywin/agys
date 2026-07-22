@@ -318,7 +318,7 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 }
 
 func loadCodeAssist(ctx context.Context, accessToken string) (string, error) {
-	url := "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+	url := "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
 
 	reqBody := map[string]interface{}{
 		"metadata": map[string]string{
@@ -364,7 +364,7 @@ func loadCodeAssist(ctx context.Context, accessToken string) (string, error) {
 }
 
 func retrieveUserQuotaSummary(ctx context.Context, accessToken, projectID string) (*QuotaSummary, error) {
-	url := "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+	url := "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 
 	reqBody := map[string]string{
 		"project": projectID,
