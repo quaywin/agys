@@ -274,7 +274,7 @@ func UnsetCurrent() error {
 	return nil
 }
 
-// BuildCmd constructs an exec.Cmd for running `agy` with the modified HOME environment variable.
+// BuildCmd constructs an exec.Cmd for running `agy` with isolated profile environment variables.
 func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	_ = EnsureKeychain(profileDir)
 
@@ -283,22 +283,36 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Set HOME environment variable while preserving other environment variables
+	envMap := map[string]string{
+		"HOME":            profileDir,
+		"GEMINI_DIR":      filepath.Join(profileDir, ".gemini"),
+		"GEMINI_CLI_DIR":  filepath.Join(profileDir, ".gemini", "antigravity-cli"),
+		"ANTIGRAVITY_DIR": filepath.Join(profileDir, ".gemini", "antigravity-cli"),
+	}
+
 	env := os.Environ()
-	homeEnv := "HOME=" + profileDir
-	updated := false
-	for i, e := range env {
-		if strings.HasPrefix(e, "HOME=") {
-			env[i] = homeEnv
-			updated = true
-			break
+	newEnv := make([]string, 0, len(env))
+	seen := make(map[string]bool)
+
+	for _, e := range env {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 {
+			if newVal, ok := envMap[parts[0]]; ok {
+				newEnv = append(newEnv, parts[0]+"="+newVal)
+				seen[parts[0]] = true
+				continue
+			}
+		}
+		newEnv = append(newEnv, e)
+	}
+
+	for k, v := range envMap {
+		if !seen[k] {
+			newEnv = append(newEnv, k+"="+v)
 		}
 	}
-	if !updated {
-		env = append(env, homeEnv)
-	}
-	cmd.Env = env
 
+	cmd.Env = newEnv
 	return cmd
 }
 
