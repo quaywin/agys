@@ -276,6 +276,7 @@ func UnsetCurrent() error {
 
 // BuildCmd constructs an exec.Cmd for running `agy` with isolated profile environment variables.
 func BuildCmd(profileDir string, args ...string) *exec.Cmd {
+	PrepareGlobalTokenFromProfile(profileDir)
 	_ = EnsureKeychain(profileDir)
 
 	cmd := exec.Command("agy", args...)
@@ -377,6 +378,57 @@ func SyncKeychainTokenToDisk(profileDir string) {
 		}
 	}
 	ClearKeychainToken()
+}
+
+// PrepareGlobalTokenFromProfile seeds the global user home ~/.gemini token from the profile's token,
+// so if `agy` falls back to resolving default home, it can still find the profile's token.
+func PrepareGlobalTokenFromProfile(profileDir string) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	agysSep := string(filepath.Separator) + ".agys"
+	if idx := strings.Index(userHome, agysSep); idx != -1 {
+		userHome = userHome[:idx]
+	}
+
+	profileTokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	data, err := os.ReadFile(profileTokenPath)
+	if err != nil || len(bytes.TrimSpace(data)) == 0 {
+		return
+	}
+
+	globalTokenDir := filepath.Join(userHome, ".gemini", "antigravity-cli")
+	_ = os.MkdirAll(globalTokenDir, 0700)
+	globalTokenPath := filepath.Join(globalTokenDir, "antigravity-oauth-token")
+	_ = os.WriteFile(globalTokenPath, data, 0600)
+}
+
+// SyncGlobalTokenToProfile captures any token written to global ~/.gemini by agy during login/refresh
+// and copies it to the profile's isolated directory.
+func SyncGlobalTokenToProfile(profileDir string) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	agysSep := string(filepath.Separator) + ".agys"
+	if idx := strings.Index(userHome, agysSep); idx != -1 {
+		userHome = userHome[:idx]
+	}
+
+	globalTokenPath := filepath.Join(userHome, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	data, err := os.ReadFile(globalTokenPath)
+	if err != nil || len(bytes.TrimSpace(data)) == 0 {
+		return
+	}
+
+	profileTokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
+	_ = os.MkdirAll(profileTokenDir, 0700)
+	profileTokenPath := filepath.Join(profileTokenDir, "antigravity-oauth-token")
+
+	_ = os.WriteFile(profileTokenPath, data, 0600)
 }
 
 // EnsureKeychain links the profile's Library/Keychains directory to the user's main Library/Keychains on macOS.

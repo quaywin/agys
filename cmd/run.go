@@ -115,8 +115,9 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 	execCmd := profile.BuildCmd(profileDir, agyArgs...)
 	runErr := execCmd.Run()
 
-	// Persist any token created in macOS Keychain during execution (e.g. login) to profile disk storage
+	// Persist any token created in macOS Keychain or global fallback dir to profile disk storage
 	profile.SyncKeychainTokenToDisk(profileDir)
+	profile.SyncGlobalTokenToProfile(profileDir)
 
 	// Capture latest conversation info after execution
 	idAfter, _, _ := profile.GetLatestConversationFileInfo(targetProfile)
