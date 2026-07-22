@@ -318,6 +318,10 @@ func SyncDiskTokenToKeychain(profileDir string) {
 	}
 	tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 	data, err := os.ReadFile(tokenPath)
+	if err != nil {
+		fallbackPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
+		data, err = os.ReadFile(fallbackPath)
+	}
 	if err != nil || len(bytes.TrimSpace(data)) == 0 {
 		ClearKeychainToken()
 		return

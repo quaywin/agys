@@ -225,9 +225,18 @@ func ReadToken(profileName string) (*OAuthToken, error) {
 	data, err := os.ReadFile(tokenPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("token file not found (not logged in)")
+			fallbackPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
+			var fallbackErr error
+			data, fallbackErr = os.ReadFile(fallbackPath)
+			if fallbackErr != nil {
+				if os.IsNotExist(fallbackErr) {
+					return nil, fmt.Errorf("token file not found (not logged in)")
+				}
+				return nil, fmt.Errorf("failed to read token file: %w", fallbackErr)
+			}
+		} else {
+			return nil, fmt.Errorf("failed to read token file: %w", err)
 		}
-		return nil, fmt.Errorf("failed to read token file: %w", err)
 	}
 
 	var oauthToken OAuthToken
