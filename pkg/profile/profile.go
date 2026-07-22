@@ -1,6 +1,8 @@
 package profile
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -309,11 +311,61 @@ func ClearKeychainToken() {
 	}
 }
 
+// SyncDiskTokenToKeychain loads the profile's isolated token file from disk and seeds macOS Keychain if present.
+func SyncDiskTokenToKeychain(profileDir string) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	data, err := os.ReadFile(tokenPath)
+	if err != nil || len(bytes.TrimSpace(data)) == 0 {
+		ClearKeychainToken()
+		return
+	}
+
+	var tok struct {
+		Token struct {
+			AccessToken string `json:"access_token"`
+		} `json:"token"`
+	}
+	if json.Unmarshal(data, &tok) != nil || tok.Token.AccessToken == "" {
+		ClearKeychainToken()
+		return
+	}
+
+	_ = exec.Command("security", "add-generic-password", "-s", "gemini", "-a", "antigravity", "-w", string(data), "-U").Run()
+}
+
+// SyncKeychainTokenToDisk captures any new token saved to macOS Keychain (e.g. after login) and persists it to the profile directory.
+func SyncKeychainTokenToDisk(profileDir string) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	out, err := exec.Command("security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w").Output()
+	if err == nil {
+		tokenStr := strings.TrimSpace(string(out))
+		if tokenStr != "" {
+			var tok struct {
+				Token struct {
+					AccessToken string `json:"access_token"`
+				} `json:"token"`
+			}
+			if json.Unmarshal([]byte(tokenStr), &tok) == nil && tok.Token.AccessToken != "" {
+				tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
+				_ = os.MkdirAll(tokenDir, 0700)
+				tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
+				_ = os.WriteFile(tokenPath, []byte(tokenStr+"\n"), 0600)
+			}
+		}
+	}
+	ClearKeychainToken()
+}
+
 // EnsureKeychain links the profile's Library/Keychains directory to the user's main Library/Keychains on macOS.
 // This prevents macOS SecurityAgent from showing system UI popup dialogs ("A keychain cannot be found")
 // while avoiding running security CLI commands that prompt for passwords.
 func EnsureKeychain(profileDir string) error {
-	ClearKeychainToken()
+	SyncDiskTokenToKeychain(profileDir)
 
 	if runtime.GOOS != "darwin" {
 		return nil
