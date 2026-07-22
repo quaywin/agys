@@ -42,7 +42,12 @@ var listCmd = &cobra.Command{
 					defaultBadge = " (default)"
 				}
 				prio := priorities[p]
-				fmt.Printf("  - %s%s [prio: %d] (%s)\n", p, defaultBadge, prio, dir)
+				email, _ := profile.GetCachedEmail(p)
+				emailBadge := ""
+				if email != "" {
+					emailBadge = fmt.Sprintf(" (%s)", email)
+				}
+				fmt.Printf("  - %s%s%s [prio: %d] (%s)\n", p, emailBadge, defaultBadge, prio, dir)
 			}
 			return nil
 		}
@@ -58,16 +63,19 @@ var listCmd = &cobra.Command{
 			wg.Add(1)
 			go func(index int, name string) {
 				defer wg.Done()
+				email, _ := profile.FetchProfileEmail(ctx, name)
 				summary, err := profile.FetchQuota(ctx, name)
 				if err != nil {
 					results[index] = profile.ProfileQuotaInfo{
 						ProfileName: name,
+						Email:       email,
 						Active:      false,
 						Error:       err.Error(),
 					}
 				} else {
 					results[index] = profile.ProfileQuotaInfo{
 						ProfileName: name,
+						Email:       email,
 						Active:      true,
 						Quota:       summary,
 					}
@@ -85,7 +93,11 @@ var listCmd = &cobra.Command{
 				defaultBadge = " (default)"
 			}
 			prio := priorities[res.ProfileName]
-			fmt.Printf("  - %s%s [prio: %d] (%s)\n", res.ProfileName, defaultBadge, prio, dir)
+			emailBadge := ""
+			if res.Email != "" {
+				emailBadge = fmt.Sprintf(" (%s)", res.Email)
+			}
+			fmt.Printf("  - %s%s%s [prio: %d] (%s)\n", res.ProfileName, emailBadge, defaultBadge, prio, dir)
 			if !res.Active {
 				fmt.Printf("    └── [!] Error or not logged in: %s\n", res.Error)
 				continue

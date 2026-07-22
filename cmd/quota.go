@@ -59,16 +59,19 @@ var quotaCmd = &cobra.Command{
 			wg.Add(1)
 			go func(index int, name string) {
 				defer wg.Done()
+				email, _ := profile.FetchProfileEmail(ctx, name)
 				summary, err := profile.FetchQuota(ctx, name)
 				if err != nil {
 					results[index] = profile.ProfileQuotaInfo{
 						ProfileName: name,
+						Email:       email,
 						Active:      false,
 						Error:       err.Error(),
 					}
 				} else {
 					results[index] = profile.ProfileQuotaInfo{
 						ProfileName: name,
+						Email:       email,
 						Active:      true,
 						Quota:       summary,
 					}
@@ -89,7 +92,11 @@ var quotaCmd = &cobra.Command{
 		fmt.Println("Quota Status for Profiles:")
 		fmt.Println("==================================================")
 		for _, res := range results {
-			fmt.Printf("\nProfile: %s\n", res.ProfileName)
+			emailStr := ""
+			if res.Email != "" {
+				emailStr = fmt.Sprintf(" (%s)", res.Email)
+			}
+			fmt.Printf("\nProfile: %s%s\n", res.ProfileName, emailStr)
 			if !res.Active {
 				fmt.Printf("  [!] Error or not logged in: %s\n", res.Error)
 				continue

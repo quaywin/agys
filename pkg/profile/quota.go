@@ -21,8 +21,87 @@ var httpClient = &http.Client{
 
 const (
 	projectIDFilename = "project_id"
+	emailFilename     = "email"
 	oauthTokenURL     = "https://oauth2.googleapis.com/token"
 )
+
+// GetCachedEmail reads the cached Google account email for a given profile, if it exists.
+func GetCachedEmail(profileName string) (string, error) {
+	profileDir, err := GetProfileDir(profileName)
+	if err != nil {
+		return "", err
+	}
+	cachePath := filepath.Join(profileDir, emailFilename)
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// SaveCachedEmail saves the cached Google account email for a given profile.
+func SaveCachedEmail(profileName string, email string) error {
+	profileDir, err := GetProfileDir(profileName)
+	if err != nil {
+		return err
+	}
+	cachePath := filepath.Join(profileDir, emailFilename)
+	return os.WriteFile(cachePath, []byte(strings.TrimSpace(email)+"\n"), 0600)
+}
+
+// FetchProfileEmail retrieves the Google account email for a profile via userinfo endpoint.
+func FetchProfileEmail(ctx context.Context, profileName string) (string, error) {
+	cached, err := GetCachedEmail(profileName)
+	if err == nil && cached != "" {
+		return cached, nil
+	}
+
+	token, err := ReadToken(profileName)
+	if err != nil {
+		return "", err
+	}
+	if IsTokenExpired(token) {
+		if refreshErr := RefreshToken(ctx, profileName); refreshErr == nil {
+			if refreshedToken, readErr := ReadToken(profileName); readErr == nil && refreshedToken.Token.AccessToken != "" {
+				token = refreshedToken
+			}
+		}
+	}
+	if token.Token.AccessToken == "" {
+		return "", fmt.Errorf("access token is empty")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.googleapis.com/oauth2/v3/userinfo", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token.Token.AccessToken)
+	req.Header.Set("User-Agent", "antigravity/1.11.9 darwin/arm64")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", formatHTTPError(resp.StatusCode, body)
+	}
+
+	var uinfo struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&uinfo); err != nil {
+		return "", err
+	}
+
+	if uinfo.Email != "" {
+		_ = SaveCachedEmail(profileName, uinfo.Email)
+	}
+
+	return uinfo.Email, nil
+}
 
 var (
 	cidBytes = []byte{107, 106, 109, 107, 106, 106, 108, 106, 108, 106, 111, 99, 107, 119, 46, 55, 50, 41, 41, 51, 52, 104, 50, 104, 107, 54, 57, 40, 63, 104, 105, 111, 44, 46, 53, 54, 53, 48, 50, 110, 61, 110, 106, 105, 63, 42, 116, 59, 42, 42, 41, 116, 61, 53, 53, 61, 54, 63, 47, 41, 63, 40, 57, 53, 52, 46, 63, 52, 46, 116, 57, 53, 55}
@@ -81,6 +160,7 @@ type QuotaSummary struct {
 // ProfileQuotaInfo represents the collected quota data for a specific profile.
 type ProfileQuotaInfo struct {
 	ProfileName string        `json:"profileName"`
+	Email       string        `json:"email,omitempty"`
 	Active      bool          `json:"active"`
 	Error       string        `json:"error,omitempty"`
 	Quota       *QuotaSummary `json:"quota,omitempty"`
