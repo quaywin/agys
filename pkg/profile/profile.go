@@ -2,6 +2,7 @@ package profile
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -352,7 +353,8 @@ func SyncDiskTokenToKeychain(profileDir string) {
 		return
 	}
 
-	_ = exec.Command("security", "add-generic-password", "-s", "gemini", "-a", "antigravity", "-w", string(data), "-U").Run()
+	b64Val := "go-keyring-base64:" + base64.StdEncoding.EncodeToString(bytes.TrimSpace(data))
+	_ = exec.Command("security", "add-generic-password", "-s", "gemini", "-a", "antigravity", "-w", b64Val, "-U").Run()
 }
 
 // SyncKeychainTokenToDisk captures any new token saved to macOS Keychain (e.g. after login) and persists it to the profile directory.
@@ -364,16 +366,25 @@ func SyncKeychainTokenToDisk(profileDir string) {
 	if err == nil {
 		tokenStr := strings.TrimSpace(string(out))
 		if tokenStr != "" {
+			rawJSON := tokenStr
+			if strings.HasPrefix(tokenStr, "go-keyring-base64:") {
+				b64Part := strings.TrimPrefix(tokenStr, "go-keyring-base64:")
+				decoded, err := base64.StdEncoding.DecodeString(b64Part)
+				if err == nil {
+					rawJSON = string(decoded)
+				}
+			}
+
 			var tok struct {
 				Token struct {
 					AccessToken string `json:"access_token"`
 				} `json:"token"`
 			}
-			if json.Unmarshal([]byte(tokenStr), &tok) == nil && tok.Token.AccessToken != "" {
+			if json.Unmarshal([]byte(rawJSON), &tok) == nil && tok.Token.AccessToken != "" {
 				tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
 				_ = os.MkdirAll(tokenDir, 0700)
 				tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
-				_ = os.WriteFile(tokenPath, []byte(tokenStr+"\n"), 0600)
+				_ = os.WriteFile(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
 			}
 		}
 	}
