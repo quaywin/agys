@@ -314,7 +314,8 @@ func EnsureKeychain(profileDir string) error {
 	}
 
 	// Determine the real user home directory if HOME is currently overridden to a profile folder
-	if idx := strings.Index(userHome, "/.agys"); idx != -1 {
+	agysSep := string(filepath.Separator) + ".agys"
+	if idx := strings.Index(userHome, agysSep); idx != -1 {
 		userHome = userHome[:idx]
 	}
 
@@ -337,9 +338,12 @@ func EnsureKeychain(profileDir string) error {
 			if err == nil && target == realKeychainsDir {
 				return nil
 			}
+			// Remove outdated symlink
+			_ = os.Remove(profileKeychainsDir)
+		} else {
+			// Remove existing directory to replace with symlink
+			_ = os.RemoveAll(profileKeychainsDir)
 		}
-		// If it's a directory or points to an outdated location, clean it up to replace with symlink
-		_ = os.RemoveAll(profileKeychainsDir)
 	}
 
 	// Create symlink from profile's Library/Keychains -> user's main Library/Keychains

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,9 @@ var httpClient = &http.Client{
 }
 
 const projectIDFilename = "project_id"
+
+// ErrUnauthenticated indicates that the session has expired or credentials are invalid.
+var ErrUnauthenticated = errors.New("session expired or invalid credentials (re-login required: agys switch <profile>)")
 
 // OAuthToken represents the structure of antigravity-oauth-token file.
 type OAuthToken struct {
@@ -107,13 +111,16 @@ func RefreshToken(ctx context.Context, profileName string) error {
 	}
 	defer devNull.Close()
 
-	refreshCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	// Use at least 15 seconds timeout to allow agy CLI runtime & keychain initialization
+	refreshCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(refreshCtx, "agy", "models")
 	cmd.Stdin = devNull
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 
 	// Set HOME environment variable while preserving other environment variables
 	env := os.Environ()
@@ -140,7 +147,14 @@ func RefreshToken(ctx context.Context, profileName string) error {
 		return nil
 	}
 
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		stderrMsg := strings.TrimSpace(stderrBuf.String())
+		if stderrMsg != "" {
+			return fmt.Errorf("agy refresh failed: %w (%s)", err, stderrMsg)
+		}
+		return fmt.Errorf("agy refresh failed: %w", err)
+	}
+	return nil
 }
 
 // GetCachedProjectID reads the cached project ID for a given profile, if it exists.
@@ -167,6 +181,36 @@ func SaveCachedProjectID(profileName string, projectID string) error {
 	return os.WriteFile(cachePath, []byte(strings.TrimSpace(projectID)+"\n"), 0600)
 }
 
+// isUnauthenticatedError checks if an error indicates a 401 or unauthenticated response.
+func isUnauthenticatedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrUnauthenticated) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "401") || strings.Contains(strings.ToUpper(msg), "UNAUTHENTICATED")
+}
+
+// formatHTTPError formats HTTP response errors cleanly.
+func formatHTTPError(statusCode int, body []byte) error {
+	if statusCode == http.StatusUnauthorized {
+		var errResp struct {
+			Error struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+				Status  string `json:"status"`
+			} `json:"error"`
+		}
+		if jsonErr := json.Unmarshal(body, &errResp); jsonErr == nil && errResp.Error.Status != "" {
+			return fmt.Errorf("HTTP status 401 (%s): %w", errResp.Error.Status, ErrUnauthenticated)
+		}
+		return fmt.Errorf("HTTP status 401: %w", ErrUnauthenticated)
+	}
+	return fmt.Errorf("HTTP status %d: %s", statusCode, string(body))
+}
+
 // FetchQuota retrieves the quota summary for a specific profile.
 func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) {
 	// 1. Read token
@@ -175,9 +219,18 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 		return nil, err
 	}
 
+	// Pre-flight check: If token is already marked expired, attempt refresh first
+	if IsTokenExpired(token) {
+		if refreshErr := RefreshToken(ctx, profileName); refreshErr == nil {
+			if refreshedToken, readErr := ReadToken(profileName); readErr == nil && refreshedToken.Token.AccessToken != "" {
+				token = refreshedToken
+			}
+		}
+	}
+
 	accessToken := token.Token.AccessToken
 	if accessToken == "" {
-		return nil, fmt.Errorf("access token is empty")
+		return nil, fmt.Errorf("access token is empty (not logged in)")
 	}
 
 	// 2. First attempt: try using existing access_token directly
@@ -194,15 +247,18 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 		summary, err = retrieveUserQuotaSummary(ctx, accessToken, projectID)
 	}
 
-	// 3. If direct fetch failed or token is marked expired, attempt refresh once via agy
-	if err != nil || IsTokenExpired(token) {
+	// 3. If direct fetch failed with unauthenticated error or token expired, attempt refresh once
+	if err != nil && (isUnauthenticatedError(err) || IsTokenExpired(token)) {
 		if refreshErr := RefreshToken(ctx, profileName); refreshErr == nil {
 			if refreshedToken, readErr := ReadToken(profileName); readErr == nil && refreshedToken.Token.AccessToken != "" {
 				accessToken = refreshedToken.Token.AccessToken
+				// Invalidate potentially stale cached project ID & re-fetch
 				newProjectID, loadErr := loadCodeAssist(ctx, accessToken)
 				if loadErr == nil && newProjectID != "" {
 					_ = SaveCachedProjectID(profileName, newProjectID)
 					summary, err = retrieveUserQuotaSummary(ctx, accessToken, newProjectID)
+				} else if loadErr != nil {
+					err = loadErr
 				}
 			}
 		}
@@ -244,7 +300,7 @@ func loadCodeAssist(ctx context.Context, accessToken string) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP status %d: %s", resp.StatusCode, string(body))
+		return "", formatHTTPError(resp.StatusCode, body)
 	}
 
 	var res struct {
@@ -288,7 +344,7 @@ func retrieveUserQuotaSummary(ctx context.Context, accessToken, projectID string
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP status %d: %s", resp.StatusCode, string(body))
+		return nil, formatHTTPError(resp.StatusCode, body)
 	}
 
 	var summary QuotaSummary
@@ -298,3 +354,4 @@ func retrieveUserQuotaSummary(ctx context.Context, accessToken, projectID string
 
 	return &summary, nil
 }
+

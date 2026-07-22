@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -321,5 +322,32 @@ func TestEnsureKeychain(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EnsureKeychain error: %v", err)
 		}
+	}
+}
+
+func TestUnauthenticatedError(t *testing.T) {
+	if isUnauthenticatedError(nil) {
+		t.Errorf("Expected false for nil error")
+	}
+	if !isUnauthenticatedError(ErrUnauthenticated) {
+		t.Errorf("Expected true for ErrUnauthenticated")
+	}
+	if !isUnauthenticatedError(errors.New("HTTP status 401: unauthorized")) {
+		t.Errorf("Expected true for 401 error string")
+	}
+	if isUnauthenticatedError(errors.New("HTTP status 500: internal server error")) {
+		t.Errorf("Expected false for 500 error string")
+	}
+}
+
+func TestFormatHTTPError(t *testing.T) {
+	err401 := formatHTTPError(401, []byte(`{"error":{"status":"UNAUTHENTICATED"}}`))
+	if !errors.Is(err401, ErrUnauthenticated) {
+		t.Errorf("Expected err401 to wrap ErrUnauthenticated")
+	}
+
+	err500 := formatHTTPError(500, []byte("Server error"))
+	if errors.Is(err500, ErrUnauthenticated) {
+		t.Errorf("Expected err500 not to wrap ErrUnauthenticated")
 	}
 }
