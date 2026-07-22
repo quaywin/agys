@@ -9,15 +9,16 @@
 
 ## Features
 
-- **Profile Isolation**: Each profile gets its own home directory (`~/.agys/profiles/<profile_name>/`).
+- **Profile Isolation & Token Protection**: Each profile gets an isolated home directory (`~/.agys/profiles/<profile_name>/`) with automatic macOS Keychain token clearing on profile switch to prevent cross-account auth bleed.
+- **Google Account Email Display**: Automatically fetches and caches the associated Google Account Email (e.g. `user@gmail.com`) for each profile, displayed directly in `agys list` and `agys quota`.
+- **Real-Time Model Quota Tracking**: Real-time 5-hour and weekly quota status across profiles in parallel (with optional JSON output), powered by the `daily-cloudcode-pa` endpoint.
 - **Auto Profile Selection**: Dynamically selects the profile with the best 5-hour Gemini quota based on profile priorities (`agys auto` or `agys use auto`).
 - **Profile Priority & Quota Threshold**: Configure custom profile priorities (`agys priority set work 10`) with smart 50% quota threshold fallback.
 - **Interactive Terminal Support**: Preserves `os.Stdin`, `os.Stdout`, and `os.Stderr` streaming so interactive logins and typing token responses work seamlessly.
 - **Default Active Profile**: Set a default profile (`agys use work` or `agys use auto`) to run commands (`agys run -- status`) without re-typing profile names.
-- **Model Quota Tracking**: Real-time quota status and refresh windows across profiles in parallel (with optional JSON output).
 - **Shell Auto-Completion & Aliases**: Built-in completion generator for `bash`, `zsh`, `fish`, `powershell` with tab-completion for profile names, plus shell alias generation (`agys alias`).
 - **Profile Cloning, Export & Import**: Duplicate a profile instantly (`agys clone`), or pack/unpack profiles to archives (`agys export` / `agys import`) with built-in path-traversal safety checks.
-- **Cross-Platform**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures.
+- **Cross-Platform & Safe In-Place Upgrade**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures, featuring atomic in-place upgrading and ad-hoc code signing (`agys upgrade`).
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
 ---
@@ -57,12 +58,13 @@ agys add work
 ```
 
 ### 2. List Profiles
-Display all active configured profiles:
+Display all active configured profiles along with their associated Google Account Emails:
 
 ```bash
 agys list
-# or
-agys ls
+# Active Profiles:
+#   - personal (user.personal@gmail.com) [prio: 0] (/Users/user/.agys/profiles/personal)
+#   - work (user.work@company.com) (default) [prio: 10] (/Users/user/.agys/profiles/work)
 ```
 
 ### 3. Set a Default Profile
