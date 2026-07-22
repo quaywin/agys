@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -274,10 +275,11 @@ func InstallBinary(newBinaryPath string) error {
 		}
 		_ = os.Remove(oldPath)
 	} else {
-		cmd := exec.Command("sh", "-c", fmt.Sprintf("sleep 0.5 && rm -f %q && mv %q %q", execPath, tmpPath, execPath))
+		cmd := exec.Command("sh", "-c", fmt.Sprintf("sleep 0.5 && rm -f %q && mv %q %q && (codesign -f -s - %q 2>/dev/null || true)", execPath, tmpPath, execPath, execPath))
 		cmd.Stdout = nil
 		cmd.Stderr = nil
 		cmd.Stdin = nil
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {
 			// Fallback to direct rename if background process fails to start
 			return os.Rename(tmpPath, execPath)
