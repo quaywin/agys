@@ -23,11 +23,7 @@ var runCmd = &cobra.Command{
 			profileName = profile.AutoProfileKeyword
 			agyArgs = args[1:]
 		} else {
-			exists, _, err := profile.Exists(firstArg)
-			if err != nil {
-				return err
-			}
-
+			exists, _, _ := profile.Exists(firstArg)
 			if exists {
 				profileName = firstArg
 				agyArgs = args[1:]
@@ -54,6 +50,9 @@ var runCmd = &cobra.Command{
 				}
 
 				if profileName == "" {
+					if profile.ValidateName(firstArg) != nil && strings.HasPrefix(firstArg, "-") {
+						return fmt.Errorf("no profile specified and no default profile set. Specify a profile or set one with `agys use <profile_name>`")
+					}
 					return fmt.Errorf("profile %q does not exist. Use `agys add %s` to create it, or set a default profile with `agys use <profile_name>`", firstArg, firstArg)
 				}
 			}
@@ -166,7 +165,7 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		// using carriage return and cursor up ANSI codes.
 		fmt.Print("\r\033[K\033[A\033[K\033[A\033[K")
 		fmt.Println("Resume with -c (or command below):")
-		fmt.Printf("agys run -- --conversation=%s%s\n", idAfter, extraFlags)
+		fmt.Printf("agys run %s -- --conversation=%s%s\n", targetProfile, idAfter, extraFlags)
 	}
 
 	return runErr
