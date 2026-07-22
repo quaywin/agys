@@ -300,10 +300,21 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// ClearKeychainToken removes the cached generic password item from macOS Keychain.
+// This forces `agy` to load the profile-isolated token file from disk
+// ($HOME/.gemini/antigravity-cli/antigravity-oauth-token) instead of using a stale token from another profile.
+func ClearKeychainToken() {
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("security", "delete-generic-password", "-s", "gemini", "-a", "antigravity").Run()
+	}
+}
+
 // EnsureKeychain links the profile's Library/Keychains directory to the user's main Library/Keychains on macOS.
 // This prevents macOS SecurityAgent from showing system UI popup dialogs ("A keychain cannot be found")
 // while avoiding running security CLI commands that prompt for passwords.
 func EnsureKeychain(profileDir string) error {
+	ClearKeychainToken()
+
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
