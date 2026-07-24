@@ -43,20 +43,22 @@ func startLocalHTTPProxy() (int, func(), error) {
 					http.Error(w, err.Error(), http.StatusServiceUnavailable)
 					return
 				}
-				w.WriteHeader(http.StatusOK)
 				hijacker, ok := w.(http.Hijacker)
 				if !ok {
 					http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
 					destConn.Close()
 					return
 				}
-				clientConn, _, err := hijacker.Hijack()
+				clientConn, bufrw, err := hijacker.Hijack()
 				if err != nil {
 					destConn.Close()
 					return
 				}
+				_, _ = bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
+				_ = bufrw.Flush()
+
 				go func() {
-					_, _ = io.Copy(destConn, clientConn)
+					_, _ = io.Copy(destConn, bufrw)
 					destConn.Close()
 				}()
 				go func() {
