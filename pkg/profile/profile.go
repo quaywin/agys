@@ -475,20 +475,34 @@ func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
 			return nil
 		}
 
-		// Case 2: Disk token does NOT exist after agy run
-		if initialRefreshToken != "" {
-			// Profile had a token before agy ran, but disk token is now gone -> User logged out (/logout)!
-			// Do NOT restore Keychain token to disk. Clean up email cache.
+		// Case 2: Disk token does NOT exist after agy run (e.g. user typed /logout, or fresh profile)
+		// Check if Keychain contains a NEW token from a fresh login during the session
+		if keyTok.Token.AccessToken != "" {
+			if initialRefreshToken != "" && keyTok.Token.RefreshToken == initialRefreshToken {
+				// Keychain still contains the OLD token from before /logout, but user logged out without logging in to a new account.
+				// Do NOT restore the old token. Clean up email cache.
+				cachePath := filepath.Join(profileDir, emailFilename)
+				_ = os.Remove(cachePath)
+				return nil
+			}
+
+			// User logged in to a new account (or fresh login on empty profile)! Save new token from Keychain to disk.
 			cachePath := filepath.Join(profileDir, emailFilename)
-			_ = os.Remove(cachePath)
+			_ = os.Remove(cachePath) // Force email re-fetch for new token
+
+			tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
+			_ = os.MkdirAll(tokenDir, 0700)
+			tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
+			_ = WriteFileAtomic(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
 			return nil
 		}
 
-		// Case 3: Fresh login (initialRefreshToken was empty and diskTok is empty) -> Save Keychain token to disk
-		tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
-		_ = os.MkdirAll(tokenDir, 0700)
-		tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
-		_ = WriteFileAtomic(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
+		// Case 3: Disk token does not exist AND Keychain is empty
+		if initialRefreshToken != "" {
+			// Profile had a token before, but user logged out and did not log back in
+			cachePath := filepath.Join(profileDir, emailFilename)
+			_ = os.Remove(cachePath)
+		}
 
 		return nil
 	})
