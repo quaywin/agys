@@ -394,61 +394,102 @@ func SyncDiskTokenToKeychain(profileDir string) {
 	})
 }
 
+// ReadTokenFromDir reads the oauth token file directly from a profile directory path.
+func ReadTokenFromDir(profileDir string) (*OAuthToken, error) {
+	tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	data, err := os.ReadFile(tokenPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fallbackPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
+			var fallbackErr error
+			data, fallbackErr = os.ReadFile(fallbackPath)
+			if fallbackErr != nil {
+				return nil, fallbackErr
+			}
+		} else {
+			return nil, err
+		}
+	}
+
+	var oauthToken OAuthToken
+	if err := json.Unmarshal(data, &oauthToken); err != nil {
+		return nil, fmt.Errorf("failed to parse token JSON: %w", err)
+	}
+	return &oauthToken, nil
+}
+
 // SyncKeychainTokenToDisk captures any new token saved to macOS Keychain (e.g. after login) and persists it to the profile directory.
-// If expectedRefreshToken is provided and non-empty, tokens from Keychain with a different RefreshToken will be rejected to prevent cross-profile contamination.
-func SyncKeychainTokenToDisk(profileDir string, expectedRefreshToken string) {
+// If initialRefreshToken was non-empty before agy ran, but the disk token is missing after agy ran (e.g. user logged out),
+// it invalidates email cache and refrains from restoring stale Keychain tokens.
+func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
 	_ = WithKeychainLock(context.Background(), func() error {
+		defer ClearKeychainToken()
+
+		// Read disk token AFTER agy execution
+		diskTok, readDiskErr := ReadTokenFromDir(profileDir)
+
 		out, err := exec.Command("security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w").Output()
-		if err == nil {
-			tokenStr := strings.TrimSpace(string(out))
-			if tokenStr != "" {
-				rawJSON := tokenStr
-				if strings.HasPrefix(tokenStr, "go-keyring-base64:") {
-					b64Part := strings.TrimPrefix(tokenStr, "go-keyring-base64:")
-					decoded, err := base64.StdEncoding.DecodeString(b64Part)
-					if err == nil {
-						rawJSON = string(decoded)
-					}
-				}
+		if err != nil || len(bytes.TrimSpace(out)) == 0 {
+			// Keychain is empty
+			if initialRefreshToken != "" && readDiskErr != nil {
+				// Token was present before execution, but disk token was deleted during execution (e.g. user typed /logout)
+				// Clean up email cache
+				cachePath := filepath.Join(profileDir, emailFilename)
+				_ = os.Remove(cachePath)
+			}
+			return nil
+		}
 
-				var tok struct {
-					Token struct {
-						AccessToken  string `json:"access_token"`
-						RefreshToken string `json:"refresh_token"`
-					} `json:"token"`
-				}
-				if json.Unmarshal([]byte(rawJSON), &tok) == nil && tok.Token.AccessToken != "" {
-					// Verification Check: Reject token from Keychain if RefreshToken does not match expected profile token
-					if expectedRefreshToken != "" && tok.Token.RefreshToken != "" && tok.Token.RefreshToken != expectedRefreshToken {
-						fmt.Fprintf(os.Stderr, "[agys] Warning: Keychain token mismatch detected (expected token for profile, got token from another profile). Ignoring Keychain token.\n")
-						ClearKeychainToken()
-						return nil
-					}
-
-					// Preserve expectedRefreshToken if Keychain token JSON lacks a refresh_token
-					if expectedRefreshToken != "" && tok.Token.RefreshToken == "" {
-						var rawMap map[string]interface{}
-						if json.Unmarshal([]byte(rawJSON), &rawMap) == nil {
-							if tokSubMap, ok := rawMap["token"].(map[string]interface{}); ok {
-								tokSubMap["refresh_token"] = expectedRefreshToken
-								if updatedBytes, marshalErr := json.MarshalIndent(rawMap, "", "  "); marshalErr == nil {
-									rawJSON = string(updatedBytes)
-								}
-							}
-						}
-					}
-
-					tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
-					_ = os.MkdirAll(tokenDir, 0700)
-					tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
-					_ = WriteFileAtomic(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
-				}
+		tokenStr := strings.TrimSpace(string(out))
+		rawJSON := tokenStr
+		if strings.HasPrefix(tokenStr, "go-keyring-base64:") {
+			b64Part := strings.TrimPrefix(tokenStr, "go-keyring-base64:")
+			decoded, decodeErr := base64.StdEncoding.DecodeString(b64Part)
+			if decodeErr == nil {
+				rawJSON = string(decoded)
 			}
 		}
-		ClearKeychainToken()
+
+		var keyTok struct {
+			Token struct {
+				AccessToken  string `json:"access_token"`
+				RefreshToken string `json:"refresh_token"`
+			} `json:"token"`
+		}
+		if json.Unmarshal([]byte(rawJSON), &keyTok) != nil || keyTok.Token.AccessToken == "" {
+			return nil
+		}
+
+		// Case 1: Disk token exists after agy run (agy wrote token to disk during run or updated it)
+		if readDiskErr == nil && diskTok != nil && diskTok.Token.AccessToken != "" {
+			// If Keychain token has a refresh_token, check if it matches disk token
+			if keyTok.Token.RefreshToken != "" && diskTok.Token.RefreshToken != "" && keyTok.Token.RefreshToken != diskTok.Token.RefreshToken {
+				// Keychain token belongs to ANOTHER profile that ran concurrently!
+				fmt.Fprintf(os.Stderr, "[agys] Warning: Keychain token mismatch detected. Keeping isolated profile token on disk.\n")
+				return nil
+			}
+			// Disk token is valid and authoritative
+			return nil
+		}
+
+		// Case 2: Disk token does NOT exist after agy run
+		if initialRefreshToken != "" {
+			// Profile had a token before agy ran, but disk token is now gone -> User logged out (/logout)!
+			// Do NOT restore Keychain token to disk. Clean up email cache.
+			cachePath := filepath.Join(profileDir, emailFilename)
+			_ = os.Remove(cachePath)
+			return nil
+		}
+
+		// Case 3: Fresh login (initialRefreshToken was empty and diskTok is empty) -> Save Keychain token to disk
+		tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
+		_ = os.MkdirAll(tokenDir, 0700)
+		tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
+		_ = WriteFileAtomic(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
+
 		return nil
 	})
 }
