@@ -12,7 +12,7 @@ import (
 var runCmd = &cobra.Command{
 	Use:               "run [profile_name] -- [agy_commands]",
 	Short:             "Execute agy command with specified profile, auto quota selection, or default profile",
-	ValidArgsFunction: CompleteProfileNames,
+	ValidArgsFunction: CompleteRunArgs,
 	Args:              cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var profileName string

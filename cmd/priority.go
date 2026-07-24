@@ -9,9 +9,10 @@ import (
 )
 
 var priorityCmd = &cobra.Command{
-	Use:     "priority [action] [profile_name] [value]",
-	Aliases: []string{"prio", "p"},
-	Short:   "Manage profile priorities for auto profile selection",
+	Use:               "priority [action] [profile_name] [value]",
+	Aliases:           []string{"prio", "p"},
+	Short:             "Manage profile priorities for auto profile selection",
+	ValidArgsFunction: CompletePriorityArgs,
 	Long: `Set, view, or list profile priorities. Higher priority numbers are preferred in auto-selection mode as long as their 5h quota is >= 50%.
 
 Subcommands/Actions:

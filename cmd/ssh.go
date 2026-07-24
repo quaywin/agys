@@ -146,9 +146,10 @@ func syncProfileToRemote(ctx context.Context, server string, profileName string)
 }
 
 var sshCmd = &cobra.Command{
-	Use:          "ssh <server> [remote_path] [profile_name] -- [agy_commands]",
-	Short:        "Execute agys/agy natively on a remote server over SSH at a specific path",
-	SilenceUsage: true,
+	Use:               "ssh <server> [remote_path] [profile_name] -- [agy_commands]",
+	Short:             "Execute agys/agy natively on a remote server over SSH at a specific path",
+	SilenceUsage:      true,
+	ValidArgsFunction: CompleteSSHArgs,
 	Long: `Connects to a remote host over SSH with pseudo-terminal (PTY) allocation (-t),
 automatically syncing local profile credentials, tunneling API requests through local proxy, and executing agys/agy natively on the remote Linux host.
 

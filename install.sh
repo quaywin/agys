@@ -101,7 +101,44 @@ esac
 
 success "${BINARY_NAME} v${VERSION} has been successfully installed!"
 
-# 6. Post-install guidance
+# 6. Auto-detect Shell & Install Completion
+CURRENT_SHELL="$(basename "${SHELL:-sh}")"
+info "Detecting active shell (${CURRENT_SHELL})..."
+
+case "${CURRENT_SHELL}" in
+    zsh)
+        ZSH_COMP_DIR="${HOME}/.zsh/completions"
+        mkdir -p "${ZSH_COMP_DIR}" 2>/dev/null || true
+        if "${INSTALL_DIR}/${BINARY_NAME}" completion zsh > "${ZSH_COMP_DIR}/_agys" 2>/dev/null; then
+            success "Installed Zsh completion to ${ZSH_COMP_DIR}/_agys"
+            if [ -f "${HOME}/.zshrc" ]; then
+                if ! grep -q "\.zsh/completions" "${HOME}/.zshrc" 2>/dev/null; then
+                    printf '\nfpath=(~/.zsh/completions $fpath)\nautoload -U compinit && compinit\n' >> "${HOME}/.zshrc"
+                    info "Configured ~/.zshrc to autoload Zsh completions."
+                fi
+            fi
+        fi
+        ;;
+    fish)
+        FISH_COMP_DIR="${HOME}/.config/fish/completions"
+        mkdir -p "${FISH_COMP_DIR}" 2>/dev/null || true
+        if "${INSTALL_DIR}/${BINARY_NAME}" completion fish > "${FISH_COMP_DIR}/agys.fish" 2>/dev/null; then
+            success "Installed Fish completion to ${FISH_COMP_DIR}/agys.fish"
+        fi
+        ;;
+    bash)
+        BASH_COMP_DIR="${HOME}/.local/share/bash-completion/completions"
+        mkdir -p "${BASH_COMP_DIR}" 2>/dev/null || true
+        if "${INSTALL_DIR}/${BINARY_NAME}" completion bash > "${BASH_COMP_DIR}/agys" 2>/dev/null; then
+            success "Installed Bash completion to ${BASH_COMP_DIR}/agys"
+        fi
+        ;;
+    *)
+        info "Shell completion available. Enable with: agys completion [zsh|fish|bash|powershell]"
+        ;;
+esac
+
+# 7. Post-install guidance
 if [ "${NEED_PATH_WARN}" -eq 1 ]; then
     echo ""
     info "Note: ${INSTALL_DIR} is not currently in your \$PATH."
@@ -111,3 +148,4 @@ if [ "${NEED_PATH_WARN}" -eq 1 ]; then
     echo ""
     info "Then reload your shell with: source ~/.zshrc (or source ~/.bashrc)"
 fi
+

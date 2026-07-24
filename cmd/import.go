@@ -16,10 +16,11 @@ var (
 )
 
 var importCmd = &cobra.Command{
-	Use:   "import <archive_path> [target_profile_name]",
-	Short: "Import a profile (or all profiles) from a gzipped tar archive",
-	Long:  `Restores a profile directory from a compressed .tar.gz archive. If target_profile_name is omitted, it is inferred from the archive name. Use --all to import all profiles.`,
-	Args:  cobra.RangeArgs(1, 2),
+	Use:               "import <archive_path> [target_profile_name]",
+	Short:             "Import a profile (or all profiles) from a gzipped tar archive",
+	Long:              `Restores a profile directory from a compressed .tar.gz archive. If target_profile_name is omitted, it is inferred from the archive name. Use --all to import all profiles.`,
+	ValidArgsFunction: CompleteImportArgs,
+	Args:              cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		archivePath := args[0]
 

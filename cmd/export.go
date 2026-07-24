@@ -104,7 +104,10 @@ var exportCmd = &cobra.Command{
 }
 
 func init() {
-	exportCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Path to the output archive file")
-	exportCmd.Flags().BoolVarP(&exportAll, "all", "a", false, "Export all profiles into a single archive")
+	exportCmd.Flags().BoolVarP(&exportAll, "all", "a", false, "Export all profiles to a single archive")
+	exportCmd.Flags().StringVarP(&outputFile, "out", "o", "", "Output file path for the exported archive")
+
+	_ = exportCmd.RegisterFlagCompletionFunc("out", cobra.FixedCompletions(nil, cobra.ShellCompDirectiveDefault))
+
 	rootCmd.AddCommand(exportCmd)
 }

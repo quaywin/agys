@@ -12,7 +12,7 @@ var cloneCmd = &cobra.Command{
 	Aliases:           []string{"cp"},
 	Short:             "Clone an existing profile to a new profile",
 	Long:              `Duplicate all credentials, configuration, and state from an existing profile to a new profile.`,
-	ValidArgsFunction: CompleteProfileNames,
+	ValidArgsFunction: CompleteCloneOrRenameArgs,
 	Args:              cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		src := args[0]

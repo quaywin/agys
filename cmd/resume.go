@@ -26,7 +26,7 @@ var resumeCmd = &cobra.Command{
 	Use:               "resume [index_or_project] [-- agy_flags]",
 	Aliases:           []string{"r"},
 	Short:             "List and resume previous conversation sessions by project and profile",
-	ValidArgsFunction: CompleteProfileNames,
+	ValidArgsFunction: CompleteResumeArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var selectedIndex int
 		var extraAgyArgs []string
@@ -199,6 +199,9 @@ func init() {
 	resumeCmd.Flags().IntVarP(&resumeLimit, "limit", "n", 20, "Maximum number of sessions to display")
 	resumeCmd.Flags().BoolVarP(&resumeInteractive, "interactive", "i", false, "Prompt interactively to choose a session")
 	resumeCmd.Flags().BoolVar(&resumeJSON, "json", false, "Output session list in JSON format")
+
+	_ = resumeCmd.RegisterFlagCompletionFunc("profile", CompleteProfileNames)
+	_ = resumeCmd.RegisterFlagCompletionFunc("project", cobra.FixedCompletions(nil, cobra.ShellCompDirectiveFilterDirs))
 
 	rootCmd.AddCommand(resumeCmd)
 }
