@@ -116,6 +116,9 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		expectedRefreshToken = initTok.Token.RefreshToken
 	}
 
+	// Merge trusted workspaces across all profiles prior to execution
+	_ = profile.SyncTrustedWorkspaces()
+
 	runErr := profile.RunCmdWithSignals(cmd.Context(), profileDir, agyArgs...)
 
 	// Persist any token created in macOS Keychain during execution (e.g. login) to profile disk storage
