@@ -18,6 +18,7 @@
 - **Default Active Profile**: Set a default profile (`agys use work` or `agys use auto`) to run commands (`agys run -- status`) without re-typing profile names.
 - **Shell Auto-Completion & Aliases**: Built-in completion generator for `bash`, `zsh`, `fish`, `powershell` with tab-completion for profile names, plus shell alias generation (`agys alias`).
 - **Profile Cloning, Export & Import**: Duplicate a profile instantly (`agys clone`), or pack/unpack profiles to archives (`agys export` / `agys import`) with built-in path-traversal safety checks.
+- **Remote SSH Execution (`agys ssh`)**: Run `agy` natively on any remote Linux server over SSH with instant 0.1s profile credential sync, automatic remote agent auto-bootstrap, SSH API reverse-tunneling to bypass remote IP geo-blocking, dynamic port allocation for parallel connections, and zero-orphan process guarantees.
 - **Cross-Platform & Safe In-Place Upgrade**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures, featuring atomic in-place upgrading and ad-hoc code signing (`agys upgrade`).
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
@@ -194,7 +195,32 @@ source <(agys completion zsh)
 source <(agys completion bash)
 ```
 
-### 11. Version & Upgrading
+### 11. Remote SSH Execution (`agys ssh`)
+
+Execute `agy` natively on a remote Linux server over SSH using your local profiles and credentials:
+
+```bash
+# Connect to remote server using default or auto profile
+agys ssh user@remote-server
+
+# Connect to a specific remote project folder using a specific profile
+agys ssh user@remote-server /var/www/myproject work
+
+# Connect using auto profile selection (picks profile with best 5h quota)
+agys ssh user@remote-server /var/www/myproject auto
+
+# Pass extra agy flags directly
+agys ssh user@remote-server /var/www/myproject work -- --dangerously-skip-permissions
+```
+
+**Key Advantages:**
+- **Zero Remote Setup**: Auto-installs `agy` binary on the remote host if missing.
+- **Instant Credential Sync**: Syncs local OAuth tokens to remote in 0.1s without re-authenticating.
+- **Geo-Block Bypass**: Tunnels Gemini API calls through an SSH reverse tunnel (`-R <port>`) back to your local machine, allowing full AI access even on datacenter IPs in unsupported regions.
+- **Zero Orphan Processes**: Uses `exec` process replacement bound directly to OpenSSH `sshd`. On disconnect, all remote child processes are cleanly terminated.
+- **Parallel SSH Support**: Dynamic port allocation (`10800 + PID % 1000`) enables multiple simultaneous SSH sessions without port collisions.
+
+### 12. Version & Upgrading
 
 ```bash
 # Check installed version
@@ -257,6 +283,7 @@ Available Commands:
   quota       Check model quota and usage for profile(s) (alias: q)
   rename      Rename an existing profile directory (alias: mv)
   run         Execute agy command with specified profile, auto quota selection, or default profile
+  ssh         Execute agys/agy natively on a remote server over SSH
   upgrade     Upgrade agys CLI to the latest version (alias: update)
   use         Set or display the default active profile
   version     Display version information for agys CLI
@@ -272,9 +299,11 @@ Flags:
 
 ```mermaid
 graph TD
-    User[User Shell] -->|agys run work -- command| AGYS[agys CLI]
-    AGYS -->|Validate Profile| Check[pkg/profile.Exists]
-    AGYS -->|Override HOME| Env[Set HOME=~/.agys/profiles/work]
-    AGYS -->|Exec| AGY[agy CLI Process]
-    AGY -->|Read/Write Config| Dir[~/.agys/profiles/work/]
+    User[User Shell] -->|agys run work| AGYS[agys CLI Local]
+    User -->|agys ssh user@server work| AGYS
+    AGYS -->|Sync Token 0.1s & API Reverse Tunnel| RemoteServer[Remote Linux Host over SSH]
+    RemoteServer -->|exec agys run work| AGY[agy CLI Process on Remote]
+    AGY -->|Read/Write Isolated Profile| Dir[~/.agys/profiles/work/]
+    AGY -->|Tunnel API Calls| AGYS
+    AGYS -->|Gemini API Request| GoogleCloud[Google Cloud AI]
 ```

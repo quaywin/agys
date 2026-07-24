@@ -351,3 +351,62 @@ func TestFormatHTTPError(t *testing.T) {
 		t.Errorf("Expected err500 not to wrap ErrUnauthenticated")
 	}
 }
+
+func TestWithKeychainLock(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	executed := false
+	err := WithKeychainLock(nil, func() error {
+		executed = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithKeychainLock error: %v", err)
+	}
+	if !executed {
+		t.Errorf("Expected fn to be executed inside WithKeychainLock")
+	}
+}
+
+func TestDetectDuplicateTokens(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	p1Dir, err := Create("profile-1")
+	if err != nil {
+		t.Fatalf("Create profile-1 error: %v", err)
+	}
+	p2Dir, err := Create("profile-2")
+	if err != nil {
+		t.Fatalf("Create profile-2 error: %v", err)
+	}
+
+	tokJSON := []byte(`{
+		"token": {
+			"access_token": "acc_123",
+			"refresh_token": "ref_123"
+		}
+	}`)
+
+	_ = os.MkdirAll(filepath.Join(p1Dir, ".gemini", "antigravity-cli"), 0700)
+	_ = os.MkdirAll(filepath.Join(p2Dir, ".gemini", "antigravity-cli"), 0700)
+
+	_ = os.WriteFile(filepath.Join(p1Dir, ".gemini", "antigravity-cli", "antigravity-oauth-token"), tokJSON, 0600)
+	_ = os.WriteFile(filepath.Join(p2Dir, ".gemini", "antigravity-cli", "antigravity-oauth-token"), tokJSON, 0600)
+
+	dups, err := DetectDuplicateTokens()
+	if err != nil {
+		t.Fatalf("DetectDuplicateTokens error: %v", err)
+	}
+	if len(dups) != 2 {
+		t.Errorf("Expected 2 duplicate profiles, got %d: %v", len(dups), dups)
+	}
+	if _, ok := dups["profile-1"]; !ok {
+		t.Errorf("Expected profile-1 to be flagged as duplicate")
+	}
+	if _, ok := dups["profile-2"]; !ok {
+		t.Errorf("Expected profile-2 to be flagged as duplicate")
+	}
+}
+

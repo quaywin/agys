@@ -35,6 +35,8 @@ var listCmd = &cobra.Command{
 		currentProfile, _ := profile.GetCurrent()
 		priorities, _ := profile.GetAllPriorities()
 
+		duplicates, _ := profile.DetectDuplicateTokens()
+
 		if !listQuota {
 			fmt.Println("Active Profiles:")
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -49,6 +51,9 @@ var listCmd = &cobra.Command{
 				email, _ := profile.GetCachedEmail(p)
 				if email == "" {
 					email = "-"
+				}
+				if dupList, isDup := duplicates[p]; isDup {
+					email += fmt.Sprintf(" [!] DUPLICATE TOKEN (shared with %v)", dupList)
 				}
 				fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", pName, prio, email, dir)
 			}

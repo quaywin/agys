@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,22 +27,32 @@ func GetAllPriorities() (map[string]int, error) {
 	priorityMu.RLock()
 	defer priorityMu.RUnlock()
 
-	filePath, err := GetPrioritiesFilePath()
+	var priorities map[string]int
+
+	err := WithFileLock(context.Background(), func() error {
+		filePath, err := GetPrioritiesFilePath()
+		if err != nil {
+			return err
+		}
+
+		data, err := os.ReadFile(filePath)
+		if os.IsNotExist(err) {
+			priorities = make(map[string]int)
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read priorities file: %w", err)
+		}
+
+		if err := json.Unmarshal(data, &priorities); err != nil {
+			priorities = make(map[string]int)
+			return nil
+		}
+		return nil
+	})
+
 	if err != nil {
 		return nil, err
-	}
-
-	data, err := os.ReadFile(filePath)
-	if os.IsNotExist(err) {
-		return make(map[string]int), nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to read priorities file: %w", err)
-	}
-
-	var priorities map[string]int
-	if err := json.Unmarshal(data, &priorities); err != nil {
-		return make(map[string]int), nil
 	}
 
 	if priorities == nil {
@@ -76,34 +87,37 @@ func SetPriority(profileName string, priority int) error {
 	priorityMu.Lock()
 	defer priorityMu.Unlock()
 
-	filePath, err := GetPrioritiesFilePath()
-	if err != nil {
-		return err
-	}
+	return WithFileLock(context.Background(), func() error {
+		filePath, err := GetPrioritiesFilePath()
+		if err != nil {
+			return err
+		}
 
-	agysDir, err := GetAgysDir()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(agysDir, 0700); err != nil {
-		return fmt.Errorf("failed to create agys directory: %w", err)
-	}
+		agysDir, err := GetAgysDir()
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(agysDir, 0700); err != nil {
+			return fmt.Errorf("failed to create agys directory: %w", err)
+		}
 
-	priorities := make(map[string]int)
-	data, readErr := os.ReadFile(filePath)
-	if readErr == nil {
-		_ = json.Unmarshal(data, &priorities)
-	}
-	if priorities == nil {
-		priorities = make(map[string]int)
-	}
+		priorities := make(map[string]int)
+		data, readErr := os.ReadFile(filePath)
+		if readErr == nil {
+			_ = json.Unmarshal(data, &priorities)
+		}
+		if priorities == nil {
+			priorities = make(map[string]int)
+		}
 
-	priorities[profileName] = priority
+		priorities[profileName] = priority
 
-	encoded, err := json.MarshalIndent(priorities, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to encode priorities: %w", err)
-	}
+		encoded, err := json.MarshalIndent(priorities, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to encode priorities: %w", err)
+		}
 
-	return os.WriteFile(filePath, encoded, 0600)
+		return WriteFileAtomic(filePath, encoded, 0600)
+	})
 }
+

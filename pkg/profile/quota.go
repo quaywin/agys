@@ -95,7 +95,7 @@ func SaveCachedEmail(profileName string, email string) error {
 
 	cachePath := filepath.Join(profileDir, emailFilename)
 	content := strings.TrimSpace(email) + "\n" + fp + "\n"
-	return os.WriteFile(cachePath, []byte(content), 0600)
+	return WriteFileAtomic(cachePath, []byte(content), 0600)
 }
 
 // FetchProfileEmail retrieves the Google account email for a profile via userinfo endpoint.
@@ -697,5 +697,39 @@ func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile st
 
 	tw.Flush()
 }
+
+// DetectDuplicateTokens scans all profiles and returns a map of profile names that share duplicate OAuth tokens.
+func DetectDuplicateTokens() (map[string][]string, error) {
+	profiles, err := List()
+	if err != nil {
+		return nil, err
+	}
+
+	fpMap := make(map[string][]string) // fingerprint -> []profileName
+	for _, p := range profiles {
+		if IsAuto(p) {
+			continue
+		}
+		tok, err := ReadToken(p)
+		if err == nil && tok != nil {
+			fp := calculateTokenFingerprint(tok)
+			if fp != "" {
+				fpMap[fp] = append(fpMap[fp], p)
+			}
+		}
+	}
+
+	duplicates := make(map[string][]string)
+	for _, pList := range fpMap {
+		if len(pList) > 1 {
+			for _, p := range pList {
+				duplicates[p] = pList
+			}
+		}
+	}
+
+	return duplicates, nil
+}
+
 
 

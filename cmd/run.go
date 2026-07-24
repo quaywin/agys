@@ -111,11 +111,15 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		return err
 	}
 
-	execCmd := profile.BuildCmd(profileDir, agyArgs...)
-	runErr := execCmd.Run()
+	var expectedRefreshToken string
+	if initTok, readErr := profile.ReadToken(targetProfile); readErr == nil && initTok != nil {
+		expectedRefreshToken = initTok.Token.RefreshToken
+	}
+
+	runErr := profile.RunCmdWithSignals(cmd.Context(), profileDir, agyArgs...)
 
 	// Persist any token created in macOS Keychain during execution (e.g. login) to profile disk storage
-	profile.SyncKeychainTokenToDisk(profileDir)
+	profile.SyncKeychainTokenToDisk(profileDir, expectedRefreshToken)
 
 	// Capture latest conversation info after execution
 	idAfter, _, _ := profile.GetLatestConversationFileInfo(targetProfile)
@@ -163,9 +167,17 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		// "Resume with -c (or command below):"
 		// "agy --conversation=..."
 		// using carriage return and cursor up ANSI codes.
-		fmt.Print("\r\033[K\033[A\033[K\033[A\033[K")
-		fmt.Println("Resume with -c (or command below):")
-		fmt.Printf("agys run %s -- --conversation=%s%s\n", targetProfile, idAfter, extraFlags)
+		sshServer := os.Getenv("AGYS_SSH_SERVER")
+		sshPath := os.Getenv("AGYS_SSH_PATH")
+		if sshServer != "" {
+			pathArg := ""
+			if sshPath != "" {
+				pathArg = " " + shellQuote(sshPath)
+			}
+			fmt.Printf("agys ssh %s%s %s -- --conversation=%s%s\n", sshServer, pathArg, targetProfile, idAfter, extraFlags)
+		} else {
+			fmt.Printf("agys run %s -- --conversation=%s%s\n", targetProfile, idAfter, extraFlags)
+		}
 	}
 
 	return runErr

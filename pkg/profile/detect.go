@@ -22,7 +22,7 @@ func SaveLastConversation(convID string) error {
 		return err
 	}
 	cacheFile := filepath.Join(agysDir, lastConversationFilename)
-	return os.WriteFile(cacheFile, []byte(strings.TrimSpace(convID)+"\n"), 0600)
+	return WriteFileAtomic(cacheFile, []byte(strings.TrimSpace(convID)+"\n"), 0600)
 }
 
 // GetLastConversation retrieves the last active conversation ID from the global cache file.

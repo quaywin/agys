@@ -59,13 +59,19 @@ func ExportProfile(profileName string, writer io.Writer) error {
 		}
 
 		if info.Mode().IsRegular() {
-			file, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
+			err := func() error {
+				file, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+				defer file.Close()
 
-			if _, err := io.Copy(tw, file); err != nil {
+				if _, err := io.Copy(tw, file); err != nil {
+					return err
+				}
+				return nil
+			}()
+			if err != nil {
 				return err
 			}
 		}
@@ -243,13 +249,19 @@ func ExportAll(writer io.Writer) error {
 			}
 
 			if info.Mode().IsRegular() {
-				file, err := os.Open(path)
-				if err != nil {
-					return err
-				}
-				defer file.Close()
+				err := func() error {
+					file, err := os.Open(path)
+					if err != nil {
+						return err
+					}
+					defer file.Close()
 
-				if _, err := io.Copy(tw, file); err != nil {
+					if _, err := io.Copy(tw, file); err != nil {
+						return err
+					}
+					return nil
+				}()
+				if err != nil {
 					return err
 				}
 			}

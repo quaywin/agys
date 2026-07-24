@@ -2,6 +2,7 @@ package profile
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,10 @@ func GetAgysDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("unable to determine user home directory: %w", err)
+	}
+	agysSep := string(filepath.Separator) + ".agys"
+	if idx := strings.Index(homeDir, agysSep); idx != -1 {
+		homeDir = homeDir[:idx]
 	}
 	return filepath.Join(homeDir, ".agys"), nil
 }
@@ -246,40 +251,70 @@ func SetCurrent(name string) error {
 		}
 	}
 
-	agysDir, err := GetAgysDir()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(agysDir, 0700); err != nil {
-		return fmt.Errorf("failed to create agys directory %s: %w", agysDir, err)
-	}
+	return WithFileLock(context.Background(), func() error {
+		agysDir, err := GetAgysDir()
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(agysDir, 0700); err != nil {
+			return fmt.Errorf("failed to create agys directory %s: %w", agysDir, err)
+		}
 
-	currentFile := filepath.Join(agysDir, currentProfileFilename)
-	if err := os.WriteFile(currentFile, []byte(name+"\n"), 0600); err != nil {
-		return fmt.Errorf("failed to write current profile file: %w", err)
-	}
+		currentFile := filepath.Join(agysDir, currentProfileFilename)
+		if err := WriteFileAtomic(currentFile, []byte(name+"\n"), 0600); err != nil {
+			return fmt.Errorf("failed to write current profile file: %w", err)
+		}
 
-	return nil
+		return nil
+	})
 }
 
 // UnsetCurrent removes the default active profile setting.
 func UnsetCurrent() error {
-	agysDir, err := GetAgysDir()
-	if err != nil {
-		return err
-	}
-	currentFile := filepath.Join(agysDir, currentProfileFilename)
-	if err := os.Remove(currentFile); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove current profile file: %w", err)
-	}
-	return nil
+	return WithFileLock(context.Background(), func() error {
+		agysDir, err := GetAgysDir()
+		if err != nil {
+			return err
+		}
+		currentFile := filepath.Join(agysDir, currentProfileFilename)
+		if err := os.Remove(currentFile); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove current profile file: %w", err)
+		}
+		return nil
+	})
 }
 
 // BuildCmd constructs an exec.Cmd for running `agy` with isolated profile environment variables.
 func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	_ = EnsureKeychain(profileDir)
 
-	cmd := exec.Command("agy", args...)
+	agyPath, err := exec.LookPath("agy")
+	if err != nil {
+		if userHome, errHome := os.UserHomeDir(); errHome == nil {
+			agysSep := string(filepath.Separator) + ".agys"
+			if idx := strings.Index(userHome, agysSep); idx != -1 {
+				userHome = userHome[:idx]
+			}
+			candidates := []string{
+				filepath.Join(userHome, ".local", "bin", "agy"),
+				filepath.Join(userHome, "bin", "agy"),
+				filepath.Join(userHome, ".gemini", "antigravity-cli", "bin", "agy"),
+				"/usr/local/bin/agy",
+			}
+			for _, candidate := range candidates {
+				if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+					agyPath = candidate
+					err = nil
+					break
+				}
+			}
+		}
+	}
+	if err != nil {
+		agyPath = "agy"
+	}
+
+	cmd := exec.Command(agyPath, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -331,63 +366,91 @@ func SyncDiskTokenToKeychain(profileDir string) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
-	tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
-	data, err := os.ReadFile(tokenPath)
-	if err != nil {
-		fallbackPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
-		data, err = os.ReadFile(fallbackPath)
-	}
-	if err != nil || len(bytes.TrimSpace(data)) == 0 {
-		ClearKeychainToken()
-		return
-	}
+	_ = WithKeychainLock(context.Background(), func() error {
+		tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+		data, err := os.ReadFile(tokenPath)
+		if err != nil {
+			fallbackPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
+			data, err = os.ReadFile(fallbackPath)
+		}
+		if err != nil || len(bytes.TrimSpace(data)) == 0 {
+			ClearKeychainToken()
+			return nil
+		}
 
-	var tok struct {
-		Token struct {
-			AccessToken string `json:"access_token"`
-		} `json:"token"`
-	}
-	if json.Unmarshal(data, &tok) != nil || tok.Token.AccessToken == "" {
-		ClearKeychainToken()
-		return
-	}
+		var tok struct {
+			Token struct {
+				AccessToken string `json:"access_token"`
+			} `json:"token"`
+		}
+		if json.Unmarshal(data, &tok) != nil || tok.Token.AccessToken == "" {
+			ClearKeychainToken()
+			return nil
+		}
 
-	b64Val := "go-keyring-base64:" + base64.StdEncoding.EncodeToString(bytes.TrimSpace(data))
-	_ = exec.Command("security", "add-generic-password", "-s", "gemini", "-a", "antigravity", "-w", b64Val, "-U").Run()
+		b64Val := "go-keyring-base64:" + base64.StdEncoding.EncodeToString(bytes.TrimSpace(data))
+		_ = exec.Command("security", "add-generic-password", "-s", "gemini", "-a", "antigravity", "-w", b64Val, "-U").Run()
+		return nil
+	})
 }
 
 // SyncKeychainTokenToDisk captures any new token saved to macOS Keychain (e.g. after login) and persists it to the profile directory.
-func SyncKeychainTokenToDisk(profileDir string) {
+// If expectedRefreshToken is provided and non-empty, tokens from Keychain with a different RefreshToken will be rejected to prevent cross-profile contamination.
+func SyncKeychainTokenToDisk(profileDir string, expectedRefreshToken string) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
-	out, err := exec.Command("security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w").Output()
-	if err == nil {
-		tokenStr := strings.TrimSpace(string(out))
-		if tokenStr != "" {
-			rawJSON := tokenStr
-			if strings.HasPrefix(tokenStr, "go-keyring-base64:") {
-				b64Part := strings.TrimPrefix(tokenStr, "go-keyring-base64:")
-				decoded, err := base64.StdEncoding.DecodeString(b64Part)
-				if err == nil {
-					rawJSON = string(decoded)
+	_ = WithKeychainLock(context.Background(), func() error {
+		out, err := exec.Command("security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w").Output()
+		if err == nil {
+			tokenStr := strings.TrimSpace(string(out))
+			if tokenStr != "" {
+				rawJSON := tokenStr
+				if strings.HasPrefix(tokenStr, "go-keyring-base64:") {
+					b64Part := strings.TrimPrefix(tokenStr, "go-keyring-base64:")
+					decoded, err := base64.StdEncoding.DecodeString(b64Part)
+					if err == nil {
+						rawJSON = string(decoded)
+					}
+				}
+
+				var tok struct {
+					Token struct {
+						AccessToken  string `json:"access_token"`
+						RefreshToken string `json:"refresh_token"`
+					} `json:"token"`
+				}
+				if json.Unmarshal([]byte(rawJSON), &tok) == nil && tok.Token.AccessToken != "" {
+					// Verification Check: Reject token from Keychain if RefreshToken does not match expected profile token
+					if expectedRefreshToken != "" && tok.Token.RefreshToken != "" && tok.Token.RefreshToken != expectedRefreshToken {
+						fmt.Fprintf(os.Stderr, "[agys] Warning: Keychain token mismatch detected (expected token for profile, got token from another profile). Ignoring Keychain token.\n")
+						ClearKeychainToken()
+						return nil
+					}
+
+					// Preserve expectedRefreshToken if Keychain token JSON lacks a refresh_token
+					if expectedRefreshToken != "" && tok.Token.RefreshToken == "" {
+						var rawMap map[string]interface{}
+						if json.Unmarshal([]byte(rawJSON), &rawMap) == nil {
+							if tokSubMap, ok := rawMap["token"].(map[string]interface{}); ok {
+								tokSubMap["refresh_token"] = expectedRefreshToken
+								if updatedBytes, marshalErr := json.MarshalIndent(rawMap, "", "  "); marshalErr == nil {
+									rawJSON = string(updatedBytes)
+								}
+							}
+						}
+					}
+
+					tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
+					_ = os.MkdirAll(tokenDir, 0700)
+					tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
+					_ = WriteFileAtomic(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
 				}
 			}
-
-			var tok struct {
-				Token struct {
-					AccessToken string `json:"access_token"`
-				} `json:"token"`
-			}
-			if json.Unmarshal([]byte(rawJSON), &tok) == nil && tok.Token.AccessToken != "" {
-				tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
-				_ = os.MkdirAll(tokenDir, 0700)
-				tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
-				_ = os.WriteFile(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
-			}
 		}
-	}
-	ClearKeychainToken()
+		ClearKeychainToken()
+		return nil
+	})
 }
 
 

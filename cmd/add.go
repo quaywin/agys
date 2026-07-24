@@ -34,8 +34,7 @@ var addCmd = &cobra.Command{
 		fmt.Printf("Profile directory created at: %s\n", createdDir)
 		fmt.Printf("Initiating `agy login` for profile %q...\n\n", profileName)
 
-		execCmd := profile.BuildCmd(createdDir, "login")
-		if err := execCmd.Run(); err != nil {
+		if err := profile.RunCmdWithSignals(cmd.Context(), createdDir, "login"); err != nil {
 			// If login fails, clean up created directory or inform user
 			fmt.Fprintf(os.Stderr, "Warning: `agy login` exited with error: %v\n", err)
 			return err
