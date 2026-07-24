@@ -112,3 +112,34 @@ func TestSaveGetLastConversation(t *testing.T) {
 		t.Errorf("Expected conversation ID %q, got %q", testID, id)
 	}
 }
+
+func TestSaveGetSessionFlags(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	convID := "conv-test-flags-123"
+	flags := []string{"--dangerously-skip-permissions", "--model=pro"}
+
+	// Initially empty
+	got, err := GetSessionFlags(convID)
+	if err != nil {
+		t.Fatalf("GetSessionFlags failed: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("Expected empty flags, got %v", got)
+	}
+
+	// Save flags
+	if err := SaveSessionFlags(convID, flags); err != nil {
+		t.Fatalf("SaveSessionFlags failed: %v", err)
+	}
+
+	// Retrieve flags
+	got, err = GetSessionFlags(convID)
+	if err != nil {
+		t.Fatalf("GetSessionFlags failed: %v", err)
+	}
+	if len(got) != 2 || got[0] != flags[0] || got[1] != flags[1] {
+		t.Errorf("Expected flags %v, got %v", flags, got)
+	}
+}

@@ -105,7 +105,7 @@ var resumeCmd = &cobra.Command{
 			}
 			chosen := sessions[selectedIndex-1]
 			fmt.Fprintf(os.Stderr, "[agys] Resuming session %s (Project: %s, Profile: %s)\n", chosen.ConvID, chosen.ProjectName, chosen.Profile)
-			agyArgs := append([]string{"--conversation=" + chosen.ConvID}, extraAgyArgs...)
+			agyArgs := buildResumeAgyArgs(chosen.ConvID, extraAgyArgs)
 			return runWithProfile(cmd, chosen.Profile, agyArgs)
 		}
 
@@ -158,13 +158,38 @@ var resumeCmd = &cobra.Command{
 
 			chosen := sessions[choice-1]
 			fmt.Fprintf(os.Stderr, "[agys] Resuming session %s (Project: %s, Profile: %s)\n", chosen.ConvID, chosen.ProjectName, chosen.Profile)
-			agyArgs := append([]string{"--conversation=" + chosen.ConvID}, extraAgyArgs...)
+			agyArgs := buildResumeAgyArgs(chosen.ConvID, extraAgyArgs)
 			return runWithProfile(cmd, chosen.Profile, agyArgs)
 		}
 
 		fmt.Println("To resume a session, run: agys resume <NUM> or agys run <PROFILE> -- --conversation=<CONVERSATION_ID>")
 		return nil
 	},
+}
+
+func buildResumeAgyArgs(convID string, extraAgyArgs []string) []string {
+	savedFlags, _ := profile.GetSessionFlags(convID)
+
+	args := []string{"--conversation=" + convID}
+
+	hasFlag := func(slice []string, flagName string) bool {
+		for _, arg := range slice {
+			if arg == flagName || strings.HasPrefix(arg, flagName+"=") {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, flag := range savedFlags {
+		flagName := strings.SplitN(flag, "=", 2)[0]
+		if !hasFlag(extraAgyArgs, flagName) {
+			args = append(args, flag)
+		}
+	}
+
+	args = append(args, extraAgyArgs...)
+	return args
 }
 
 func init() {

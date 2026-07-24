@@ -163,6 +163,7 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 
 		var extraFlags string
 		if len(preservedFlags) > 0 {
+			_ = profile.SaveSessionFlags(idAfter, preservedFlags)
 			extraFlags = " " + strings.Join(preservedFlags, " ")
 		}
 
