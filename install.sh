@@ -63,8 +63,14 @@ TMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'agys')
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
 info "Downloading ${DOWNLOAD_URL}..."
-if ! curl -sSL "${DOWNLOAD_URL}" -o "${TMP_DIR}/${ARCHIVE_NAME}"; then
-    error "Failed to download archive from ${DOWNLOAD_URL}"
+if [ -t 1 ] || [ -t 2 ]; then
+    if ! curl -# -fSL "${DOWNLOAD_URL}" -o "${TMP_DIR}/${ARCHIVE_NAME}"; then
+        error "Failed to download archive from ${DOWNLOAD_URL}"
+    fi
+else
+    if ! curl -sSL "${DOWNLOAD_URL}" -o "${TMP_DIR}/${ARCHIVE_NAME}"; then
+        error "Failed to download archive from ${DOWNLOAD_URL}"
+    fi
 fi
 
 info "Extracting ${ARCHIVE_NAME}..."

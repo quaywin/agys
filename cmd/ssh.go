@@ -216,16 +216,30 @@ Examples:
 		}
 		defer cleanupProxy()
 
-		// 2. Sync profile credentials to remote if it's not auto
-		if !profile.IsAuto(profileName) {
-			exists, _, err := profile.Exists(profileName)
-			if err != nil || !exists {
-				return fmt.Errorf("local profile %q does not exist. Use `agys add %s` to create it first", profileName, profileName)
+		// 2. Resolve profile locally and sync profile credentials to remote
+		var targetProfile string
+		if profile.IsAuto(profileName) {
+			selected, score, err := profile.SelectBestProfile(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("auto profile selection failed on local machine: %w", err)
 			}
-			fmt.Fprintf(os.Stderr, "[agys] Syncing local profile %q to %s...\n", profileName, server)
-			if err := syncProfileToRemote(cmd.Context(), server, profileName); err != nil {
-				return err
+			targetProfile = selected
+			scoreStr := fmt.Sprintf("%.1f%%", score*100)
+			if score < 0 {
+				scoreStr = "N/A"
 			}
+			fmt.Fprintf(os.Stderr, "[agys] Auto-selected local profile %q (5h Gemini quota: %s)\n", targetProfile, scoreStr)
+		} else {
+			targetProfile = profileName
+		}
+
+		exists, _, err := profile.Exists(targetProfile)
+		if err != nil || !exists {
+			return fmt.Errorf("local profile %q does not exist. Use `agys add %s` to create it first", targetProfile, targetProfile)
+		}
+		fmt.Fprintf(os.Stderr, "[agys] Syncing local profile %q to %s...\n", targetProfile, server)
+		if err := syncProfileToRemote(cmd.Context(), server, targetProfile); err != nil {
+			return err
 		}
 
 		// 3. Prepare remote execution command with dynamic remote proxy port to support parallel SSH connections
@@ -239,7 +253,7 @@ Examples:
 			agyArgsStr = " -- " + strings.Join(quoted, " ")
 		}
 
-		agysRunCmd := fmt.Sprintf("agys run %s", shellQuote(profileName))
+		agysRunCmd := fmt.Sprintf("agys run %s", shellQuote(targetProfile))
 		cdPrefix := ""
 		if remotePath != "" {
 			cdPrefix = fmt.Sprintf("cd %s && ", shellQuote(remotePath))
@@ -254,7 +268,7 @@ Examples:
 				`%s`+
 				`%s`+
 				`if ! command -v agy >/dev/null 2>&1; then `+
-				`echo "[agys] Auto-installing agy (Antigravity CLI) on %s..." >&2; `+
+				`echo "[agys] Auto-installing agy (Antigravity CLI) on %s (downloading ~70MB release package over SSH tunnel, please wait)..." >&2; `+
 				`curl -fsSL https://antigravity.google/cli/install.sh | bash || true; `+
 				`export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.gemini/antigravity-cli/bin:/usr/local/bin:$PATH"; `+
 				`fi; `+
