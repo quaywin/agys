@@ -20,7 +20,7 @@
 - **Profile Cloning, Export & Import**: Duplicate a profile instantly (`agys clone`), or pack/unpack profiles to archives (`agys export` / `agys import`) with built-in path-traversal safety checks.
 - **Remote SSH Execution (`agys ssh`)**: Run `agy` natively on any remote Linux server over SSH with instant 0.1s profile credential sync, automatic remote agent auto-bootstrap, SSH API reverse-tunneling to bypass remote IP geo-blocking, dynamic port allocation for parallel connections, and zero-orphan process guarantees.
 - **Desktop App GUI Switcher (`agys gui`)**: Launch the Antigravity 2.0 Desktop App GUI isolated to any profile (`agys gui work`), featuring automatic macOS Keychain OAuth token synchronization, auto-seeding, graceful process termination, and interactive confirmation prompts.
-- **Antigravity IDE Switcher (`agys ide`)**: Launch the standalone Antigravity IDE for any profile (`agys ide work /path/to/project`), featuring automatic macOS Keychain token synchronization and optional project path arguments.
+- **Antigravity IDE Switcher (`agys ide`)**: Launch isolated, parallel sessions of the standalone Antigravity IDE for any profile (`agys ide work /path/to/project`), using profile-isolated `--user-data-dir` storage to support running multiple IDE windows logged into different accounts simultaneously.
 - **Cross-Platform & Safe In-Place Upgrade**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures, featuring atomic in-place upgrading and ad-hoc code signing (`agys upgrade`).
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
@@ -242,7 +242,7 @@ agys gui work --force
 
 ### 13. Launch Antigravity IDE (`agys ide`)
 
-Launch the standalone Antigravity IDE for any profile with automatic macOS Keychain token synchronization and optional project folder paths:
+Launch the standalone Antigravity IDE isolated to any profile with dedicated `--user-data-dir` storage. Each profile maintains its own independent IDE session, allowing you to run **multiple IDE windows in parallel** logged into different Google accounts simultaneously:
 
 ```bash
 # Launch Antigravity IDE using default or auto profile
@@ -256,10 +256,9 @@ agys ide work /var/www/myproject
 
 # Launch Antigravity IDE using auto profile selection (picks profile with best 5h quota)
 agys ide auto /var/www/myproject
-
-# Force restart IDE without interactive confirmation prompt
-agys ide work -f
 ```
+
+> **Note on Initial Setup**: When launching `agys ide <profile>` for the first time on a new profile, log in once via the IDE prompt. The IDE will permanently remember that profile's session in `~/.agys/profiles/<profile>/ide-data/`, allowing seamless future launches and parallel multi-account IDE windows.
 
 ### 14. Version & Upgrading
 
