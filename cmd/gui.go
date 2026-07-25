@@ -17,7 +17,7 @@ var forceGui bool
 var guiCmd = &cobra.Command{
 	Use:               "gui [profile_name]",
 	Short:             "Launch Antigravity 2.0 Desktop App (GUI) with a specified profile or default active profile",
-	Long:              `Launches the Antigravity 2.0 Desktop App GUI after syncing the profile token into macOS Keychain.`,
+	Long:              `Launches the Antigravity 2.0 Desktop App GUI with isolated profile settings and environment variables.`,
 	ValidArgsFunction: CompleteProfileNames,
 	Args:              cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -64,7 +64,7 @@ var guiCmd = &cobra.Command{
 			return err
 		}
 
-		// If Antigravity GUI is currently running, prompt for user confirmation before terminating
+		// Prompt if Antigravity GUI is currently running and force flag is not set
 		if isAntigravityRunning() && !forceGui {
 			fmt.Printf("An instance of Antigravity GUI is currently running. Close it and switch to profile %q? [y/N]: ", targetProfile)
 			reader := bufio.NewReader(os.Stdin)
@@ -91,8 +91,8 @@ var guiCmd = &cobra.Command{
 
 		fmt.Printf("Launching Antigravity 2.0 GUI (%s)...\n", targetProfile)
 
-		// Launch Antigravity GUI
-		openCmd := exec.Command("open", "-a", "/Applications/Antigravity.app")
+		// Launch Antigravity GUI with isolated HOME environment
+		openCmd := exec.Command("open", "-a", "/Applications/Antigravity.app", "--env", "HOME="+profileDir)
 		if err := openCmd.Run(); err != nil {
 			return fmt.Errorf("failed to launch Antigravity 2.0 GUI: %w", err)
 		}
@@ -106,31 +106,24 @@ func isAntigravityRunning() bool {
 	return err == nil
 }
 
-// terminateAndWaitAntigravity sends SIGTERM to Antigravity processes and polls until 100% dead.
 func terminateAndWaitAntigravity() {
-	// Send SIGTERM to any running process
 	if err := exec.Command("pkill", "-f", "Antigravity").Run(); err != nil {
-		// No process was running
 		return
 	}
 
-	// Poll pgrep until no Antigravity process remains, max 3 seconds timeout
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := exec.Command("pgrep", "-f", "Antigravity").Run(); err != nil {
-			// Process is completely dead!
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Force kill (-9) if process is still stuck after 3s
 	if err := exec.Command("pgrep", "-f", "Antigravity").Run(); err == nil {
 		_ = exec.Command("pkill", "-9", "-f", "Antigravity").Run()
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// Small buffer for OS GPU/display context cleanup
 	time.Sleep(200 * time.Millisecond)
 }
 
