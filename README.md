@@ -19,6 +19,7 @@
 - **Shell Auto-Completion & Aliases**: Built-in completion generator for `bash`, `zsh`, `fish`, `powershell` with tab-completion for profile names, plus shell alias generation (`agys alias`).
 - **Profile Cloning, Export & Import**: Duplicate a profile instantly (`agys clone`), or pack/unpack profiles to archives (`agys export` / `agys import`) with built-in path-traversal safety checks.
 - **Remote SSH Execution (`agys ssh`)**: Run `agy` natively on any remote Linux server over SSH with instant 0.1s profile credential sync, automatic remote agent auto-bootstrap, SSH API reverse-tunneling to bypass remote IP geo-blocking, dynamic port allocation for parallel connections, and zero-orphan process guarantees.
+- **Desktop App GUI Switcher (`agys gui`)**: Launch the Antigravity 2.0 Desktop App GUI isolated to any profile (`agys gui work`), featuring automatic macOS Keychain OAuth token synchronization, auto-seeding, graceful process termination, and interactive confirmation prompts.
 - **Cross-Platform & Safe In-Place Upgrade**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures, featuring atomic in-place upgrading and ad-hoc code signing (`agys upgrade`).
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
@@ -220,7 +221,25 @@ agys ssh user@remote-server /var/www/myproject work -- --dangerously-skip-permis
 - **Zero Orphan Processes**: Uses `exec` process replacement bound directly to OpenSSH `sshd`. On disconnect, all remote child processes are cleanly terminated.
 - **Parallel SSH Support**: Dynamic port allocation (`10800 + PID % 1000`) enables multiple simultaneous SSH sessions without port collisions.
 
-### 12. Version & Upgrading
+### 12. Launch Desktop App GUI (`agys gui`)
+
+Launch the Antigravity 2.0 Desktop App GUI with isolated profile settings and automatic macOS Keychain token synchronization:
+
+```bash
+# Launch Desktop App GUI using default or auto profile
+agys gui
+
+# Launch Desktop App GUI for a specific profile
+agys gui work
+
+# Launch Desktop App GUI using auto profile selection (picks profile with best 5h quota)
+agys gui auto
+
+# Force restart GUI without interactive confirmation prompt
+agys gui work --force
+```
+
+### 13. Version & Upgrading
 
 ```bash
 # Check installed version
