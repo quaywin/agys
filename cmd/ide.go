@@ -1,24 +1,19 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/quaywin/agys/pkg/profile"
 	"github.com/spf13/cobra"
 )
 
-var forceIde bool
-
 var ideCmd = &cobra.Command{
 	Use:               "ide [profile_name] [project_path]",
-	Short:             "Launch Antigravity IDE with a specified profile or default active profile",
-	Long:              `Launches the Antigravity IDE after syncing the profile token into macOS Keychain.`,
+	Short:             "Launch Antigravity IDE isolated to a specific profile",
+	Long:              `Launches the Antigravity IDE with an isolated profile user-data-dir, allowing multiple independent account sessions.`,
 	ValidArgsFunction: CompleteProfileNames,
 	Args:              cobra.MaximumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -34,7 +29,6 @@ var ideCmd = &cobra.Command{
 					projectPath = args[1]
 				}
 			} else {
-				// First arg might be a project path, try getting current default profile
 				current, err := profile.GetCurrent()
 				if err != nil {
 					return err
@@ -85,34 +79,15 @@ var ideCmd = &cobra.Command{
 			return err
 		}
 
-		// Prompt if Antigravity IDE is currently running and force flag is not set
-		if isIdeRunning() && !forceIde {
-			fmt.Printf("An instance of Antigravity IDE is currently running. Close it and switch to profile %q? [y/N]: ", targetProfile)
-			reader := bufio.NewReader(os.Stdin)
-			input, err := reader.ReadString('\n')
-			if err != nil {
-				return fmt.Errorf("failed to read confirmation input: %w", err)
-			}
-			input = strings.ToLower(strings.TrimSpace(input))
-			if input != "y" && input != "yes" {
-				fmt.Println("IDE launch canceled.")
-				return nil
-			}
-		}
-
 		// Set as current profile
 		_ = profile.SetCurrent(targetProfile)
 
-		// Sync profile's OAuth token directly into macOS Keychain
-		_ = profile.EnsureKeychain(profileDir)
-		profile.SyncDiskTokenToKeychain(profileDir)
-
-		// Terminate any running IDE process and wait for OS process cleanup
-		terminateAndWaitIde()
+		ideDataDir := filepath.Join(profileDir, "ide-data")
+		_ = os.MkdirAll(ideDataDir, 0755)
 
 		fmt.Printf("Launching Antigravity IDE (%s)...\n", targetProfile)
 
-		openArgs := []string{"-a", "/Applications/Antigravity IDE.app"}
+		openArgs := []string{"-n", "-a", "/Applications/Antigravity IDE.app"}
 		if projectPath != "" {
 			absPath, err := filepath.Abs(projectPath)
 			if err == nil {
@@ -121,11 +96,12 @@ var ideCmd = &cobra.Command{
 				openArgs = append(openArgs, projectPath)
 			}
 		}
+		openArgs = append(openArgs, "--args", "--user-data-dir="+ideDataDir)
 
 		openCmd := exec.Command("open", openArgs...)
 		if err := openCmd.Run(); err != nil {
 			// Fallback to Antigravity.app if Antigravity IDE.app is missing
-			openArgs[1] = "/Applications/Antigravity.app"
+			openArgs[2] = "/Applications/Antigravity.app"
 			openCmd = exec.Command("open", openArgs...)
 			if err := openCmd.Run(); err != nil {
 				return fmt.Errorf("failed to launch Antigravity IDE: %w", err)
@@ -136,33 +112,6 @@ var ideCmd = &cobra.Command{
 	},
 }
 
-func isIdeRunning() bool {
-	err := exec.Command("pgrep", "-f", "Antigravity IDE").Run()
-	return err == nil
-}
-
-func terminateAndWaitIde() {
-	if err := exec.Command("pkill", "-f", "Antigravity IDE").Run(); err != nil {
-		return
-	}
-
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := exec.Command("pgrep", "-f", "Antigravity IDE").Run(); err != nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if err := exec.Command("pgrep", "-f", "Antigravity IDE").Run(); err == nil {
-		_ = exec.Command("pkill", "-9", "-f", "Antigravity IDE").Run()
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	time.Sleep(200 * time.Millisecond)
-}
-
 func init() {
-	ideCmd.Flags().BoolVarP(&forceIde, "force", "f", false, "Force close running IDE instance without confirmation prompt")
 	rootCmd.AddCommand(ideCmd)
 }
