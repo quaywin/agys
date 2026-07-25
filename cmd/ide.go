@@ -53,7 +53,15 @@ var ideCmd = &cobra.Command{
 
 		var targetProfile string
 		if profile.IsAuto(profileName) {
-			selected, score, err := profile.SelectBestProfile(cmd.Context())
+			selected, score, err := profile.SelectBestProfileFiltered(cmd.Context(), func(p string) bool {
+				pDir, err := profile.GetProfileDir(p)
+				if err != nil {
+					return false
+				}
+				// Prioritize candidate profiles that have already been initialized / logged in for IDE
+				_, statErr := os.Stat(filepath.Join(pDir, "ide-data", "User"))
+				return statErr == nil
+			})
 			if err != nil {
 				return fmt.Errorf("auto profile selection failed: %w", err)
 			}
@@ -62,7 +70,7 @@ var ideCmd = &cobra.Command{
 			if score < 0 {
 				scoreStr = "N/A"
 			}
-			fmt.Fprintf(os.Stderr, "[agys] Auto-selected profile %q (5h Gemini quota: %s)\n", targetProfile, scoreStr)
+			fmt.Fprintf(os.Stderr, "[agys] Auto-selected IDE profile %q (5h Gemini quota: %s)\n", targetProfile, scoreStr)
 		} else {
 			exists, _, err := profile.Exists(profileName)
 			if err != nil {

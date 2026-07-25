@@ -70,6 +70,11 @@ type ProfileScore struct {
 
 // SelectBestProfile queries all available profiles in parallel and selects the profile based on Priority & 50% Quota Threshold logic.
 func SelectBestProfile(ctx context.Context) (string, float64, error) {
+	return SelectBestProfileFiltered(ctx, nil)
+}
+
+// SelectBestProfileFiltered queries available profiles (filtered by filterFn if provided) in parallel and selects the profile based on Priority & 50% Quota Threshold logic.
+func SelectBestProfileFiltered(ctx context.Context, filterFn func(profileName string) bool) (string, float64, error) {
 	profiles, err := List()
 	if err != nil {
 		return "", -1, fmt.Errorf("failed to list profiles: %w", err)
@@ -79,11 +84,22 @@ func SelectBestProfile(ctx context.Context) (string, float64, error) {
 		return "", -1, fmt.Errorf("no profiles found. Create one with `agys add <profile_name>`")
 	}
 
-	// Filter out reserved keywords
+	// Filter out reserved keywords and apply custom filter function if provided
 	var candidateProfiles []string
 	for _, p := range profiles {
 		if !IsAuto(p) {
-			candidateProfiles = append(candidateProfiles, p)
+			if filterFn == nil || filterFn(p) {
+				candidateProfiles = append(candidateProfiles, p)
+			}
+		}
+	}
+
+	// Fallback to all non-auto profiles if custom filter matches no candidates
+	if len(candidateProfiles) == 0 && filterFn != nil {
+		for _, p := range profiles {
+			if !IsAuto(p) {
+				candidateProfiles = append(candidateProfiles, p)
+			}
 		}
 	}
 
