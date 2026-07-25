@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -81,6 +82,15 @@ var guiCmd = &cobra.Command{
 
 		// Set as current profile
 		_ = profile.SetCurrent(targetProfile)
+
+		// Automatically sync CLI OAuth token to GUI location if present
+		cliTokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+		if data, err := os.ReadFile(cliTokenPath); err == nil && len(data) > 0 {
+			guiTokenDir := filepath.Join(profileDir, ".gemini", "antigravity")
+			_ = os.MkdirAll(guiTokenDir, 0755)
+			_ = os.WriteFile(filepath.Join(guiTokenDir, "antigravity-oauth-token"), data, 0600)
+			_ = os.WriteFile(filepath.Join(profileDir, ".gemini", "oauth_creds.json"), data, 0600)
+		}
 
 		// Sync profile's OAuth token directly into macOS Keychain
 		_ = profile.EnsureKeychain(profileDir)
