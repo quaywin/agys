@@ -1,9 +1,19 @@
-# Antigravity CLI Switcher (`agys`)
+# Antigravity Ecosystem Switcher (`agys`)
 
-`agys` (Antigravity CLI Switcher) is an open-source CLI utility built in Go that isolates account profiles for the `agy` CLI tool. It dynamically overrides the `HOME` environment variable for `agy` execution to profile-specific base directories under `~/.agys/profiles/<profile_name>/`.
+`agys` (Antigravity Switcher) is an open-source CLI utility built in Go that manages and isolates multi-account profiles across the entire Google Antigravity ecosystem — supporting **Antigravity CLI (`agy`)**, **Antigravity 2.0 Desktop App (GUI)**, and **Antigravity IDE**.
 
 > [!NOTE]
-> Profile directories are kept fully isolated from your global home directory, ensuring separate auth tokens, configs, and application states for each profile.
+> Profile directories are kept fully isolated under `~/.agys/profiles/<profile_name>/`, ensuring separate auth tokens, configs, quota tracking, and application states for every surface.
+
+---
+
+## Supported Antigravity Surfaces
+
+| Surface | Command | Mechanism | Highlights |
+| :--- | :--- | :--- | :--- |
+| **Antigravity CLI (`agy`)** | `agys run <profile>` | `$HOME` Override | Isolated terminal sessions, real-time 5h/weekly quota tracking, auto-failover, remote SSH execution |
+| **Antigravity 2.0 GUI** | `agys gui <profile>` | macOS Keychain Sync | macOS Keychain OAuth sync, process cleanup, confirmation prompts, auto-seeding |
+| **Antigravity IDE** | `agys ide <profile>` | `--user-data-dir` | Parallel multi-window IDE sessions, independent logged-in accounts, smart auto-selection |
 
 ---
 
