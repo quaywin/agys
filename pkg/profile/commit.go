@@ -224,7 +224,7 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 	var promptBuilder strings.Builder
 	promptBuilder.WriteString("You are an expert software developer and Git assistant.\n")
 
-	if userMsg != proposedMessagePlaceholder(userMsg) {
+	if userMsg != "" {
 		promptBuilder.WriteString(fmt.Sprintf("The user wants to commit with message: %q.\n\n", userMsg))
 		promptBuilder.WriteString(diffFormatted)
 		promptBuilder.WriteString("\n\nReview the staged changes for any potential bugs, secrets, API keys, or syntax errors.\n")
@@ -254,11 +254,4 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 
 	res := ParseCommitCheckResult(outStr, userMsg)
 	return &res, nil
-}
-
-func proposedMessagePlaceholder(userMsg string) string {
-	if userMsg != "" {
-		return userMsg
-	}
-	return ""
 }

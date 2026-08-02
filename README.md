@@ -128,7 +128,7 @@ agys run work -- status
 agys run -- status
 ```
 
-### 5. Rename a Profile
+### 6. Rename a Profile
 Rename an existing profile directory:
 
 ```bash
@@ -137,7 +137,7 @@ agys rename work company
 agys mv work company
 ```
 
-### 6. Delete a Profile
+### 7. Delete a Profile
 Remove a profile directory:
 
 ```bash
@@ -146,7 +146,7 @@ agys delete work
 agys delete work --force
 ```
 
-### 7. Clone a Profile
+### 8. Clone a Profile
 Duplicate an existing profile's configuration and credentials:
 
 ```bash
@@ -155,7 +155,7 @@ agys clone work work-copy
 agys cp work work-copy
 ```
 
-### 8. Export & Import Profiles
+### 9. Export & Import Profiles
 Package configurations for backups or migrating setup between computers:
 
 ```bash
@@ -175,7 +175,7 @@ agys import work_profile.tar.gz personal-backup --force
 agys import all_profiles.tar.gz --all --force
 ```
 
-### 9. Check Quota Status
+### 10. Check Quota Status
 Display the remaining model quota and refresh windows for one or all profiles:
 
 ```bash
@@ -196,7 +196,7 @@ agys list -q
 agys ls --quota
 ```
 
-### 10. Shell Aliases & Auto-Completion
+### 11. Shell Aliases & Auto-Completion
 
 ```bash
 # Generate shell aliases for your profiles (e.g. alias agy-work="agys run work --")
@@ -208,7 +208,7 @@ source <(agys completion zsh)
 source <(agys completion bash)
 ```
 
-### 11. Remote SSH Execution (`agys ssh`)
+### 12. Remote SSH Execution (`agys ssh`)
 
 Execute `agy` natively on a remote Linux server over SSH using your local profiles and credentials:
 
@@ -233,7 +233,7 @@ agys ssh user@remote-server /var/www/myproject work -- --dangerously-skip-permis
 - **Zero Orphan Processes**: Uses `exec` process replacement bound directly to OpenSSH `sshd`. On disconnect, all remote child processes are cleanly terminated.
 - **Parallel SSH Support**: Dynamic port allocation (`10800 + PID % 1000`) enables multiple simultaneous SSH sessions without port collisions.
 
-### 12. Launch Desktop App GUI (`agys gui`)
+### 13. Launch Desktop App GUI (`agys gui`)
 
 Launch the Antigravity 2.0 Desktop App GUI with isolated profile settings and automatic macOS Keychain token synchronization:
 
@@ -251,7 +251,7 @@ agys gui auto
 agys gui work --force
 ```
 
-### 13. Launch Antigravity IDE (`agys ide`)
+### 14. Launch Antigravity IDE (`agys ide`)
 
 Launch the standalone Antigravity IDE isolated to any profile with dedicated `--user-data-dir` storage. Each profile maintains its own independent IDE session, allowing you to run **multiple IDE windows in parallel** logged into different Google accounts simultaneously:
 
@@ -271,7 +271,7 @@ agys ide auto /var/www/myproject
 
 > **Note on Initial Setup**: When launching `agys ide <profile>` for the first time on a new profile, log in once via the IDE prompt. The IDE will permanently remember that profile's session in `~/.agys/profiles/<profile>/ide-data/`, allowing seamless future launches and parallel multi-account IDE windows.
 
-### 14. Staged AI Commit (`agys commit`)
+### 15. Staged AI Commit (`agys commit`)
 
 Inspect staged git changes using AI (auto-selecting the profile with best quota), perform code review checks, and commit with an AI-generated or custom message:
 
@@ -292,7 +292,7 @@ agys commit -m "feat(auth): support multi-account token refresh"
 agys commit --dry-run
 ```
 
-### 15. Version & Upgrading
+### 16. Version & Upgrading
 
 ```bash
 # Check installed version
@@ -346,6 +346,7 @@ Available Commands:
   alias       Generate shell aliases for configured profiles
   auto        Execute agy command automatically using profile with the best 5h Gemini quota
   clone       Clone an existing profile to a new profile (alias: cp)
+  commit      Check staged git files with AI and commit using auto-selected or specified profile
   completion  Generate shell completion scripts
   delete      Delete a profile directory (alias: rm)
   export      Export a profile to a gzipped tar archive
