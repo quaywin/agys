@@ -58,38 +58,38 @@ var runCmd = &cobra.Command{
 			}
 		}
 
-		// Detect if the user is resuming a conversation and auto-switch to the owning profile
-		var detectedProfile string
-		var detectErr error
-
-		for i := 0; i < len(agyArgs); i++ {
-			arg := agyArgs[i]
-			if arg == "--conversation" && i+1 < len(agyArgs) {
-				convID := agyArgs[i+1]
-				detectedProfile, detectErr = profile.FindProfileByConversation(convID)
-				break
-			} else if strings.HasPrefix(arg, "--conversation=") {
-				convID := strings.TrimPrefix(arg, "--conversation=")
-				detectedProfile, detectErr = profile.FindProfileByConversation(convID)
-				break
-			} else if arg == "-c" || arg == "--continue" {
-				detectedProfile, detectErr = profile.FindProfileByLatestConversation()
-				break
-			}
-		}
-
-		if detectErr == nil && detectedProfile != "" {
-			if profileName != detectedProfile {
-				fmt.Fprintf(os.Stderr, "[agys] Resumed conversation detected. Auto-switching profile %q -> %q\n", profileName, detectedProfile)
-				profileName = detectedProfile
-			}
-		}
-
 		return runWithProfile(cmd, profileName, agyArgs)
 	},
 }
 
 func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) error {
+	// Detect if the user is resuming a conversation and auto-switch to the owning profile
+	var detectedProfile string
+	var detectErr error
+
+	for i := 0; i < len(agyArgs); i++ {
+		arg := agyArgs[i]
+		if arg == "--conversation" && i+1 < len(agyArgs) {
+			convID := agyArgs[i+1]
+			detectedProfile, detectErr = profile.FindProfileByConversation(convID)
+			break
+		} else if strings.HasPrefix(arg, "--conversation=") {
+			convID := strings.TrimPrefix(arg, "--conversation=")
+			detectedProfile, detectErr = profile.FindProfileByConversation(convID)
+			break
+		} else if arg == "-c" || arg == "--continue" {
+			detectedProfile, detectErr = profile.FindProfileByLatestConversation()
+			break
+		}
+	}
+
+	if detectErr == nil && detectedProfile != "" {
+		if profileName != detectedProfile {
+			fmt.Fprintf(os.Stderr, "[agys] Resumed conversation detected. Auto-switching profile %q -> %q\n", profileName, detectedProfile)
+			profileName = detectedProfile
+		}
+	}
+
 	var targetProfile string
 	if profile.IsAuto(profileName) {
 		selected, score, err := profile.SelectBestProfile(cmd.Context())

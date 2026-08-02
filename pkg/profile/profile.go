@@ -321,9 +321,13 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 
 	envMap := map[string]string{
 		"HOME":            profileDir,
+		"USERPROFILE":     profileDir,
 		"GEMINI_DIR":      filepath.Join(profileDir, ".gemini"),
 		"GEMINI_CLI_DIR":  filepath.Join(profileDir, ".gemini", "antigravity-cli"),
 		"ANTIGRAVITY_DIR": filepath.Join(profileDir, ".gemini", "antigravity-cli"),
+		"XDG_CONFIG_HOME": filepath.Join(profileDir, ".config"),
+		"XDG_DATA_HOME":   filepath.Join(profileDir, ".local", "share"),
+		"XDG_CACHE_HOME":  filepath.Join(profileDir, ".cache"),
 	}
 
 	env := os.Environ()

@@ -46,6 +46,23 @@ func GetLastConversation() (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// getProfileBrainDirs returns all valid brain directories for a profile (.gemini/antigravity-cli/brain, .gemini/antigravity/brain).
+func getProfileBrainDirs(profileDir string) []string {
+	var dirs []string
+	cliBrain := filepath.Join(profileDir, ".gemini", "antigravity-cli", "brain")
+	if info, err := os.Stat(cliBrain); err == nil && info.IsDir() {
+		dirs = append(dirs, cliBrain)
+	}
+	appBrain := filepath.Join(profileDir, ".gemini", "antigravity", "brain")
+	if info, err := os.Stat(appBrain); err == nil && info.IsDir() {
+		dirs = append(dirs, appBrain)
+	}
+	if len(dirs) == 0 {
+		dirs = append(dirs, cliBrain)
+	}
+	return dirs
+}
+
 // FindProfileByConversation looks up which profile contains the given conversation ID in its brain directory.
 // Returns the profile name, or empty string if not found.
 func FindProfileByConversation(convID string) (string, error) {
@@ -64,10 +81,12 @@ func FindProfileByConversation(convID string) (string, error) {
 			continue
 		}
 
-		convDir := filepath.Join(profileDir, ".gemini", "antigravity-cli", "brain", convID)
-		info, err := os.Stat(convDir)
-		if err == nil && info.IsDir() {
-			return p, nil
+		for _, brainDir := range getProfileBrainDirs(profileDir) {
+			convDir := filepath.Join(brainDir, convID)
+			info, err := os.Stat(convDir)
+			if err == nil && info.IsDir() {
+				return p, nil
+			}
 		}
 	}
 
@@ -101,7 +120,53 @@ func FindProfileByLatestConversation() (string, error) {
 			continue
 		}
 
-		brainDir := filepath.Join(profileDir, ".gemini", "antigravity-cli", "brain")
+		for _, brainDir := range getProfileBrainDirs(profileDir) {
+			entries, err := os.ReadDir(brainDir)
+			if err != nil {
+				continue
+			}
+
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+
+				dirPath := filepath.Join(brainDir, entry.Name())
+				info, err := os.Stat(dirPath)
+				if err != nil {
+					continue
+				}
+
+				// Check transcript.jsonl modification time if it exists, otherwise use directory time
+				checkPath := filepath.Join(dirPath, ".system_generated", "logs", "transcript.jsonl")
+				checkInfo, err := os.Stat(checkPath)
+				mTime := info.ModTime()
+				if err == nil {
+					mTime = checkInfo.ModTime()
+				}
+
+				if mTime.After(latestTime) {
+					latestTime = mTime
+					latestProfile = p
+				}
+			}
+		}
+	}
+
+	return latestProfile, nil
+}
+
+// GetLatestConversationFileInfo returns the ID and modification time of the latest conversation in a profile.
+func GetLatestConversationFileInfo(profileName string) (string, time.Time, error) {
+	profileDir, err := GetProfileDir(profileName)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	var latestID string
+	var latestTime time.Time
+
+	for _, brainDir := range getProfileBrainDirs(profileDir) {
 		entries, err := os.ReadDir(brainDir)
 		if err != nil {
 			continue
@@ -118,7 +183,6 @@ func FindProfileByLatestConversation() (string, error) {
 				continue
 			}
 
-			// Check transcript.jsonl modification time if it exists, otherwise use directory time
 			checkPath := filepath.Join(dirPath, ".system_generated", "logs", "transcript.jsonl")
 			checkInfo, err := os.Stat(checkPath)
 			mTime := info.ModTime()
@@ -128,51 +192,8 @@ func FindProfileByLatestConversation() (string, error) {
 
 			if mTime.After(latestTime) {
 				latestTime = mTime
-				latestProfile = p
+				latestID = entry.Name()
 			}
-		}
-	}
-
-	return latestProfile, nil
-}
-
-// GetLatestConversationFileInfo returns the ID and modification time of the latest conversation in a profile.
-func GetLatestConversationFileInfo(profileName string) (string, time.Time, error) {
-	profileDir, err := GetProfileDir(profileName)
-	if err != nil {
-		return "", time.Time{}, err
-	}
-
-	brainDir := filepath.Join(profileDir, ".gemini", "antigravity-cli", "brain")
-	entries, err := os.ReadDir(brainDir)
-	if err != nil {
-		return "", time.Time{}, err
-	}
-
-	var latestID string
-	var latestTime time.Time
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		dirPath := filepath.Join(brainDir, entry.Name())
-		info, err := os.Stat(dirPath)
-		if err != nil {
-			continue
-		}
-
-		checkPath := filepath.Join(dirPath, ".system_generated", "logs", "transcript.jsonl")
-		checkInfo, err := os.Stat(checkPath)
-		mTime := info.ModTime()
-		if err == nil {
-			mTime = checkInfo.ModTime()
-		}
-
-		if mTime.After(latestTime) {
-			latestTime = mTime
-			latestID = entry.Name()
 		}
 	}
 

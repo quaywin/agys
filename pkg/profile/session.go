@@ -87,6 +87,7 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 	}
 
 	var sessions []ConversationSession
+	seenConvIDs := make(map[string]bool)
 
 	for _, p := range profiles {
 		if filter.Profile != "" && !strings.EqualFold(filter.Profile, p) {
@@ -98,53 +99,59 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 			continue
 		}
 
-		brainDir := filepath.Join(profileDir, ".gemini", "antigravity-cli", "brain")
-		entries, err := os.ReadDir(brainDir)
-		if err != nil {
-			continue
-		}
-
-		for _, entry := range entries {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-			}
-
-			if !entry.IsDir() {
+		for _, brainDir := range getProfileBrainDirs(profileDir) {
+			entries, err := os.ReadDir(brainDir)
+			if err != nil {
 				continue
 			}
 
-			convID := entry.Name()
-			convDir := filepath.Join(brainDir, convID)
-			transcriptPath := filepath.Join(convDir, ".system_generated", "logs", "transcript.jsonl")
+			for _, entry := range entries {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+				}
 
-			info, err := os.Stat(transcriptPath)
-			mTime := time.Time{}
-			if err == nil {
-				mTime = info.ModTime()
-			} else {
-				dirInfo, err := os.Stat(convDir)
-				if err != nil {
+				if !entry.IsDir() {
 					continue
 				}
-				mTime = dirInfo.ModTime()
-			}
 
-			sess := parseSessionInfo(p, convID, transcriptPath, mTime)
-
-			// Apply project filtering if specified
-			if filter.Project != "" {
-				pFilter := strings.ToLower(filter.Project)
-				projPath := strings.ToLower(sess.ProjectPath)
-				projName := strings.ToLower(sess.ProjectName)
-
-				if !strings.Contains(projPath, pFilter) && !strings.Contains(projName, pFilter) {
+				convID := entry.Name()
+				if seenConvIDs[p+":"+convID] {
 					continue
 				}
-			}
+				seenConvIDs[p+":"+convID] = true
 
-			sessions = append(sessions, sess)
+				convDir := filepath.Join(brainDir, convID)
+				transcriptPath := filepath.Join(convDir, ".system_generated", "logs", "transcript.jsonl")
+
+				info, err := os.Stat(transcriptPath)
+				mTime := time.Time{}
+				if err == nil {
+					mTime = info.ModTime()
+				} else {
+					dirInfo, err := os.Stat(convDir)
+					if err != nil {
+						continue
+					}
+					mTime = dirInfo.ModTime()
+				}
+
+				sess := parseSessionInfo(p, convID, transcriptPath, mTime)
+
+				// Apply project filtering if specified
+				if filter.Project != "" {
+					pFilter := strings.ToLower(filter.Project)
+					projPath := strings.ToLower(sess.ProjectPath)
+					projName := strings.ToLower(sess.ProjectName)
+
+					if !strings.Contains(projPath, pFilter) && !strings.Contains(projName, pFilter) {
+						continue
+					}
+				}
+
+				sessions = append(sessions, sess)
+			}
 		}
 	}
 

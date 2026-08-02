@@ -18,10 +18,12 @@ func TestFindProfileByConversation(t *testing.T) {
 
 	convID1 := "conv-111"
 	convID2 := "conv-222"
+	convID3 := "conv-333"
 
-	// Create conversation directories
+	// Create conversation directories in both antigravity-cli and antigravity brain paths
 	_ = os.MkdirAll(filepath.Join(dir1, ".gemini", "antigravity-cli", "brain", convID1), 0700)
 	_ = os.MkdirAll(filepath.Join(dir2, ".gemini", "antigravity-cli", "brain", convID2), 0700)
+	_ = os.MkdirAll(filepath.Join(dir1, ".gemini", "antigravity", "brain", convID3), 0700)
 
 	// Test lookups
 	found1, err := FindProfileByConversation(convID1)
@@ -32,6 +34,11 @@ func TestFindProfileByConversation(t *testing.T) {
 	found2, err := FindProfileByConversation(convID2)
 	if err != nil || found2 != p2 {
 		t.Errorf("Expected to find %q in %q, got %q (err: %v)", convID2, p2, found2, err)
+	}
+
+	found3, err := FindProfileByConversation(convID3)
+	if err != nil || found3 != p1 {
+		t.Errorf("Expected to find %q in %q, got %q (err: %v)", convID3, p1, found3, err)
 	}
 
 	// Test non-existent conversation
