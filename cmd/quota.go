@@ -61,19 +61,28 @@ var quotaCmd = &cobra.Command{
 				defer wg.Done()
 				email, _ := profile.FetchProfileEmail(ctx, name)
 				summary, err := profile.FetchQuota(ctx, name)
+				cliCfg := profile.IsCLIConfigured(name)
+				ideCfg := profile.IsIDEConfigured(name)
+				cfgSum := profile.GetConfigSummary(name)
 				if err != nil {
 					results[index] = profile.ProfileQuotaInfo{
-						ProfileName: name,
-						Email:       email,
-						Active:      false,
-						Error:       err.Error(),
+						ProfileName:   name,
+						Email:         email,
+						Active:        false,
+						Error:         err.Error(),
+						CLIConfigured: cliCfg,
+						IDEConfigured: ideCfg,
+						Configured:    cfgSum,
 					}
 				} else {
 					results[index] = profile.ProfileQuotaInfo{
-						ProfileName: name,
-						Email:       email,
-						Active:      true,
-						Quota:       summary,
+						ProfileName:   name,
+						Email:         email,
+						Active:        true,
+						Quota:         summary,
+						CLIConfigured: cliCfg,
+						IDEConfigured: ideCfg,
+						Configured:    cfgSum,
 					}
 				}
 			}(i, pName)

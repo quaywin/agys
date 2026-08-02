@@ -112,7 +112,7 @@ func TestRenderQuotaTable(t *testing.T) {
 	out := buf.String()
 	t.Logf("Rendered table output:\n%s", out)
 
-	if !strings.Contains(out, "PROFILE") || !strings.Contains(out, "RESET (5H)") || !strings.Contains(out, "RESET (WEEKLY)") {
+	if !strings.Contains(out, "PROFILE") || !strings.Contains(out, "CONFIG") || !strings.Contains(out, "RESET (5H)") || !strings.Contains(out, "RESET (WEEKLY)") {
 		t.Errorf("expected headers in table output, got:\n%s", out)
 	}
 

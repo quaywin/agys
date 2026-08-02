@@ -565,3 +565,50 @@ func EnsureKeychain(profileDir string) error {
 
 	return nil
 }
+
+// IsCLIConfigured checks if a profile has CLI authentication configured.
+func IsCLIConfigured(name string) bool {
+	profileDir, err := GetProfileDir(name)
+	if err != nil {
+		return false
+	}
+	tok1 := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	if info, err := os.Stat(tok1); err == nil && !info.IsDir() && info.Size() > 0 {
+		return true
+	}
+	tok2 := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
+	if info, err := os.Stat(tok2); err == nil && !info.IsDir() && info.Size() > 0 {
+		return true
+	}
+	return false
+}
+
+// IsIDEConfigured checks if a profile has IDE user data configured/initialized.
+func IsIDEConfigured(name string) bool {
+	profileDir, err := GetProfileDir(name)
+	if err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(profileDir, "ide-data", "User")); err == nil {
+		return true
+	}
+	entries, err := os.ReadDir(filepath.Join(profileDir, "ide-data"))
+	return err == nil && len(entries) > 0
+}
+
+// GetConfigSummary returns a formatted summary of configured tools for a profile ("CLI, IDE", "CLI", "IDE", or "-").
+func GetConfigSummary(name string) string {
+	cli := IsCLIConfigured(name)
+	ide := IsIDEConfigured(name)
+	if cli && ide {
+		return "CLI, IDE"
+	}
+	if cli {
+		return "CLI"
+	}
+	if ide {
+		return "IDE"
+	}
+	return "-"
+}
+

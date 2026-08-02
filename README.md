@@ -32,6 +32,7 @@
 - **Desktop App GUI Switcher (`agys gui`)**: Launch the Antigravity 2.0 Desktop App GUI isolated to any profile (`agys gui work`), featuring automatic macOS Keychain OAuth token synchronization, auto-seeding, graceful process termination, and interactive confirmation prompts.
 - **Antigravity IDE Switcher (`agys ide`)**: Launch isolated, parallel sessions of the standalone Antigravity IDE for any profile (`agys ide work /path/to/project`), using profile-isolated `--user-data-dir` storage to support running multiple IDE windows logged into different accounts simultaneously.
 - **Cross-Platform & Safe In-Place Upgrade**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures, featuring atomic in-place upgrading and ad-hoc code signing (`agys upgrade`).
+- **AI-Powered Staged Commit (`agys commit`)**: Automatically selects the optimal profile (based on 5h Gemini quota), performs an AI code review check on staged git changes, generates/validates Conventional Commit messages, and executes git commit.
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
 ---
@@ -270,7 +271,28 @@ agys ide auto /var/www/myproject
 
 > **Note on Initial Setup**: When launching `agys ide <profile>` for the first time on a new profile, log in once via the IDE prompt. The IDE will permanently remember that profile's session in `~/.agys/profiles/<profile>/ide-data/`, allowing seamless future launches and parallel multi-account IDE windows.
 
-### 14. Version & Upgrading
+### 14. Staged AI Commit (`agys commit`)
+
+Inspect staged git changes using AI (auto-selecting the profile with best quota), perform code review checks, and commit with an AI-generated or custom message:
+
+```bash
+# Auto-select best profile, review staged code, generate commit message, and prompt for confirmation
+agys commit
+
+# Use specific profile to check staged code and commit
+agys commit work
+
+# Automatically stage all modified tracked files (-a) and commit with auto-confirmation (-y)
+agys commit -a -y
+
+# Provide custom message while running AI code review check
+agys commit -m "feat(auth): support multi-account token refresh"
+
+# Perform AI code check and commit message generation without executing git commit
+agys commit --dry-run
+```
+
+### 15. Version & Upgrading
 
 ```bash
 # Check installed version

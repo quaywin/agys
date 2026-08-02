@@ -40,7 +40,7 @@ var listCmd = &cobra.Command{
 		if !listQuota {
 			fmt.Println("Active Profiles:")
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "PROFILE\tPRIO\tEMAIL\tPATH")
+			fmt.Fprintln(tw, "PROFILE\tPRIO\tEMAIL\tCONFIG\tPATH")
 			for _, p := range profiles {
 				dir, _ := profile.GetProfileDir(p)
 				pName := p
@@ -55,7 +55,8 @@ var listCmd = &cobra.Command{
 				if dupList, isDup := duplicates[p]; isDup {
 					email += fmt.Sprintf(" [!] DUPLICATE TOKEN (shared with %v)", dupList)
 				}
-				fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", pName, prio, email, dir)
+				cfg := profile.GetConfigSummary(p)
+				fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", pName, prio, email, cfg, dir)
 			}
 			tw.Flush()
 			return nil
@@ -74,19 +75,28 @@ var listCmd = &cobra.Command{
 				defer wg.Done()
 				email, _ := profile.FetchProfileEmail(ctx, name)
 				summary, err := profile.FetchQuota(ctx, name)
+				cliCfg := profile.IsCLIConfigured(name)
+				ideCfg := profile.IsIDEConfigured(name)
+				cfgSum := profile.GetConfigSummary(name)
 				if err != nil {
 					results[index] = profile.ProfileQuotaInfo{
-						ProfileName: name,
-						Email:       email,
-						Active:      false,
-						Error:       err.Error(),
+						ProfileName:   name,
+						Email:         email,
+						Active:        false,
+						Error:         err.Error(),
+						CLIConfigured: cliCfg,
+						IDEConfigured: ideCfg,
+						Configured:    cfgSum,
 					}
 				} else {
 					results[index] = profile.ProfileQuotaInfo{
-						ProfileName: name,
-						Email:       email,
-						Active:      true,
-						Quota:       summary,
+						ProfileName:   name,
+						Email:         email,
+						Active:        true,
+						Quota:         summary,
+						CLIConfigured: cliCfg,
+						IDEConfigured: ideCfg,
+						Configured:    cfgSum,
 					}
 				}
 			}(i, pName)

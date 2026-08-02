@@ -410,3 +410,59 @@ func TestDetectDuplicateTokens(t *testing.T) {
 	}
 }
 
+func TestConfiguredStatus(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	pName := "config-test-profile"
+	pDir, err := Create(pName)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// Initially neither CLI nor IDE is configured
+	if IsCLIConfigured(pName) {
+		t.Errorf("Expected CLI to not be configured initially")
+	}
+	if IsIDEConfigured(pName) {
+		t.Errorf("Expected IDE to not be configured initially")
+	}
+	if summary := GetConfigSummary(pName); summary != "-" {
+		t.Errorf("Expected summary '-', got %q", summary)
+	}
+
+	// Add CLI token file
+	cliDir := filepath.Join(pDir, ".gemini", "antigravity-cli")
+	if err := os.MkdirAll(cliDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+	tokPath := filepath.Join(cliDir, "antigravity-oauth-token")
+	if err := os.WriteFile(tokPath, []byte(`{"token":{}}`), 0600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	if !IsCLIConfigured(pName) {
+		t.Errorf("Expected CLI to be configured after adding token")
+	}
+	if IsIDEConfigured(pName) {
+		t.Errorf("Expected IDE to not be configured yet")
+	}
+	if summary := GetConfigSummary(pName); summary != "CLI" {
+		t.Errorf("Expected summary 'CLI', got %q", summary)
+	}
+
+	// Add IDE user directory
+	ideUserDir := filepath.Join(pDir, "ide-data", "User")
+	if err := os.MkdirAll(ideUserDir, 0700); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+
+	if !IsIDEConfigured(pName) {
+		t.Errorf("Expected IDE to be configured after creating ide-data/User")
+	}
+	if summary := GetConfigSummary(pName); summary != "CLI, IDE" {
+		t.Errorf("Expected summary 'CLI, IDE', got %q", summary)
+	}
+}
+
+

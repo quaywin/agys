@@ -208,11 +208,14 @@ type QuotaSummary struct {
 
 // ProfileQuotaInfo represents the collected quota data for a specific profile.
 type ProfileQuotaInfo struct {
-	ProfileName string        `json:"profileName"`
-	Email       string        `json:"email,omitempty"`
-	Active      bool          `json:"active"`
-	Error       string        `json:"error,omitempty"`
-	Quota       *QuotaSummary `json:"quota,omitempty"`
+	ProfileName   string        `json:"profileName"`
+	Email         string        `json:"email,omitempty"`
+	Active        bool          `json:"active"`
+	Error         string        `json:"error,omitempty"`
+	Quota         *QuotaSummary `json:"quota,omitempty"`
+	CLIConfigured bool          `json:"cliConfigured"`
+	IDEConfigured bool          `json:"ideConfigured"`
+	Configured    string        `json:"configured,omitempty"`
 }
 
 // ReadToken reads the oauth token for a given profile.
@@ -595,7 +598,7 @@ func ProgressBar(fraction float64, width int) string {
 // RenderQuotaTable renders a clean tabular view of profile quota information with remaining reset times.
 func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile string, priorities map[string]int) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "PROFILE\tPRIO\tEMAIL\tMODEL GROUP\t5H QUOTA\tRESET (5H)\tWEEKLY QUOTA\tRESET (WEEKLY)")
+	fmt.Fprintln(tw, "PROFILE\tPRIO\tEMAIL\tCONFIG\tMODEL GROUP\t5H QUOTA\tRESET (5H)\tWEEKLY QUOTA\tRESET (WEEKLY)")
 
 	for _, res := range results {
 		pName := res.ProfileName
@@ -613,17 +616,22 @@ func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile st
 			emailStr = "-"
 		}
 
+		cfgStr := res.Configured
+		if cfgStr == "" {
+			cfgStr = GetConfigSummary(res.ProfileName)
+		}
+
 		if !res.Active {
 			errStr := res.Error
 			if errStr == "" {
 				errStr = "Inactive or not logged in"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t[!] Error: %s\t-\t-\t-\t-\n", pName, prioStr, emailStr, errStr)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t[!] Error: %s\t-\t-\t-\t-\n", pName, prioStr, emailStr, cfgStr, errStr)
 			continue
 		}
 
 		if res.Quota == nil || len(res.Quota.Groups) == 0 {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t[!] No quota info available\t-\t-\t-\t-\n", pName, prioStr, emailStr)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t[!] No quota info available\t-\t-\t-\t-\n", pName, prioStr, emailStr, cfgStr)
 			continue
 		}
 
@@ -631,10 +639,12 @@ func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile st
 			dispProfile := pName
 			dispPrio := prioStr
 			dispEmail := emailStr
+			dispConfig := cfgStr
 			if gIdx > 0 {
 				dispProfile = ""
 				dispPrio = ""
 				dispEmail = ""
+				dispConfig = ""
 			}
 
 			var b5h, bWeekly *QuotaBucket
@@ -690,8 +700,8 @@ func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile st
 				rWeekly = FormatResetTime(bWeekly.ResetTime, bWeekly.RemainingFraction)
 			}
 
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				dispProfile, dispPrio, dispEmail, group.DisplayName, q5h, r5h, qWeekly, rWeekly)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				dispProfile, dispPrio, dispEmail, dispConfig, group.DisplayName, q5h, r5h, qWeekly, rWeekly)
 		}
 	}
 
