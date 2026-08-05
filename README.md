@@ -25,7 +25,7 @@
 - **Auto Profile Selection**: Dynamically selects the profile with the best 5-hour Gemini quota based on profile priorities (`agys auto` or `agys use auto`).
 - **Profile Priority & Quota Threshold**: Configure custom profile priorities (`agys priority set work 10`) with smart 50% quota threshold fallback.
 - **Interactive Terminal Support**: Preserves `os.Stdin`, `os.Stdout`, and `os.Stderr` streaming so interactive logins and typing token responses work seamlessly.
-- **Default Active Profile**: Set a default profile (`agys use work` or `agys use auto`) to run commands (`agys run -- status`) without re-typing profile names.
+- **Default Active Profile & All-Profile Run (`--all` / `-a`)**: Set a default profile (`agys use work` or `agys use auto`) to run commands (`agys run -- status`) without re-typing profile names, or execute commands sequentially across ALL active profiles using `agys run --all` / `agys run -a`.
 - **Shell Auto-Completion & Aliases**: Built-in completion generator for `bash`, `zsh`, `fish`, `powershell` with tab-completion for profile names, plus shell alias generation (`agys alias`).
 - **Profile Cloning, Export & Import**: Duplicate a profile instantly (`agys clone`), or pack/unpack profiles to archives (`agys export` / `agys import`) with built-in path-traversal safety checks.
 - **Remote SSH Execution (`agys ssh`)**: Run `agy` natively on any remote Linux server over SSH with instant 0.1s profile credential sync, automatic remote agent auto-bootstrap, SSH API reverse-tunneling to bypass remote IP geo-blocking, dynamic port allocation for parallel connections, and zero-orphan process guarantees.
@@ -118,7 +118,7 @@ agys priority list
 > **How Auto Selection Works**: `agys` checks profiles starting from the highest priority. If a high-priority profile has **>= 50% 5h quota**, it is selected. If its quota drops below 50%, `agys` switches to a lower-priority profile that has >= 50% quota. If all profiles are below 50%, `agys` selects the profile with the highest remaining 5h quota overall.
 
 ### 5. Run Commands Under a Profile
-Execute any `agy` command isolated to a specific profile or your configured default:
+Execute any `agy` command isolated to a specific profile, your configured default, or sequentially across all profiles:
 
 ```bash
 # Run command with explicit profile name
@@ -126,6 +126,11 @@ agys run work -- status
 
 # Run command using default profile (or auto mode if set via `agys use auto`)
 agys run -- status
+
+# Run command sequentially across ALL active profiles
+agys run --all -- agy plugin install https://github.com/obra/superpowers
+# or using shorthand (-a)
+agys run -a -- agy plugin install https://github.com/obra/superpowers
 ```
 
 ### 6. Rename a Profile
