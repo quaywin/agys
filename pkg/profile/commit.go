@@ -127,18 +127,25 @@ func ParseCommitCheckResult(output string, userProvidedMessage string) CommitChe
 	}
 
 	// Try extracting CHECK_SUMMARY
-	summaryRegex := regexp.MustCompile(`(?i)CHECK_SUMMARY:\s*\n?([\s\S]*?)(?:COMMIT_MESSAGE:|$)`)
+	summaryRegex := regexp.MustCompile(`(?i)(?:\*\*|\#\#\s*)?CHECK_SUMMARY:?\s*\*?\*?\s*\n?([\s\S]*?)(?:(?:\*\*|\#\#\s*)?COMMIT_MESSAGE:?|$)`)
 	if match := summaryRegex.FindStringSubmatch(cleaned); len(match) > 1 {
 		result.CheckSummary = strings.TrimSpace(match[1])
 	}
 
 	// Try extracting COMMIT_MESSAGE if user didn't explicitly provide one
 	if result.CommitMessage == "" {
-		msgRegex := regexp.MustCompile(`(?i)COMMIT_MESSAGE:\s*\n?([^\n]+)`)
+		msgRegex := regexp.MustCompile(`(?i)(?:\*\*|\#\#\s*)?COMMIT_MESSAGE:?\s*\*?\*?\s*\n?([\s\S]*?)$`)
 		if match := msgRegex.FindStringSubmatch(cleaned); len(match) > 1 {
-			result.CommitMessage = strings.TrimSpace(match[1])
-			// Strip leading/trailing quotes if agy wrapped message in quotes
-			result.CommitMessage = strings.Trim(result.CommitMessage, "\"`'")
+			msgBlock := strings.TrimSpace(match[1])
+			lines := strings.Split(msgBlock, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				line = strings.Trim(line, "`\"'#*")
+				if line != "" && !strings.HasPrefix(strings.ToLower(line), "check_summary") {
+					result.CommitMessage = line
+					break
+				}
+			}
 		}
 	}
 
@@ -146,22 +153,25 @@ func ParseCommitCheckResult(output string, userProvidedMessage string) CommitChe
 	if result.CommitMessage == "" {
 		// Look for conventional commit prefix in output lines
 		lines := strings.Split(cleaned, "\n")
-		convRegex := regexp.MustCompile(`^(feat|fix|refactor|docs|style|test|chore|build|ci|perf)(\(.*\))?: .+`)
+		convRegex := regexp.MustCompile(`(?i)^(feat|fix|refactor|docs|style|test|chore|build|ci|perf)(\(.*\))?: .+`)
 
 		for i := len(lines) - 1; i >= 0; i-- {
 			line := strings.TrimSpace(lines[i])
-			line = strings.Trim(line, "\"`'")
+			line = strings.Trim(line, "`\"'*")
+			if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
+				line = strings.TrimSpace(line[2:])
+			}
 			if convRegex.MatchString(line) {
 				result.CommitMessage = line
 				break
 			}
 		}
 
-		// Ultimate fallback: take last non-empty line
+		// Ultimate fallback: take last non-empty line if it doesn't look like markdown formatting/comments
 		if result.CommitMessage == "" {
 			for i := len(lines) - 1; i >= 0; i-- {
 				line := strings.TrimSpace(lines[i])
-				if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "*") {
+				if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "*") && !strings.HasPrefix(line, "`") {
 					result.CommitMessage = strings.Trim(line, "\"`'")
 					break
 				}
@@ -224,7 +234,16 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 	var promptBuilder strings.Builder
 	promptBuilder.WriteString("You are an expert software developer and Git assistant.\n")
 
-	if userMsg != "" {
+	if noCheck {
+		promptBuilder.WriteString("Generate a concise Conventional Commit message based on the staged changes.\n\n")
+		promptBuilder.WriteString(diffFormatted)
+		if customPrompt != "" {
+			promptBuilder.WriteString("\n\nAdditional user instructions: ")
+			promptBuilder.WriteString(customPrompt)
+		}
+		promptBuilder.WriteString("\n\nOutput strictly in this format:\n")
+		promptBuilder.WriteString("COMMIT_MESSAGE:\n<conventional commit message>\n")
+	} else if userMsg != "" {
 		promptBuilder.WriteString(fmt.Sprintf("The user wants to commit with message: %q.\n\n", userMsg))
 		promptBuilder.WriteString(diffFormatted)
 		promptBuilder.WriteString("\n\nReview the staged changes for any potential bugs, secrets, API keys, or syntax errors.\n")
@@ -248,8 +267,11 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 	}
 
 	outStr, err := ExecAgyPrompt(ctx, profileDir, promptBuilder.String(), extraArgs...)
-	if err != nil && strings.TrimSpace(outStr) == "" {
-		return nil, err
+	if err != nil {
+		if strings.TrimSpace(outStr) == "" {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w (output: %s)", err, strings.TrimSpace(outStr))
 	}
 
 	res := ParseCommitCheckResult(outStr, userMsg)

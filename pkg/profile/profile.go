@@ -469,13 +469,25 @@ func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
 
 		// Case 1: Disk token exists after agy run (agy wrote token to disk during run or updated it)
 		if readDiskErr == nil && diskTok != nil && diskTok.Token.AccessToken != "" {
-			// If Keychain token has a refresh_token, check if it matches disk token
-			if keyTok.Token.RefreshToken != "" && diskTok.Token.RefreshToken != "" && keyTok.Token.RefreshToken != diskTok.Token.RefreshToken {
-				// Keychain token belongs to ANOTHER profile that ran concurrently!
+			// Check if Keychain token belongs to another profile that ran concurrently
+			if keyTok.Token.RefreshToken != "" && diskTok.Token.RefreshToken != "" &&
+				keyTok.Token.RefreshToken != diskTok.Token.RefreshToken &&
+				keyTok.Token.RefreshToken == initialRefreshToken {
+				// Keychain token contains initialRefreshToken from prior profile, mismatch with diskTok
 				fmt.Fprintf(os.Stderr, "[agys] Warning: Keychain token mismatch detected. Keeping isolated profile token on disk.\n")
 				return nil
 			}
-			// Disk token is valid and authoritative
+
+			// If Keychain token has a refreshed access token or updated refresh token, persist to disk
+			if keyTok.Token.AccessToken != diskTok.Token.AccessToken || keyTok.Token.RefreshToken != diskTok.Token.RefreshToken {
+				cachePath := filepath.Join(profileDir, emailFilename)
+				_ = os.Remove(cachePath) // Force email re-fetch for updated token
+
+				tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
+				_ = os.MkdirAll(tokenDir, 0700)
+				tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
+				_ = WriteFileAtomic(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
+			}
 			return nil
 		}
 

@@ -74,6 +74,24 @@ refactor(auth): simplify token refresh logic
 			t.Errorf("expected fallback conventional commit message, got: %q", res.CommitMessage)
 		}
 	})
+
+	t.Run("Markdown bold headers and code blocks", func(t *testing.T) {
+		output := `**CHECK_SUMMARY:**
+- Clean - No issues found.
+
+**COMMIT_MESSAGE:**
+` + "```" + `
+fix(auth): persist refreshed OAuth token to disk
+` + "```" + `
+`
+		res := ParseCommitCheckResult(output, "")
+		if !strings.Contains(res.CheckSummary, "Clean - No issues found") {
+			t.Errorf("unexpected check summary: %q", res.CheckSummary)
+		}
+		if res.CommitMessage != "fix(auth): persist refreshed OAuth token to disk" {
+			t.Errorf("expected commit message 'fix(auth): persist refreshed OAuth token to disk', got: %q", res.CommitMessage)
+		}
+	})
 }
 
 func TestGitRepositoryChecks(t *testing.T) {
