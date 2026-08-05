@@ -148,7 +148,7 @@ agys plugin install https://github.com/obra/superpowers -a
 # List installed plugins across ALL active profiles
 agys plugin list --all
 
-# Uninstall plugin from ALL active profiles
+# Uninstall plugin from ALL active profiles (use short plugin name, not repo URL)
 agys plugin uninstall superpowers --all
 ```
 
