@@ -128,9 +128,9 @@ agys run work -- status
 agys run -- status
 
 # Run command sequentially across ALL active profiles
-agys run --all -- agy plugin install https://github.com/obra/superpowers
+agys run --all -- status
 # or using shorthand (-a)
-agys run -a -- agy plugin install https://github.com/obra/superpowers
+agys run -a -- status
 ```
 
 ### 6. Fast Plugin Management (`agys plugin`)
