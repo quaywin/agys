@@ -133,7 +133,26 @@ agys run --all -- agy plugin install https://github.com/obra/superpowers
 agys run -a -- agy plugin install https://github.com/obra/superpowers
 ```
 
-### 6. Rename a Profile
+### 6. Fast Plugin Management (`agys plugin`)
+Install, list, or uninstall `agy` plugins directly with optional `--all` (`-a`) support across all profiles without session overhead:
+
+```bash
+# Install plugin for a specific profile (or current default profile)
+agys plugin install https://github.com/obra/superpowers work
+
+# Install plugin for ALL active profiles simultaneously
+agys plugin install https://github.com/obra/superpowers --all
+# or using shorthand (-a)
+agys plugin install https://github.com/obra/superpowers -a
+
+# List installed plugins across ALL active profiles
+agys plugin list --all
+
+# Uninstall plugin from ALL active profiles
+agys plugin uninstall superpowers --all
+```
+
+### 7. Rename a Profile
 Rename an existing profile directory:
 
 ```bash

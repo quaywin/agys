@@ -26,10 +26,15 @@ var pluginCmd = &cobra.Command{
 }
 
 var pluginInstallCmd = &cobra.Command{
-	Use:               "install <target> [profile_name]",
-	Aliases:           []string{"i", "add"},
-	Short:             "Install an agy plugin",
-	ValidArgsFunction: CompleteProfileNames,
+	Use:     "install <target> [profile_name]",
+	Aliases: []string{"i", "add"},
+	Short:   "Install an agy plugin",
+	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if len(args) == 1 {
+			return CompleteProfileNames(cmd, args, toComplete)
+		}
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return fmt.Errorf("requires plugin target (name or URL)")
@@ -58,10 +63,15 @@ var pluginListCmd = &cobra.Command{
 }
 
 var pluginUninstallCmd = &cobra.Command{
-	Use:               "uninstall <target> [profile_name]",
-	Aliases:           []string{"remove", "rm"},
-	Short:             "Uninstall an agy plugin",
-	ValidArgsFunction: CompleteProfileNames,
+	Use:     "uninstall <target> [profile_name]",
+	Aliases: []string{"remove", "rm"},
+	Short:   "Uninstall an agy plugin",
+	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if len(args) == 1 {
+			return CompleteProfileNames(cmd, args, toComplete)
+		}
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return fmt.Errorf("requires plugin target")
@@ -103,7 +113,7 @@ func execPluginCmd(action string, pluginArg string, profileName string, isAll bo
 				continue
 			}
 
-			cmd := exec.Command(agyPath, agyArgs...)
+			cmd := exec.CommandContext(context.Background(), agyPath, agyArgs...)
 			cmd.Env = getProfileEnv(profileDir)
 
 			out, err := cmd.CombinedOutput()
@@ -114,7 +124,13 @@ func execPluginCmd(action string, pluginArg string, profileName string, isAll bo
 				}
 				lastErr = err
 			}
-			fmt.Printf("[%d/%d] %-12s %s\n", i+1, len(profiles), p, outStr)
+
+			if strings.Contains(outStr, "\n") {
+				formattedOut := strings.ReplaceAll(outStr, "\n", "\n              ")
+				fmt.Printf("[%d/%d] %-10s:\n              %s\n", i+1, len(profiles), p, formattedOut)
+			} else {
+				fmt.Printf("[%d/%d] %-10s: %s\n", i+1, len(profiles), p, outStr)
+			}
 		}
 		return lastErr
 	}
