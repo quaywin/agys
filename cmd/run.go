@@ -9,20 +9,46 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var runAll bool
+
 var runCmd = &cobra.Command{
 	Use:               "run [profile_name] -- [agy_commands]",
 	Short:             "Execute agy command with specified profile, auto quota selection, or default profile",
 	ValidArgsFunction: CompleteRunArgs,
-	Args:              cobra.MinimumNArgs(1),
+	Args:              cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if runAll {
+			profiles, err := profile.List()
+			if err != nil {
+				return err
+			}
+			if len(profiles) == 0 {
+				return fmt.Errorf("no active profiles found")
+			}
+			agyArgs := args
+			var lastErr error
+			for i, p := range profiles {
+				fmt.Fprintf(os.Stderr, "\n[agys] Executing on profile %q (%d/%d)...\n", p, i+1, len(profiles))
+				if err := runWithProfile(cmd, p, agyArgs); err != nil {
+					fmt.Fprintf(os.Stderr, "[agys] Profile %q failed: %v\n", p, err)
+					lastErr = err
+				}
+			}
+			return lastErr
+		}
+
 		var profileName string
 		var agyArgs []string
 
-		firstArg := args[0]
-		if profile.IsAuto(firstArg) {
+		var firstArg string
+		if len(args) > 0 {
+			firstArg = args[0]
+		}
+
+		if firstArg != "" && profile.IsAuto(firstArg) {
 			profileName = profile.AutoProfileKeyword
 			agyArgs = args[1:]
-		} else {
+		} else if firstArg != "" {
 			exists, _, _ := profile.Exists(firstArg)
 			if exists {
 				profileName = firstArg
@@ -55,6 +81,31 @@ var runCmd = &cobra.Command{
 					}
 					return fmt.Errorf("profile %q does not exist. Use `agys add %s` to create it, or set a default profile with `agys use <profile_name>`", firstArg, firstArg)
 				}
+			}
+		} else {
+			// Check if default profile is set when no args provided
+			current, err := profile.GetCurrent()
+			if err != nil {
+				return err
+			}
+			if current != "" {
+				if profile.IsAuto(current) {
+					profileName = profile.AutoProfileKeyword
+					agyArgs = args
+				} else {
+					currentExists, _, err := profile.Exists(current)
+					if err != nil {
+						return err
+					}
+					if currentExists {
+						profileName = current
+						agyArgs = args
+					}
+				}
+			}
+
+			if profileName == "" {
+				return fmt.Errorf("no profile specified and no default profile set. Specify a profile or set one with `agys use <profile_name>`")
 			}
 		}
 
@@ -188,6 +239,7 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 }
 
 func init() {
+	runCmd.Flags().BoolVarP(&runAll, "all", "a", false, "Execute agy command across all profiles sequentially")
 	// Disable flag parsing for arguments after `--` to pass raw flags directly to agy
 	runCmd.DisableFlagParsing = false
 	rootCmd.AddCommand(runCmd)
