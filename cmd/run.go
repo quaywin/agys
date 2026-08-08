@@ -182,7 +182,7 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 
 	isInteractive := true
 	for _, arg := range agyArgs {
-		if arg == "models" || arg == "agents" || arg == "agent" || arg == "changelog" || arg == "update" || arg == "help" || arg == "install" {
+		if isAgySubcommand(arg) {
 			isInteractive = false
 			break
 		}
@@ -247,6 +247,23 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 }
 
+var agySubcommands = map[string]bool{
+	"agent":     true,
+	"agents":    true,
+	"changelog": true,
+	"help":      true,
+	"install":   true,
+	"models":    true,
+	"plugin":    true,
+	"plugins":   true,
+	"update":    true,
+	"version":   true,
+}
+
+func isAgySubcommand(arg string) bool {
+	return agySubcommands[arg]
+}
+
 // EnsureDefaultModelAndEffort ensures agyArgs has a default model (gemini-3.6-flash)
 // and reasoning effort (high) if not explicitly provided by the user or subcommand.
 func EnsureDefaultModelAndEffort(args []string) []string {
@@ -255,19 +272,7 @@ func EnsureDefaultModelAndEffort(args []string) []string {
 		if strings.HasPrefix(arg, "-") {
 			continue
 		}
-		subcmds := map[string]bool{
-			"agent":     true,
-			"agents":    true,
-			"changelog": true,
-			"help":      true,
-			"install":   true,
-			"models":    true,
-			"plugin":    true,
-			"plugins":   true,
-			"update":    true,
-			"version":   true,
-		}
-		if subcmds[arg] {
+		if isAgySubcommand(arg) {
 			return args
 		}
 		break
