@@ -114,6 +114,8 @@ var runCmd = &cobra.Command{
 }
 
 func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) error {
+	agyArgs = EnsureDefaultModelAndEffort(agyArgs)
+
 	// Detect if the user is resuming a conversation and auto-switch to the owning profile
 	var detectedProfile string
 	var detectErr error
@@ -243,4 +245,67 @@ func init() {
 	// Disable flag parsing for arguments after `--` to pass raw flags directly to agy
 	runCmd.DisableFlagParsing = false
 	rootCmd.AddCommand(runCmd)
+}
+
+// EnsureDefaultModelAndEffort ensures agyArgs has a default model (gemini-3.6-flash)
+// and reasoning effort (high) if not explicitly provided by the user or subcommand.
+func EnsureDefaultModelAndEffort(args []string) []string {
+	// Check if first non-flag argument is an agy subcommand
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		subcmds := map[string]bool{
+			"agent":     true,
+			"agents":    true,
+			"changelog": true,
+			"help":      true,
+			"install":   true,
+			"models":    true,
+			"plugin":    true,
+			"plugins":   true,
+			"update":    true,
+			"version":   true,
+		}
+		if subcmds[arg] {
+			return args
+		}
+		break
+	}
+
+	hasModel := false
+	hasEffort := false
+	modelValue := ""
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-m" || arg == "--model" {
+			hasModel = true
+			if i+1 < len(args) {
+				modelValue = args[i+1]
+			}
+		} else if strings.HasPrefix(arg, "--model=") {
+			hasModel = true
+			modelValue = strings.TrimPrefix(arg, "--model=")
+		} else if arg == "--effort" || strings.HasPrefix(arg, "--effort=") {
+			hasEffort = true
+		}
+	}
+
+	finalArgs := make([]string, len(args), len(args)+4)
+	copy(finalArgs, args)
+
+	if !hasModel {
+		finalArgs = append(finalArgs, "--model", "gemini-3.6-flash")
+		modelValue = "gemini-3.6-flash"
+	}
+
+	if !hasEffort {
+		// Only append --effort high if model supports effort (e.g. gemini-3.6-flash, flash, etc.)
+		if modelValue == "" || modelValue == "gemini-3.6-flash" || modelValue == "gemini-2.5-flash" || modelValue == "flash" || modelValue == "gemini-2.5-flash-lite" {
+			finalArgs = append(finalArgs, "--effort", "high")
+		}
+	}
+
+	return finalArgs
 }
