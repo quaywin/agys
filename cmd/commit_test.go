@@ -29,6 +29,16 @@ func TestCommitCmdFlags(t *testing.T) {
 	if allFlag == nil || allFlag.Shorthand != "a" {
 		t.Errorf("expected -a / --all flag on commitCmd")
 	}
+
+	modelFlag := commitCmd.Flags().Lookup("model")
+	if modelFlag == nil {
+		t.Errorf("expected --model flag on commitCmd")
+	}
+
+	effortFlag := commitCmd.Flags().Lookup("effort")
+	if effortFlag == nil {
+		t.Errorf("expected --effort flag on commitCmd")
+	}
 }
 
 func TestCommitCmdHelp(t *testing.T) {

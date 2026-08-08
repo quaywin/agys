@@ -13,6 +13,8 @@ import (
 
 const (
 	MaxDiffBytesForPrompt = 30000 // 30 KB limit for prompt context
+	DefaultCommitModel    = "gemini-3.5-flash"
+	DefaultCommitEffort   = "low"
 )
 
 // CommitCheckResult holds the parsed output from agy code review and commit message generation.
@@ -228,7 +230,7 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 }
 
 // RunAgyCommitCheck performs the AI review and/or commit message generation using the specified profile.
-func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []string, diffContent string, userMsg string, noCheck bool, model string, customPrompt string) (*CommitCheckResult, error) {
+func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []string, diffContent string, userMsg string, noCheck bool, model string, effort string, customPrompt string) (*CommitCheckResult, error) {
 	diffFormatted := FormatDiffForPrompt(stagedFiles, diffContent)
 
 	var promptBuilder strings.Builder
@@ -261,9 +263,19 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 		promptBuilder.WriteString("COMMIT_MESSAGE:\n<conventional commit message>\n")
 	}
 
+	if model == "" {
+		model = DefaultCommitModel
+	}
+	if effort == "" {
+		effort = DefaultCommitEffort
+	}
+
 	var extraArgs []string
 	if model != "" {
 		extraArgs = append(extraArgs, "--model", model)
+	}
+	if effort != "" {
+		extraArgs = append(extraArgs, "--effort", effort)
 	}
 
 	outStr, err := ExecAgyPrompt(ctx, profileDir, promptBuilder.String(), extraArgs...)

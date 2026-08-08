@@ -72,7 +72,9 @@ func CompleteAgyArgs(args []string, toComplete string) ([]string, cobra.ShellCom
 		prev := args[len(args)-1]
 		if prev == "-m" || prev == "--model" || strings.HasPrefix(toComplete, "--model=") {
 			models := []string{
-				"gemini-2.5-pro\tGemini 2.5 Pro (High Reasoning)",
+				"gemini-3.5-flash\tGemini 3.5 Flash (Fast & Lightweight)",
+				"gemini-3.5-pro\tGemini 3.5 Pro (High Reasoning)",
+				"gemini-2.5-pro\tGemini 2.5 Pro (Legacy High Reasoning)",
 				"gemini-2.5-flash\tGemini 2.5 Flash (Fast & Capable)",
 				"gemini-2.5-flash-lite\tGemini 2.5 Flash Lite (Lightweight)",
 				"claude-3-5-sonnet\tClaude 3.5 Sonnet",

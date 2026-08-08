@@ -17,6 +17,7 @@ var (
 	commitNoCheck bool
 	commitDryRun  bool
 	commitModel   string
+	commitEffort  string
 	commitPrompt  string
 )
 
@@ -108,7 +109,7 @@ var commitCmd = &cobra.Command{
 			finalMessage = commitMsg
 			checkSummary = "Skipped (--no-check specified)."
 		} else {
-			result, err := profile.RunAgyCommitCheck(cmd.Context(), profileDir, stagedFiles, stagedDiff, commitMsg, commitNoCheck, commitModel, commitPrompt)
+			result, err := profile.RunAgyCommitCheck(cmd.Context(), profileDir, stagedFiles, stagedDiff, commitMsg, commitNoCheck, commitModel, commitEffort, commitPrompt)
 			if err != nil {
 				if commitMsg != "" {
 					fmt.Fprintf(os.Stderr, "[agys] Warning: AI code check failed (%v). Falling back to provided message.\n", err)
@@ -191,7 +192,8 @@ func init() {
 	commitCmd.Flags().BoolVarP(&commitYes, "yes", "y", false, "Automatically accept commit message and commit without interactive prompt")
 	commitCmd.Flags().BoolVar(&commitNoCheck, "no-check", false, "Skip AI code review check")
 	commitCmd.Flags().BoolVar(&commitDryRun, "dry-run", false, "Perform AI review and message generation without executing git commit")
-	commitCmd.Flags().StringVar(&commitModel, "model", "", "Override model for agy (e.g. gemini-2.5-pro)")
+	commitCmd.Flags().StringVar(&commitModel, "model", "", "Override model for agy commit check (defaults to gemini-3.5-flash)")
+	commitCmd.Flags().StringVar(&commitEffort, "effort", "", "Override reasoning effort for agy commit check (defaults to low)")
 	commitCmd.Flags().StringVar(&commitPrompt, "prompt", "", "Additional custom prompt instructions for commit check")
 
 	rootCmd.AddCommand(commitCmd)

@@ -28,6 +28,15 @@ func TestFormatDiffForPrompt(t *testing.T) {
 	}
 }
 
+func TestDefaultCommitConstants(t *testing.T) {
+	if DefaultCommitModel != "gemini-3.5-flash" {
+		t.Errorf("expected DefaultCommitModel to be 'gemini-3.5-flash', got %q", DefaultCommitModel)
+	}
+	if DefaultCommitEffort != "low" {
+		t.Errorf("expected DefaultCommitEffort to be 'low', got %q", DefaultCommitEffort)
+	}
+}
+
 func TestParseCommitCheckResult(t *testing.T) {
 	t.Run("Standard structured output with generated message", func(t *testing.T) {
 		output := `
