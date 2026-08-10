@@ -14,6 +14,7 @@ var (
 	commitMsg     string
 	commitAll     bool
 	commitYes     bool
+	commitPush    bool
 	commitNoCheck bool
 	commitDryRun  bool
 	commitModel   string
@@ -94,11 +95,12 @@ var commitCmd = &cobra.Command{
 			return err
 		}
 
-		// 5. Get staged diff
+		// 5. Get staged diff & stat
 		stagedDiff, err := profile.GetStagedDiff("")
 		if err != nil {
 			return err
 		}
+		stagedDiffStat, _ := profile.GetStagedDiffStat("")
 
 		fmt.Fprintf(os.Stderr, "[agys] Inspecting %d staged file(s) under profile %q...\n", len(stagedFiles), targetProfile)
 
@@ -109,7 +111,7 @@ var commitCmd = &cobra.Command{
 			finalMessage = commitMsg
 			checkSummary = "Skipped (--no-check specified)."
 		} else {
-			result, err := profile.RunAgyCommitCheck(cmd.Context(), profileDir, stagedFiles, stagedDiff, commitMsg, commitNoCheck, commitModel, commitEffort, commitPrompt)
+			result, err := profile.RunAgyCommitCheck(cmd.Context(), profileDir, stagedFiles, stagedDiff, stagedDiffStat, commitMsg, commitNoCheck, commitModel, commitEffort, commitPrompt)
 			if err != nil {
 				if commitMsg != "" {
 					fmt.Fprintf(os.Stderr, "[agys] Warning: AI code check failed (%v). Falling back to provided message.\n", err)
@@ -182,7 +184,17 @@ var commitCmd = &cobra.Command{
 
 		// Execute Git Commit
 		fmt.Printf("[agys] Executing git commit...\n")
-		return profile.ExecuteGitCommit("", finalMessage)
+		if err := profile.ExecuteGitCommit("", finalMessage); err != nil {
+			return err
+		}
+
+		// Execute Git Push if -p / --push flag is set
+		if commitPush {
+			fmt.Printf("[agys] Executing git push...\n")
+			return profile.ExecuteGitPush("")
+		}
+
+		return nil
 	},
 }
 
@@ -190,6 +202,7 @@ func init() {
 	commitCmd.Flags().StringVarP(&commitMsg, "message", "m", "", "Specify commit message directly")
 	commitCmd.Flags().BoolVarP(&commitAll, "all", "a", false, "Automatically stage modified/deleted tracked files before commit")
 	commitCmd.Flags().BoolVarP(&commitYes, "yes", "y", false, "Automatically accept commit message and commit without interactive prompt")
+	commitCmd.Flags().BoolVarP(&commitPush, "push", "p", false, "Automatically push to current git branch after committing")
 	commitCmd.Flags().BoolVar(&commitNoCheck, "no-check", false, "Skip AI code review check")
 	commitCmd.Flags().BoolVar(&commitDryRun, "dry-run", false, "Perform AI review and message generation without executing git commit")
 	commitCmd.Flags().StringVar(&commitModel, "model", "", "Override model for agy commit check (defaults to gemini-3.5-flash)")

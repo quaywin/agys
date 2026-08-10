@@ -30,6 +30,11 @@ func TestCommitCmdFlags(t *testing.T) {
 		t.Errorf("expected -a / --all flag on commitCmd")
 	}
 
+	pushFlag := commitCmd.Flags().Lookup("push")
+	if pushFlag == nil || pushFlag.Shorthand != "p" {
+		t.Errorf("expected -p / --push flag on commitCmd")
+	}
+
 	modelFlag := commitCmd.Flags().Lookup("model")
 	if modelFlag == nil {
 		t.Errorf("expected --model flag on commitCmd")

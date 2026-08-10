@@ -211,6 +211,9 @@ Examples:
 			}
 		}
 
+		// Ensure default model (gemini-3.6-flash) and reasoning effort (high) if not specified
+		agyArgs = EnsureDefaultModelAndEffort(agyArgs)
+
 		// 1. Start local HTTP proxy and tunnel API requests back to local Mac (bypasses remote IP geo-blocking)
 		proxyPort, cleanupProxy, err := startLocalHTTPProxy()
 		if err != nil {

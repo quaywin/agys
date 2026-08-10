@@ -8,23 +8,48 @@ import (
 	"testing"
 )
 
-func TestFormatDiffForPrompt(t *testing.T) {
-	stagedFiles := []string{"main.go", "pkg/profile/commit.go"}
-	diffContent := "diff --git a/main.go b/main.go\n+ func main() {}\n"
+func TestIsIgnoredOrLockFile(t *testing.T) {
+	tests := []struct {
+		filename string
+		expected bool
+	}{
+		{"package-lock.json", true},
+		{"go.sum", true},
+		{"yarn.lock", true},
+		{"pnpm-lock.yaml", true},
+		{"vendor/modules.txt", true},
+		{"dist/bundle.min.js", true},
+		{"logo.png", true},
+		{"main.go", false},
+		{"pkg/profile/commit.go", false},
+		{"cmd/root.go", false},
+	}
 
-	formatted := FormatDiffForPrompt(stagedFiles, diffContent)
+	for _, tt := range tests {
+		got := IsIgnoredOrLockFile(tt.filename)
+		if got != tt.expected {
+			t.Errorf("IsIgnoredOrLockFile(%q) = %v, expected %v", tt.filename, got, tt.expected)
+		}
+	}
+}
+
+func TestFormatDiffForPrompt(t *testing.T) {
+	stagedFiles := []string{"main.go", "go.sum", "pkg/profile/commit.go"}
+	diffContent := "diff --git a/main.go b/main.go\n+ func main() {}\n\ndiff --git a/go.sum b/go.sum\n+ github.com/foo v1.0.0 h1:123=\n\ndiff --git a/pkg/profile/commit.go b/pkg/profile/commit.go\n+ func RunCheck() {}\n"
+	diffStat := " main.go               | 1 +\n go.sum                | 1 +\n pkg/profile/commit.go | 1 +\n 3 files changed, 3 insertions(+)"
+
+	formatted := FormatDiffForPromptWithStat(stagedFiles, diffContent, diffStat)
 	if !strings.Contains(formatted, "main.go") || !strings.Contains(formatted, "pkg/profile/commit.go") {
 		t.Errorf("expected formatted prompt to contain staged file names, got: %s", formatted)
 	}
-	if !strings.Contains(formatted, "func main()") {
-		t.Errorf("expected formatted prompt to contain diff content, got: %s", formatted)
+	if !strings.Contains(formatted, "Git Diff Stat:") {
+		t.Errorf("expected formatted prompt to contain Git Diff Stat section, got: %s", formatted)
 	}
-
-	// Test diff truncation
-	largeDiff := strings.Repeat("a", MaxDiffBytesForPrompt+1000)
-	truncatedFormatted := FormatDiffForPrompt(stagedFiles, largeDiff)
-	if !strings.Contains(truncatedFormatted, "Staged diff truncated") {
-		t.Errorf("expected large diff to be truncated")
+	if !strings.Contains(formatted, "Lockfile / auto-generated diff omitted") {
+		t.Errorf("expected go.sum diff to be omitted in formatted prompt, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "func main()") || !strings.Contains(formatted, "func RunCheck()") {
+		t.Errorf("expected code diffs to be present in formatted prompt, got: %s", formatted)
 	}
 }
 

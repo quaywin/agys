@@ -84,6 +84,19 @@ func GetStagedDiff(repoDir string) (string, error) {
 	return string(output), nil
 }
 
+// GetStagedDiffStat returns the high-level git diff --stat summary of staged changes.
+func GetStagedDiffStat(repoDir string) (string, error) {
+	cmd := exec.Command("git", "diff", "--cached", "--stat")
+	if repoDir != "" {
+		cmd.Dir = repoDir
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get staged diff stat: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 // ExecuteGitCommit executes `git commit -m <message>` in repoDir.
 func ExecuteGitCommit(repoDir string, commitMessage string) error {
 	cmd := exec.Command("git", "commit", "-m", commitMessage)
@@ -100,22 +113,204 @@ func ExecuteGitCommit(repoDir string, commitMessage string) error {
 	return nil
 }
 
-// FormatDiffForPrompt truncates the staged diff if it exceeds MaxDiffBytesForPrompt.
+// GetCurrentBranch returns the active git branch name.
+func GetCurrentBranch(repoDir string) (string, error) {
+	cmd := exec.Command("git", "branch", "--show-current")
+	if repoDir != "" {
+		cmd.Dir = repoDir
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current branch: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// ExecuteGitPush pushes committed changes to the current remote branch.
+func ExecuteGitPush(repoDir string) error {
+	branch, _ := GetCurrentBranch(repoDir)
+
+	var stderrBuf bytes.Buffer
+	cmd := exec.Command("git", "push")
+	if repoDir != "" {
+		cmd.Dir = repoDir
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = &stderrBuf
+	cmd.Stdin = os.Stdin
+
+	err := cmd.Run()
+	if err != nil {
+		errStr := stderrBuf.String()
+		if errStr != "" {
+			fmt.Fprint(os.Stderr, errStr)
+		}
+
+		// Handle missing upstream branch automatically (e.g. git push -u origin <branch>)
+		if branch != "" && (strings.Contains(errStr, "has no upstream branch") || strings.Contains(errStr, "set-upstream")) {
+			fmt.Fprintf(os.Stderr, "[agys] Setting upstream and pushing to origin %s...\n", branch)
+			setUpstreamCmd := exec.Command("git", "push", "-u", "origin", branch)
+			if repoDir != "" {
+				setUpstreamCmd.Dir = repoDir
+			}
+			setUpstreamCmd.Stdout = os.Stdout
+			setUpstreamCmd.Stderr = os.Stderr
+			setUpstreamCmd.Stdin = os.Stdin
+			return setUpstreamCmd.Run()
+		}
+		return fmt.Errorf("git push failed: %w", err)
+	}
+
+	return nil
+}
+
+const MaxPerFileDiffBytes = 5000 // 5 KB limit per file to avoid single file hogging prompt
+
+// IsIgnoredOrLockFile returns true if the file is a lockfile, minified asset, binary, or auto-generated output.
+func IsIgnoredOrLockFile(filename string) bool {
+	base := filepath.Base(filename)
+	baseLower := strings.ToLower(base)
+
+	lockFiles := map[string]bool{
+		"package-lock.json": true,
+		"yarn.lock":         true,
+		"pnpm-lock.yaml":    true,
+		"bun.lockb":         true,
+		"go.sum":            true,
+		"cargo.lock":        true,
+		"poetry.lock":       true,
+		"pipfile.lock":      true,
+		"composer.lock":     true,
+		"mix.lock":          true,
+		"flake.lock":        true,
+	}
+	if lockFiles[baseLower] {
+		return true
+	}
+
+	ignoredExts := []string{
+		".min.js", ".min.css", ".map", ".svg", ".png", ".jpg",
+		".jpeg", ".gif", ".ico", ".wasm", ".pdf", ".zip", ".gz", ".tar",
+		".exe", ".dll", ".so", ".dylib", ".o", ".a",
+	}
+	for _, ext := range ignoredExts {
+		if strings.HasSuffix(baseLower, ext) {
+			return true
+		}
+	}
+
+	cleanPath := filepath.ToSlash(filename)
+	ignoredDirs := []string{"/vendor/", "/dist/", "/build/", "/.next/", "/node_modules/"}
+	for _, dir := range ignoredDirs {
+		if strings.Contains("/"+cleanPath, dir) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// splitGitDiff splits raw git diff into per-file diff blocks.
+func splitGitDiff(rawDiff string) []string {
+	rawDiff = strings.TrimSpace(rawDiff)
+	if rawDiff == "" {
+		return nil
+	}
+	if !strings.HasPrefix(rawDiff, "diff --git ") {
+		return []string{rawDiff}
+	}
+
+	parts := strings.Split(rawDiff, "diff --git ")
+	var fileDiffs []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			fileDiffs = append(fileDiffs, "diff --git "+p)
+		}
+	}
+	return fileDiffs
+}
+
+// extractFilePathFromDiffHeader attempts to parse the relative file path from a diff --git header.
+func extractFilePathFromDiffHeader(fileDiff string) string {
+	lines := strings.Split(fileDiff, "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	header := lines[0]
+	if strings.HasPrefix(header, "diff --git ") {
+		parts := strings.Fields(header)
+		if len(parts) >= 4 {
+			bPath := parts[3]
+			if strings.HasPrefix(bPath, "b/") {
+				return bPath[2:]
+			}
+			return bPath
+		}
+	}
+	return ""
+}
+
+// FormatDiffForPrompt formats staged file list and diff content for prompt (maintained for compatibility).
 func FormatDiffForPrompt(stagedFiles []string, diffContent string) string {
+	return FormatDiffForPromptWithStat(stagedFiles, diffContent, "")
+}
+
+// FormatDiffForPromptWithStat formats staged files, git diff stat, and smart per-file diffs for the AI prompt context.
+func FormatDiffForPromptWithStat(stagedFiles []string, diffContent string, diffStat string) string {
 	var sb strings.Builder
-	sb.WriteString("Staged Files:\n")
+	sb.WriteString("Staged Files Summary:\n")
 	for _, f := range stagedFiles {
 		sb.WriteString("- ")
 		sb.WriteString(f)
+		if IsIgnoredOrLockFile(f) {
+			sb.WriteString(" (lockfile/asset - diff omitted)")
+		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\nStaged Diff:\n")
 
-	if len(diffContent) > MaxDiffBytesForPrompt {
-		sb.WriteString(diffContent[:MaxDiffBytesForPrompt])
-		sb.WriteString(fmt.Sprintf("\n\n... [Staged diff truncated: showing first %d of %d bytes] ...\n", MaxDiffBytesForPrompt, len(diffContent)))
-	} else {
-		sb.WriteString(diffContent)
+	if strings.TrimSpace(diffStat) != "" {
+		sb.WriteString("\nGit Diff Stat:\n")
+		sb.WriteString(strings.TrimSpace(diffStat))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\nStaged Code Diffs:\n")
+
+	if strings.TrimSpace(diffContent) == "" {
+		sb.WriteString("(No diff content available)\n")
+		return sb.String()
+	}
+
+	fileDiffs := splitGitDiff(diffContent)
+	totalBytes := sb.Len()
+
+	for _, fileDiff := range fileDiffs {
+		filePath := extractFilePathFromDiffHeader(fileDiff)
+		if filePath != "" && IsIgnoredOrLockFile(filePath) {
+			sb.WriteString(fmt.Sprintf("\n--- %s ---\n[Lockfile / auto-generated diff omitted]\n", filePath))
+			continue
+		}
+
+		formattedFileDiff := fileDiff
+		if len(fileDiff) > MaxPerFileDiffBytes {
+			formattedFileDiff = fileDiff[:MaxPerFileDiffBytes] + fmt.Sprintf("\n... [Diff for %s truncated: first %d bytes shown] ...\n", filePath, MaxPerFileDiffBytes)
+		}
+
+		if totalBytes+len(formattedFileDiff) > MaxDiffBytesForPrompt {
+			rem := MaxDiffBytesForPrompt - totalBytes
+			if rem > 200 {
+				sb.WriteString(formattedFileDiff[:rem])
+				sb.WriteString("\n... [Overall staged diff truncated due to prompt size limit] ...\n")
+			} else {
+				sb.WriteString("\n... [Overall staged diff truncated due to prompt size limit] ...\n")
+			}
+			break
+		}
+
+		sb.WriteString(formattedFileDiff)
+		sb.WriteString("\n\n")
+		totalBytes = sb.Len()
 	}
 
 	return sb.String()
@@ -230,8 +425,8 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 }
 
 // RunAgyCommitCheck performs the AI review and/or commit message generation using the specified profile.
-func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []string, diffContent string, userMsg string, noCheck bool, model string, effort string, customPrompt string) (*CommitCheckResult, error) {
-	diffFormatted := FormatDiffForPrompt(stagedFiles, diffContent)
+func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []string, diffContent string, diffStat string, userMsg string, noCheck bool, model string, effort string, customPrompt string) (*CommitCheckResult, error) {
+	diffFormatted := FormatDiffForPromptWithStat(stagedFiles, diffContent, diffStat)
 
 	var promptBuilder strings.Builder
 	promptBuilder.WriteString("You are an expert software developer and Git assistant.\n")
@@ -289,3 +484,4 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 	res := ParseCommitCheckResult(outStr, userMsg)
 	return &res, nil
 }
+

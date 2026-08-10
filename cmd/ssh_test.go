@@ -50,3 +50,28 @@ func TestStartLocalHTTPProxy_Connect(t *testing.T) {
 		t.Errorf("unexpected body: %q", string(body))
 	}
 }
+
+func TestSSHCommandModelDefaults(t *testing.T) {
+	t.Run("Default model and effort appended when agyArgs empty", func(t *testing.T) {
+		var agyArgs []string
+		res := EnsureDefaultModelAndEffort(agyArgs)
+		expected := []string{"--model", "gemini-3.6-flash", "--effort", "high"}
+		if len(res) != len(expected) {
+			t.Fatalf("expected %v, got %v", expected, res)
+		}
+		for i, v := range expected {
+			if res[i] != v {
+				t.Errorf("at index %d: expected %q, got %q", i, v, res[i])
+			}
+		}
+	})
+
+	t.Run("Custom model preserved for ssh args", func(t *testing.T) {
+		agyArgs := []string{"--model", "gemini-2.5-pro"}
+		res := EnsureDefaultModelAndEffort(agyArgs)
+		if len(res) != 2 || res[1] != "gemini-2.5-pro" {
+			t.Errorf("expected custom model to be preserved, got %v", res)
+		}
+	})
+}
+
