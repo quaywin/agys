@@ -465,4 +465,63 @@ func TestConfiguredStatus(t *testing.T) {
 	}
 }
 
+func TestSyncKeychainTokenToDisk_Isolation(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Skipping Keychain test on non-macOS")
+	}
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	pName := "test-isolation-p1"
+	pDir, err := Create(pName)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// 1. Initial disk token for Profile A
+	initialTokJSON := []byte(`{
+		"token": {
+			"access_token": "acc_profileA",
+			"refresh_token": "ref_profileA"
+		}
+	}`)
+	cliDir := filepath.Join(pDir, ".gemini", "antigravity-cli")
+	_ = os.MkdirAll(cliDir, 0700)
+	tokPath := filepath.Join(cliDir, "antigravity-oauth-token")
+	_ = os.WriteFile(tokPath, initialTokJSON, 0600)
+
+	// Simulate Profile B writing to Keychain
+	p2Dir, err := Create("test-isolation-p2")
+	if err != nil {
+		t.Fatalf("Create p2 error: %v", err)
+	}
+	p2TokJSON := []byte(`{
+		"token": {
+			"access_token": "acc_profileB",
+			"refresh_token": "ref_profileB"
+		}
+	}`)
+	p2TokPath := filepath.Join(p2Dir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	_ = os.MkdirAll(filepath.Dir(p2TokPath), 0700)
+	_ = os.WriteFile(p2TokPath, p2TokJSON, 0600)
+	SyncDiskTokenToKeychain(p2Dir)
+
+	// Now Profile A finishes and calls SyncKeychainTokenToDisk
+	SyncKeychainTokenToDisk(pDir, "ref_profileA")
+
+	// Verify Profile A's disk token was NOT overwritten by Profile B's token
+	afterTok, err := ReadTokenFromDir(pDir)
+	if err != nil {
+		t.Fatalf("ReadTokenFromDir error: %v", err)
+	}
+	if afterTok.Token.RefreshToken != "ref_profileA" {
+		t.Errorf("SECURITY/ISOLATION VIOLATION: Expected refresh_token 'ref_profileA', got %q", afterTok.Token.RefreshToken)
+	}
+	if afterTok.Token.AccessToken != "acc_profileA" {
+		t.Errorf("Expected access_token 'acc_profileA', got %q", afterTok.Token.AccessToken)
+	}
+}
+
+
 

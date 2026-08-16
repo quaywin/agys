@@ -64,4 +64,17 @@ func TestClone(t *testing.T) {
 	if err == nil {
 		t.Errorf("Expected error when cloning non-existent source profile")
 	}
+
+	// Test: clone should remove token files from destination
+	tokPath := filepath.Join(srcDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	_ = os.WriteFile(tokPath, []byte(`{"token":{"access_token":"src_acc"}}`), 0600)
+	dst3Name := "dest3-profile"
+	if err := Clone(srcName, dst3Name); err != nil {
+		t.Fatalf("Clone with token error: %v", err)
+	}
+	dst3Dir, _ := GetProfileDir(dst3Name)
+	dst3TokPath := filepath.Join(dst3Dir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	if _, err := os.Stat(dst3TokPath); !os.IsNotExist(err) {
+		t.Errorf("Expected destination profile token file to be deleted on clone, but it exists")
+	}
 }

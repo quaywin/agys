@@ -36,7 +36,9 @@ func Clone(srcName, dstName string) error {
 		return err
 	}
 
-	// Remove copied cache files to ensure destination profile validates its own token
+	// Remove copied token and cache files to ensure destination profile requires its own authentication
+	_ = os.Remove(filepath.Join(dstDir, ".gemini", "antigravity-cli", "antigravity-oauth-token"))
+	_ = os.Remove(filepath.Join(dstDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token"))
 	_ = os.Remove(filepath.Join(dstDir, emailFilename))
 	_ = os.Remove(filepath.Join(dstDir, projectIDFilename))
 	return nil

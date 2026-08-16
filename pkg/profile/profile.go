@@ -469,17 +469,22 @@ func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
 
 		// Case 1: Disk token exists after agy run (agy wrote token to disk during run or updated it)
 		if readDiskErr == nil && diskTok != nil && diskTok.Token.AccessToken != "" {
-			// Check if Keychain token belongs to another profile that ran concurrently
-			if keyTok.Token.RefreshToken != "" && diskTok.Token.RefreshToken != "" &&
-				keyTok.Token.RefreshToken != diskTok.Token.RefreshToken &&
-				keyTok.Token.RefreshToken == initialRefreshToken {
-				// Keychain token contains initialRefreshToken from prior profile, mismatch with diskTok
+			// If initialRefreshToken was recorded and keyTok's refresh token differs from initialRefreshToken,
+			// keyTok MUST belong to another profile that ran concurrently and wrote to macOS Keychain.
+			// We must reject keyTok and keep diskTok intact.
+			if initialRefreshToken != "" && keyTok.Token.RefreshToken != "" && keyTok.Token.RefreshToken != initialRefreshToken {
+				fmt.Fprintf(os.Stderr, "[agys] Warning: Keychain token belongs to another profile (refresh token mismatch). Keeping isolated profile token on disk.\n")
+				return nil
+			}
+
+			// If disk token already has a refresh token and keyTok has a different refresh token, reject it
+			if diskTok.Token.RefreshToken != "" && keyTok.Token.RefreshToken != "" && keyTok.Token.RefreshToken != diskTok.Token.RefreshToken {
 				fmt.Fprintf(os.Stderr, "[agys] Warning: Keychain token mismatch detected. Keeping isolated profile token on disk.\n")
 				return nil
 			}
 
-			// If Keychain token has a refreshed access token or updated refresh token, persist to disk
-			if keyTok.Token.AccessToken != diskTok.Token.AccessToken || keyTok.Token.RefreshToken != diskTok.Token.RefreshToken {
+			// If Keychain token has a refreshed access token (same account/refresh token), persist to disk
+			if keyTok.Token.AccessToken != diskTok.Token.AccessToken {
 				cachePath := filepath.Join(profileDir, emailFilename)
 				_ = os.Remove(cachePath) // Force email re-fetch for updated token
 
