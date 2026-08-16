@@ -18,7 +18,7 @@ func TestEnsureDefaultModelAndEffort(t *testing.T) {
 	t.Run("Default behavior when no model or effort specified", func(t *testing.T) {
 		args := []string{"-p", "hello"}
 		res := EnsureDefaultModelAndEffort(args)
-		expected := []string{"-p", "hello", "--model", "gemini-3.6-flash", "--effort", "high"}
+		expected := []string{"-p", "hello", "--model", "gemini-3.7-flash", "--effort", "high"}
 		if len(res) != len(expected) {
 			t.Fatalf("expected len %d, got %d: %v", len(expected), len(res), res)
 		}
@@ -40,7 +40,7 @@ func TestEnsureDefaultModelAndEffort(t *testing.T) {
 	t.Run("Preserves custom effort when provided", func(t *testing.T) {
 		args := []string{"--effort", "low"}
 		res := EnsureDefaultModelAndEffort(args)
-		expected := []string{"--effort", "low", "--model", "gemini-3.6-flash"}
+		expected := []string{"--effort", "low", "--model", "gemini-3.7-flash"}
 		if len(res) != len(expected) {
 			t.Fatalf("expected len %d, got %d: %v", len(expected), len(res), res)
 		}

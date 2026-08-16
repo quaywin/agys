@@ -55,7 +55,7 @@ func TestSSHCommandModelDefaults(t *testing.T) {
 	t.Run("Default model and effort appended when agyArgs empty", func(t *testing.T) {
 		var agyArgs []string
 		res := EnsureDefaultModelAndEffort(agyArgs)
-		expected := []string{"--model", "gemini-3.6-flash", "--effort", "high"}
+		expected := []string{"--model", "gemini-3.7-flash", "--effort", "high"}
 		if len(res) != len(expected) {
 			t.Fatalf("expected %v, got %v", expected, res)
 		}

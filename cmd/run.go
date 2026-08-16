@@ -264,7 +264,7 @@ func isAgySubcommand(arg string) bool {
 	return agySubcommands[arg]
 }
 
-// EnsureDefaultModelAndEffort ensures agyArgs has a default model (gemini-3.6-flash)
+// EnsureDefaultModelAndEffort ensures agyArgs has a default model (gemini-3.7-flash)
 // and reasoning effort (high) if not explicitly provided by the user or subcommand.
 func EnsureDefaultModelAndEffort(args []string) []string {
 	// Check if first non-flag argument is an agy subcommand
@@ -301,13 +301,13 @@ func EnsureDefaultModelAndEffort(args []string) []string {
 	copy(finalArgs, args)
 
 	if !hasModel {
-		finalArgs = append(finalArgs, "--model", "gemini-3.6-flash")
-		modelValue = "gemini-3.6-flash"
+		finalArgs = append(finalArgs, "--model", "gemini-3.7-flash")
+		modelValue = "gemini-3.7-flash"
 	}
 
 	if !hasEffort {
-		// Only append --effort high if model supports effort (e.g. gemini-3.6-flash, flash, etc.)
-		if modelValue == "" || modelValue == "gemini-3.6-flash" || modelValue == "gemini-2.5-flash" || modelValue == "flash" || modelValue == "gemini-2.5-flash-lite" {
+		// Only append --effort high if model supports effort (e.g. gemini-3.7-flash, flash, etc.)
+		if modelValue == "" || modelValue == "gemini-3.7-flash" || modelValue == "gemini-3.6-flash" || modelValue == "gemini-2.5-flash" || modelValue == "flash" || modelValue == "gemini-2.5-flash-lite" {
 			finalArgs = append(finalArgs, "--effort", "high")
 		}
 	}

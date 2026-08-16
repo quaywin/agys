@@ -211,7 +211,7 @@ Examples:
 			}
 		}
 
-		// Ensure default model (gemini-3.6-flash) and reasoning effort (high) if not specified
+		// Ensure default model (gemini-3.7-flash) and reasoning effort (high) if not specified
 		agyArgs = EnsureDefaultModelAndEffort(agyArgs)
 
 		// 1. Start local HTTP proxy and tunnel API requests back to local Mac (bypasses remote IP geo-blocking)
