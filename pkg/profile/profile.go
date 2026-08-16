@@ -356,9 +356,44 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// GetTokenFilePaths returns all candidate token file paths for a profile directory in priority order.
+func GetTokenFilePaths(profileDir string) []string {
+	return []string{
+		filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
+		filepath.Join(profileDir, ".gemini", "antigravity", "antigravity-oauth-token"),
+		filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token"),
+		filepath.Join(profileDir, ".gemini", "antigravity", "jetski-standalone-oauth-token"),
+		filepath.Join(profileDir, ".gemini", "oauth_creds.json"),
+	}
+}
+
+// ReadRawTokenData reads token data from the first existing candidate file in profileDir.
+func ReadRawTokenData(profileDir string) ([]byte, error) {
+	for _, p := range GetTokenFilePaths(profileDir) {
+		data, err := os.ReadFile(p)
+		if err == nil && len(bytes.TrimSpace(data)) > 0 {
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf("token file not found (not logged in)")
+}
+
+// WriteTokenToProfile writes token JSON to standard token file paths in profileDir.
+func WriteTokenToProfile(profileDir string, rawJSON string) error {
+	trimmed := strings.TrimSpace(rawJSON) + "\n"
+	paths := []string{
+		filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
+		filepath.Join(profileDir, ".gemini", "antigravity", "antigravity-oauth-token"),
+	}
+	for _, p := range paths {
+		_ = os.MkdirAll(filepath.Dir(p), 0700)
+		_ = WriteFileAtomic(p, []byte(trimmed), 0600)
+	}
+	return nil
+}
+
 // ClearKeychainToken removes the cached generic password item from macOS Keychain.
-// This forces `agy` to load the profile-isolated token file from disk
-// ($HOME/.gemini/antigravity-cli/antigravity-oauth-token) instead of using a stale token from another profile.
+// This forces `agy` to load the profile-isolated token file from disk instead of using a stale token from another profile.
 func ClearKeychainToken() {
 	if runtime.GOOS == "darwin" {
 		_ = exec.Command("security", "delete-generic-password", "-s", "gemini", "-a", "antigravity").Run()
@@ -371,12 +406,7 @@ func SyncDiskTokenToKeychain(profileDir string) {
 		return
 	}
 	_ = WithKeychainLock(context.Background(), func() error {
-		tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
-		data, err := os.ReadFile(tokenPath)
-		if err != nil {
-			fallbackPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
-			data, err = os.ReadFile(fallbackPath)
-		}
+		data, err := ReadRawTokenData(profileDir)
 		if err != nil || len(bytes.TrimSpace(data)) == 0 {
 			ClearKeychainToken()
 			return nil
@@ -400,19 +430,9 @@ func SyncDiskTokenToKeychain(profileDir string) {
 
 // ReadTokenFromDir reads the oauth token file directly from a profile directory path.
 func ReadTokenFromDir(profileDir string) (*OAuthToken, error) {
-	tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
-	data, err := os.ReadFile(tokenPath)
+	data, err := ReadRawTokenData(profileDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			fallbackPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
-			var fallbackErr error
-			data, fallbackErr = os.ReadFile(fallbackPath)
-			if fallbackErr != nil {
-				return nil, fallbackErr
-			}
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	var oauthToken OAuthToken
@@ -488,10 +508,7 @@ func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
 				cachePath := filepath.Join(profileDir, emailFilename)
 				_ = os.Remove(cachePath) // Force email re-fetch for updated token
 
-				tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
-				_ = os.MkdirAll(tokenDir, 0700)
-				tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
-				_ = WriteFileAtomic(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
+				_ = WriteTokenToProfile(profileDir, rawJSON)
 			}
 			return nil
 		}
@@ -511,10 +528,7 @@ func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
 			cachePath := filepath.Join(profileDir, emailFilename)
 			_ = os.Remove(cachePath) // Force email re-fetch for new token
 
-			tokenDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
-			_ = os.MkdirAll(tokenDir, 0700)
-			tokenPath := filepath.Join(tokenDir, "antigravity-oauth-token")
-			_ = WriteFileAtomic(tokenPath, []byte(strings.TrimSpace(rawJSON)+"\n"), 0600)
+			_ = WriteTokenToProfile(profileDir, rawJSON)
 			return nil
 		}
 
@@ -528,8 +542,6 @@ func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
 		return nil
 	})
 }
-
-
 
 // EnsureKeychain links the profile's Library/Keychains directory to the user's main Library/Keychains on macOS.
 // This prevents macOS SecurityAgent from showing system UI popup dialogs ("A keychain cannot be found")
@@ -593,13 +605,10 @@ func IsCLIConfigured(name string) bool {
 	if err != nil {
 		return false
 	}
-	tok1 := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
-	if info, err := os.Stat(tok1); err == nil && !info.IsDir() && info.Size() > 0 {
-		return true
-	}
-	tok2 := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
-	if info, err := os.Stat(tok2); err == nil && !info.IsDir() && info.Size() > 0 {
-		return true
+	for _, p := range GetTokenFilePaths(profileDir) {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() && info.Size() > 0 {
+			return true
+		}
 	}
 	return false
 }

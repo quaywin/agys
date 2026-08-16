@@ -224,29 +224,7 @@ func ReadToken(profileName string) (*OAuthToken, error) {
 	if err != nil {
 		return nil, err
 	}
-	tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
-	data, err := os.ReadFile(tokenPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fallbackPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token")
-			var fallbackErr error
-			data, fallbackErr = os.ReadFile(fallbackPath)
-			if fallbackErr != nil {
-				if os.IsNotExist(fallbackErr) {
-					return nil, fmt.Errorf("token file not found (not logged in)")
-				}
-				return nil, fmt.Errorf("failed to read token file: %w", fallbackErr)
-			}
-		} else {
-			return nil, fmt.Errorf("failed to read token file: %w", err)
-		}
-	}
-
-	var oauthToken OAuthToken
-	if err := json.Unmarshal(data, &oauthToken); err != nil {
-		return nil, fmt.Errorf("failed to parse token JSON: %w", err)
-	}
-	return &oauthToken, nil
+	return ReadTokenFromDir(profileDir)
 }
 
 // IsTokenExpired checks if the token is expired or will expire in less than 2 minutes.
@@ -330,13 +308,12 @@ func refreshOAuthTokenDirect(ctx context.Context, profileName string) error {
 	if err != nil {
 		return err
 	}
-	tokenPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 	updatedData, err := json.MarshalIndent(token, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal updated token: %w", err)
 	}
 
-	return os.WriteFile(tokenPath, updatedData, 0600)
+	return WriteTokenToProfile(profileDir, string(updatedData))
 }
 
 // RefreshToken refreshes the OAuth access token for a given profile using Google's OAuth endpoint.
