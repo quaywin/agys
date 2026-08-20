@@ -316,6 +316,53 @@ func FormatDiffForPromptWithStat(stagedFiles []string, diffContent string, diffS
 	return sb.String()
 }
 
+// CleanTerminalMarkdown strips markdown symbols, LaTeX math expressions, and formatting artifacts for clean CLI and Git log display.
+func CleanTerminalMarkdown(text string) string {
+	if text == "" {
+		return ""
+	}
+
+	// 1. Replace LaTeX arrows and math symbols
+	text = strings.ReplaceAll(text, `$\rightarrow$`, "->")
+	text = strings.ReplaceAll(text, `$\to$`, "->")
+	text = strings.ReplaceAll(text, `\rightarrow`, "->")
+	text = strings.ReplaceAll(text, `\to`, "->")
+	text = strings.ReplaceAll(text, `$\leftarrow$`, "<-")
+	text = strings.ReplaceAll(text, `\leftarrow`, "<-")
+	text = strings.ReplaceAll(text, `$\Rightarrow$`, "=>")
+	text = strings.ReplaceAll(text, `\Rightarrow`, "=>")
+	text = strings.ReplaceAll(text, `$\leftrightarrow$`, "<->")
+	text = strings.ReplaceAll(text, `\leftrightarrow`, "<->")
+
+	// 2. Remove remaining inline math $...$ wrappers
+	mathRegex := regexp.MustCompile(`\$([^\$\n]+)\$`)
+	text = mathRegex.ReplaceAllString(text, "$1")
+
+	// 3. Remove bold / italic markdown markers (**text**, *text*, __text__, _text_)
+	boldRegex := regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	text = boldRegex.ReplaceAllString(text, "$1")
+
+	boldUnderscoreRegex := regexp.MustCompile(`__([^_]+)__`)
+	text = boldUnderscoreRegex.ReplaceAllString(text, "$1")
+
+	// 4. Clean up inline backticks around words (e.g. `Indicators` -> Indicators)
+	backtickRegex := regexp.MustCompile("`([^`\n]+)`")
+	text = backtickRegex.ReplaceAllString(text, "$1")
+
+	// 5. Remove markdown code fences if any
+	text = strings.ReplaceAll(text, "```", "")
+
+	// 6. Clean up line by line
+	lines := strings.Split(text, "\n")
+	var cleanedLines []string
+	for _, l := range lines {
+		trimmed := strings.TrimRight(l, " \t\r")
+		cleanedLines = append(cleanedLines, trimmed)
+	}
+
+	return strings.TrimSpace(strings.Join(cleanedLines, "\n"))
+}
+
 // ParseCommitCheckResult extracts CHECK_SUMMARY and COMMIT_MESSAGE from agy prompt output.
 func ParseCommitCheckResult(output string, userProvidedMessage string) CommitCheckResult {
 	cleaned := strings.TrimSpace(output)
@@ -323,37 +370,45 @@ func ParseCommitCheckResult(output string, userProvidedMessage string) CommitChe
 		CommitMessage: strings.TrimSpace(userProvidedMessage),
 	}
 
-	// Try extracting CHECK_SUMMARY
+	// 1. Try extracting CHECK_SUMMARY
 	summaryRegex := regexp.MustCompile(`(?i)(?:\*\*|\#\#\s*)?CHECK_SUMMARY:?\s*\*?\*?\s*\n?([\s\S]*?)(?:(?:\*\*|\#\#\s*)?COMMIT_MESSAGE:?|$)`)
 	if match := summaryRegex.FindStringSubmatch(cleaned); len(match) > 1 {
-		result.CheckSummary = strings.TrimSpace(match[1])
+		result.CheckSummary = CleanTerminalMarkdown(match[1])
 	}
 
-	// Try extracting COMMIT_MESSAGE if user didn't explicitly provide one
+	// 2. Try extracting COMMIT_MESSAGE if user didn't explicitly provide one
 	if result.CommitMessage == "" {
 		msgRegex := regexp.MustCompile(`(?i)(?:\*\*|\#\#\s*)?COMMIT_MESSAGE:?\s*\*?\*?\s*\n?([\s\S]*?)$`)
 		if match := msgRegex.FindStringSubmatch(cleaned); len(match) > 1 {
 			msgBlock := strings.TrimSpace(match[1])
-			lines := strings.Split(msgBlock, "\n")
+			msgCleaned := CleanTerminalMarkdown(msgBlock)
+
+			lines := strings.Split(msgCleaned, "\n")
+			var filteredLines []string
 			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				line = strings.Trim(line, "`\"'#*")
-				if line != "" && !strings.HasPrefix(strings.ToLower(line), "check_summary") {
-					result.CommitMessage = line
-					break
+				tLine := strings.TrimSpace(line)
+				tLine = strings.Trim(tLine, "`\"'")
+				if strings.HasPrefix(strings.ToLower(tLine), "check_summary") {
+					continue
 				}
+				filteredLines = append(filteredLines, tLine)
+			}
+
+			fullMsg := strings.TrimSpace(strings.Join(filteredLines, "\n"))
+			if fullMsg != "" {
+				result.CommitMessage = fullMsg
 			}
 		}
 	}
 
 	// Fallback parsing if headers weren't found
 	if result.CommitMessage == "" {
-		// Look for conventional commit prefix in output lines
 		lines := strings.Split(cleaned, "\n")
 		convRegex := regexp.MustCompile(`(?i)^(feat|fix|refactor|docs|style|test|chore|build|ci|perf)(\(.*\))?: .+`)
 
 		for i := len(lines) - 1; i >= 0; i-- {
 			line := strings.TrimSpace(lines[i])
+			line = CleanTerminalMarkdown(line)
 			line = strings.Trim(line, "`\"'*")
 			if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
 				line = strings.TrimSpace(line[2:])
@@ -364,10 +419,10 @@ func ParseCommitCheckResult(output string, userProvidedMessage string) CommitChe
 			}
 		}
 
-		// Ultimate fallback: take last non-empty line if it doesn't look like markdown formatting/comments
 		if result.CommitMessage == "" {
 			for i := len(lines) - 1; i >= 0; i-- {
 				line := strings.TrimSpace(lines[i])
+				line = CleanTerminalMarkdown(line)
 				if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "*") && !strings.HasPrefix(line, "`") {
 					result.CommitMessage = strings.Trim(line, "\"`'")
 					break
@@ -378,7 +433,7 @@ func ParseCommitCheckResult(output string, userProvidedMessage string) CommitChe
 
 	if result.CheckSummary == "" {
 		if idx := strings.Index(cleaned, "COMMIT_MESSAGE:"); idx > 0 {
-			result.CheckSummary = strings.TrimSpace(cleaned[:idx])
+			result.CheckSummary = CleanTerminalMarkdown(cleaned[:idx])
 		} else {
 			result.CheckSummary = "Clean - No issues reported."
 		}
@@ -430,16 +485,24 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 
 	var promptBuilder strings.Builder
 	promptBuilder.WriteString("You are an expert software developer and Git assistant.\n")
+	promptBuilder.WriteString("Formatting rules:\n")
+	promptBuilder.WriteString("- Output in clean plain text suitable for terminal and git log.\n")
+	promptBuilder.WriteString("- Do NOT use LaTeX math syntax (e.g. use '->' instead of '$\\rightarrow$').\n")
+	promptBuilder.WriteString("- Do NOT use markdown bold tags like **bold** in bullet points.\n\n")
 
 	if noCheck {
-		promptBuilder.WriteString("Generate a concise Conventional Commit message based on the staged changes.\n\n")
+		promptBuilder.WriteString("Generate a Conventional Commit message based on the staged changes.\n")
+		promptBuilder.WriteString("Commit message structure:\n")
+		promptBuilder.WriteString("- Line 1: Concise Conventional Commit title (< 72 chars, e.g. feat(scope): title).\n")
+		promptBuilder.WriteString("- If changes touch multiple files or complex logic: add a blank line followed by 2-4 concise bullet points detailing key changes.\n")
+		promptBuilder.WriteString("- If changes are small/simple: output only the single-line commit title.\n\n")
 		promptBuilder.WriteString(diffFormatted)
 		if customPrompt != "" {
 			promptBuilder.WriteString("\n\nAdditional user instructions: ")
 			promptBuilder.WriteString(customPrompt)
 		}
 		promptBuilder.WriteString("\n\nOutput strictly in this format:\n")
-		promptBuilder.WriteString("COMMIT_MESSAGE:\n<conventional commit message>\n")
+		promptBuilder.WriteString("COMMIT_MESSAGE:\n<conventional commit title>\n\n- <bullet point 1>\n- <bullet point 2>\n")
 	} else if userMsg != "" {
 		promptBuilder.WriteString(fmt.Sprintf("The user wants to commit with message: %q.\n\n", userMsg))
 		promptBuilder.WriteString(diffFormatted)
@@ -447,7 +510,11 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 		promptBuilder.WriteString("Output strictly in this format:\n")
 		promptBuilder.WriteString("CHECK_SUMMARY:\n- <bullet point notes or 'Clean - No issues found'>\n")
 	} else {
-		promptBuilder.WriteString("Analyze the staged changes, perform a code review check, and generate a concise Conventional Commit message.\n\n")
+		promptBuilder.WriteString("Analyze the staged changes, perform a code review check, and generate a Conventional Commit message.\n")
+		promptBuilder.WriteString("Commit message structure:\n")
+		promptBuilder.WriteString("- Line 1: Concise Conventional Commit title (< 72 chars, e.g. feat(scope): title).\n")
+		promptBuilder.WriteString("- If changes touch multiple files or complex logic: add a blank line followed by 2-4 concise bullet points detailing key changes.\n")
+		promptBuilder.WriteString("- If changes are small/simple: output only the single-line commit title.\n\n")
 		promptBuilder.WriteString(diffFormatted)
 		if customPrompt != "" {
 			promptBuilder.WriteString("\n\nAdditional user instructions: ")
@@ -455,7 +522,7 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 		}
 		promptBuilder.WriteString("\n\nOutput strictly in this format:\n")
 		promptBuilder.WriteString("CHECK_SUMMARY:\n- <bullet point notes or 'Clean - No issues found'>\n\n")
-		promptBuilder.WriteString("COMMIT_MESSAGE:\n<conventional commit message>\n")
+		promptBuilder.WriteString("COMMIT_MESSAGE:\n<conventional commit title>\n\n- <bullet point 1>\n- <bullet point 2>\n")
 	}
 
 	if model == "" {

@@ -62,6 +62,21 @@ func TestDefaultCommitConstants(t *testing.T) {
 	}
 }
 
+func TestCleanTerminalMarkdown(t *testing.T) {
+	input := `- **Event-driven Architecture**: Transitioned pipeline (` + "`Indicators`" + ` $\rightarrow$ ` + "`Conditions`" + ` $\rightarrow$ ` + "`StrategyHandler`" + `), eliminating latency.
+- **Cache Resilience**: Added explicit ` + "`init_table/0`" + ` and ` + "`:ets.whereis/1`" + ` checks across ` + "`QuaywinTrading.Cache`" + `.
+- **Clean**: No lint issues detected.`
+
+	expected := `- Event-driven Architecture: Transitioned pipeline (Indicators -> Conditions -> StrategyHandler), eliminating latency.
+- Cache Resilience: Added explicit init_table/0 and :ets.whereis/1 checks across QuaywinTrading.Cache.
+- Clean: No lint issues detected.`
+
+	got := CleanTerminalMarkdown(input)
+	if got != expected {
+		t.Errorf("CleanTerminalMarkdown mismatch.\nGot:\n%s\nExpected:\n%s", got, expected)
+	}
+}
+
 func TestParseCommitCheckResult(t *testing.T) {
 	t.Run("Standard structured output with generated message", func(t *testing.T) {
 		output := `
@@ -78,6 +93,33 @@ feat(commit): add stage commit feature
 		}
 		if res.CommitMessage != "feat(commit): add stage commit feature" {
 			t.Errorf("unexpected commit message: %q", res.CommitMessage)
+		}
+	})
+
+	t.Run("Multi-line commit message with bullet point description and clean markdown", func(t *testing.T) {
+		output := `
+CHECK_SUMMARY:
+- **Event-driven Architecture**: Pipeline transitioned (` + "`A`" + ` $\rightarrow$ ` + "`B`" + `).
+- **Clean**: No issues found.
+
+COMMIT_MESSAGE:
+feat(pipeline): transition to event-driven cascade
+
+- **PubSub**: Transition pipeline from timer delays to pubsub (` + "`A`" + ` $\rightarrow$ ` + "`B`" + `)
+- **Cache**: Added ` + "`init_table/0`" + ` checks to prevent race conditions
+`
+		res := ParseCommitCheckResult(output, "")
+		if !strings.Contains(res.CheckSummary, "Pipeline transitioned (A -> B)") {
+			t.Errorf("unexpected check summary: %q", res.CheckSummary)
+		}
+		if !strings.HasPrefix(res.CommitMessage, "feat(pipeline): transition to event-driven cascade") {
+			t.Errorf("expected multi-line title, got: %q", res.CommitMessage)
+		}
+		if !strings.Contains(res.CommitMessage, "- PubSub: Transition pipeline from timer delays to pubsub (A -> B)") {
+			t.Errorf("expected cleaned bullet point in commit message, got: %q", res.CommitMessage)
+		}
+		if !strings.Contains(res.CommitMessage, "- Cache: Added init_table/0 checks to prevent race conditions") {
+			t.Errorf("expected second cleaned bullet point in commit message, got: %q", res.CommitMessage)
 		}
 	})
 
