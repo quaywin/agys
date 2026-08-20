@@ -110,30 +110,26 @@ var commitCmd = &cobra.Command{
 		if commitNoCheck && commitMsg != "" {
 			finalMessage = commitMsg
 			checkSummary = "Skipped (--no-check specified)."
+		} else if commitNoCheck {
+			checkSummary = "Skipped (--no-check specified)."
 		} else {
 			result, err := profile.RunAgyCommitCheck(cmd.Context(), profileDir, stagedFiles, stagedDiff, stagedDiffStat, commitMsg, commitNoCheck, commitModel, commitEffort, commitPrompt)
 			if err != nil {
+				fmt.Fprintf(os.Stderr, "[agys] Warning: AI commit check failed (%v).\n", err)
 				if commitMsg != "" {
-					fmt.Fprintf(os.Stderr, "[agys] Warning: AI code check failed (%v). Falling back to provided message.\n", err)
 					finalMessage = commitMsg
-					checkSummary = "AI check failed."
-				} else {
-					return fmt.Errorf("AI commit check failed: %w", err)
 				}
+				checkSummary = "AI check unavailable."
 			} else {
 				finalMessage = result.CommitMessage
 				checkSummary = result.CheckSummary
 			}
 		}
 
-		if commitNoCheck && commitMsg == "" {
-			checkSummary = "Skipped (--no-check specified)."
-		}
-
 		if strings.TrimSpace(finalMessage) == "" {
 			if !commitYes {
 				reader := bufio.NewReader(os.Stdin)
-				fmt.Print("AI did not generate a commit message. Enter custom commit message: ")
+				fmt.Print("AI was unable to generate a commit message. Enter custom commit message: ")
 				customMsg, _ := reader.ReadString('\n')
 				customMsg = strings.TrimSpace(customMsg)
 				if customMsg == "" {

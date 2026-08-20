@@ -446,7 +446,7 @@ func ParseCommitCheckResult(output string, userProvidedMessage string) CommitChe
 func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraArgs ...string) (string, error) {
 	_ = SyncTrustedWorkspaces()
 
-	args := []string{"-p", prompt}
+	args := []string{"-p", prompt, "--dangerously-skip-permissions", "--disable-slash-commands"}
 	if len(extraArgs) > 0 {
 		args = append(args, extraArgs...)
 	}
