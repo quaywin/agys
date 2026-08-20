@@ -13,7 +13,7 @@ import (
 
 const (
 	MaxDiffBytesForPrompt = 30000 // 30 KB limit for prompt context
-	DefaultCommitModel    = "gemini-3.5-flash"
+	DefaultCommitModel    = "gemini-3.7-flash"
 	DefaultCommitEffort   = "low"
 )
 

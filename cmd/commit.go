@@ -205,7 +205,7 @@ func init() {
 	commitCmd.Flags().BoolVarP(&commitPush, "push", "p", false, "Automatically push to current git branch after committing")
 	commitCmd.Flags().BoolVar(&commitNoCheck, "no-check", false, "Skip AI code review check")
 	commitCmd.Flags().BoolVar(&commitDryRun, "dry-run", false, "Perform AI review and message generation without executing git commit")
-	commitCmd.Flags().StringVar(&commitModel, "model", "", "Override model for agy commit check (defaults to gemini-3.5-flash)")
+	commitCmd.Flags().StringVar(&commitModel, "model", "", "Override model for agy commit check (defaults to gemini-3.7-flash)")
 	commitCmd.Flags().StringVar(&commitEffort, "effort", "", "Override reasoning effort for agy commit check (defaults to low)")
 	commitCmd.Flags().StringVar(&commitPrompt, "prompt", "", "Additional custom prompt instructions for commit check")
 

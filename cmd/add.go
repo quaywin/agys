@@ -40,6 +40,9 @@ var addCmd = &cobra.Command{
 			return err
 		}
 
+		// Persist newly created Keychain token to profile disk storage
+		profile.SyncKeychainTokenToDisk(createdDir, "")
+
 		fmt.Printf("\nSuccessfully configured profile %q!\n", profileName)
 		return nil
 	},
