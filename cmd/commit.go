@@ -95,10 +95,13 @@ var commitCmd = &cobra.Command{
 			return err
 		}
 
-		// 5. Get staged diff & stat
-		stagedDiff, err := profile.GetStagedDiff("")
+		// 5. Get compact staged diff & stat
+		stagedDiff, err := profile.GetCompactStagedDiff("")
 		if err != nil {
-			return err
+			stagedDiff, err = profile.GetStagedDiff("")
+			if err != nil {
+				return err
+			}
 		}
 		stagedDiffStat, _ := profile.GetStagedDiffStat("")
 

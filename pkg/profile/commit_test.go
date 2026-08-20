@@ -35,17 +35,25 @@ func TestIsIgnoredOrLockFile(t *testing.T) {
 
 func TestFormatDiffForPrompt(t *testing.T) {
 	stagedFiles := []string{"main.go", "go.sum", "pkg/profile/commit.go"}
+	nameStatus := map[string]string{
+		"main.go":               "Modified",
+		"go.sum":                "Added",
+		"pkg/profile/commit.go": "Modified",
+	}
 	diffContent := "diff --git a/main.go b/main.go\n+ func main() {}\n\ndiff --git a/go.sum b/go.sum\n+ github.com/foo v1.0.0 h1:123=\n\ndiff --git a/pkg/profile/commit.go b/pkg/profile/commit.go\n+ func RunCheck() {}\n"
 	diffStat := " main.go               | 1 +\n go.sum                | 1 +\n pkg/profile/commit.go | 1 +\n 3 files changed, 3 insertions(+)"
 
-	formatted := FormatDiffForPromptWithStat(stagedFiles, diffContent, diffStat)
+	formatted := FormatCompactDiffForPrompt(stagedFiles, nameStatus, diffStat, diffContent)
 	if !strings.Contains(formatted, "main.go") || !strings.Contains(formatted, "pkg/profile/commit.go") {
 		t.Errorf("expected formatted prompt to contain staged file names, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "[Modified] main.go") {
+		t.Errorf("expected staged action '[Modified] main.go' in prompt, got: %s", formatted)
 	}
 	if !strings.Contains(formatted, "Git Diff Stat:") {
 		t.Errorf("expected formatted prompt to contain Git Diff Stat section, got: %s", formatted)
 	}
-	if !strings.Contains(formatted, "Lockfile / auto-generated diff omitted") {
+	if !strings.Contains(formatted, "Lockfile / asset diff omitted") {
 		t.Errorf("expected go.sum diff to be omitted in formatted prompt, got: %s", formatted)
 	}
 	if !strings.Contains(formatted, "func main()") || !strings.Contains(formatted, "func RunCheck()") {

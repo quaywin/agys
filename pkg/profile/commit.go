@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	MaxDiffBytesForPrompt = 30000 // 30 KB limit for prompt context
+	MaxDiffBytesForPrompt = 16000 // 16 KB total limit for compact prompt context
+	MaxPerFileDiffBytes   = 3000  // 3 KB limit per file
 	DefaultCommitModel    = "gemini-3.7-flash"
 	DefaultCommitEffort   = "low"
 )
@@ -69,6 +70,58 @@ func GetStagedFiles(repoDir string) ([]string, error) {
 		}
 	}
 	return files, nil
+}
+
+// GetStagedNameStatus returns a map of staged file paths to their Git status (Added, Modified, Deleted, Renamed).
+func GetStagedNameStatus(repoDir string) (map[string]string, error) {
+	cmd := exec.Command("git", "diff", "--cached", "--name-status")
+	if repoDir != "" {
+		cmd.Dir = repoDir
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get staged name status: %w", err)
+	}
+
+	res := make(map[string]string)
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			statusCode := parts[0]
+			filePath := parts[len(parts)-1]
+			switch {
+			case strings.HasPrefix(statusCode, "A"):
+				res[filePath] = "Added"
+			case strings.HasPrefix(statusCode, "M"):
+				res[filePath] = "Modified"
+			case strings.HasPrefix(statusCode, "D"):
+				res[filePath] = "Deleted"
+			case strings.HasPrefix(statusCode, "R"):
+				res[filePath] = fmt.Sprintf("Renamed from %s", parts[1])
+			default:
+				res[filePath] = "Modified"
+			}
+		}
+	}
+	return res, nil
+}
+
+// GetCompactStagedDiff returns a compact git diff with 1 context line (-U1) and ignored whitespace (-w).
+func GetCompactStagedDiff(repoDir string) (string, error) {
+	cmd := exec.Command("git", "diff", "--cached", "-U1", "-w", "--no-color")
+	if repoDir != "" {
+		cmd.Dir = repoDir
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return GetStagedDiff(repoDir)
+	}
+	return string(output), nil
 }
 
 // GetStagedDiff returns the raw git diff of all staged changes.
@@ -164,8 +217,6 @@ func ExecuteGitPush(repoDir string) error {
 	return nil
 }
 
-const MaxPerFileDiffBytes = 5000 // 5 KB limit per file to avoid single file hogging prompt
-
 // IsIgnoredOrLockFile returns true if the file is a lockfile, minified asset, binary, or auto-generated output.
 func IsIgnoredOrLockFile(filename string) bool {
 	base := filepath.Base(filename)
@@ -251,18 +302,18 @@ func extractFilePathFromDiffHeader(fileDiff string) string {
 	return ""
 }
 
-// FormatDiffForPrompt formats staged file list and diff content for prompt (maintained for compatibility).
-func FormatDiffForPrompt(stagedFiles []string, diffContent string) string {
-	return FormatDiffForPromptWithStat(stagedFiles, diffContent, "")
-}
-
-// FormatDiffForPromptWithStat formats staged files, git diff stat, and smart per-file diffs for the AI prompt context.
-func FormatDiffForPromptWithStat(stagedFiles []string, diffContent string, diffStat string) string {
+// FormatCompactDiffForPrompt formats high-signal staged changes summary for the AI prompt.
+func FormatCompactDiffForPrompt(stagedFiles []string, nameStatus map[string]string, diffStat string, compactDiff string) string {
 	var sb strings.Builder
-	sb.WriteString("Staged Files Summary:\n")
+	sb.WriteString("Staged File Actions:\n")
 	for _, f := range stagedFiles {
-		sb.WriteString("- ")
-		sb.WriteString(f)
+		status := "Modified"
+		if nameStatus != nil {
+			if s, ok := nameStatus[f]; ok {
+				status = s
+			}
+		}
+		sb.WriteString(fmt.Sprintf("- [%s] %s", status, f))
 		if IsIgnoredOrLockFile(f) {
 			sb.WriteString(" (lockfile/asset - diff omitted)")
 		}
@@ -275,35 +326,45 @@ func FormatDiffForPromptWithStat(stagedFiles []string, diffContent string, diffS
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("\nStaged Code Diffs:\n")
+	sb.WriteString("\nCompact Code Changes:\n")
 
-	if strings.TrimSpace(diffContent) == "" {
-		sb.WriteString("(No diff content available)\n")
+	if strings.TrimSpace(compactDiff) == "" {
+		sb.WriteString("(No code changes available)\n")
 		return sb.String()
 	}
 
-	fileDiffs := splitGitDiff(diffContent)
+	fileDiffs := splitGitDiff(compactDiff)
 	totalBytes := sb.Len()
 
 	for _, fileDiff := range fileDiffs {
 		filePath := extractFilePathFromDiffHeader(fileDiff)
 		if filePath != "" && IsIgnoredOrLockFile(filePath) {
-			sb.WriteString(fmt.Sprintf("\n--- %s ---\n[Lockfile / auto-generated diff omitted]\n", filePath))
+			sb.WriteString(fmt.Sprintf("\n--- %s ---\n[Lockfile / asset diff omitted]\n", filePath))
 			continue
 		}
 
-		formattedFileDiff := fileDiff
-		if len(fileDiff) > MaxPerFileDiffBytes {
-			formattedFileDiff = fileDiff[:MaxPerFileDiffBytes] + fmt.Sprintf("\n... [Diff for %s truncated: first %d bytes shown] ...\n", filePath, MaxPerFileDiffBytes)
+		// Filter noise lines (index ..., --- a/..., +++ b/...)
+		lines := strings.Split(fileDiff, "\n")
+		var compactLines []string
+		for _, l := range lines {
+			if strings.HasPrefix(l, "index ") || strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "+++ ") {
+				continue
+			}
+			compactLines = append(compactLines, l)
+		}
+		formattedFileDiff := strings.Join(compactLines, "\n")
+
+		if len(formattedFileDiff) > MaxPerFileDiffBytes {
+			formattedFileDiff = formattedFileDiff[:MaxPerFileDiffBytes] + fmt.Sprintf("\n... [Diff for %s truncated: first %d bytes shown] ...\n", filePath, MaxPerFileDiffBytes)
 		}
 
 		if totalBytes+len(formattedFileDiff) > MaxDiffBytesForPrompt {
 			rem := MaxDiffBytesForPrompt - totalBytes
-			if rem > 200 {
+			if rem > 150 {
 				sb.WriteString(formattedFileDiff[:rem])
-				sb.WriteString("\n... [Overall staged diff truncated due to prompt size limit] ...\n")
+				sb.WriteString("\n... [Overall diff truncated due to prompt size limit] ...\n")
 			} else {
-				sb.WriteString("\n... [Overall staged diff truncated due to prompt size limit] ...\n")
+				sb.WriteString("\n... [Overall diff truncated due to prompt size limit] ...\n")
 			}
 			break
 		}
@@ -314,6 +375,16 @@ func FormatDiffForPromptWithStat(stagedFiles []string, diffContent string, diffS
 	}
 
 	return sb.String()
+}
+
+// FormatDiffForPrompt formats staged file list and diff content for prompt (backward compatible).
+func FormatDiffForPrompt(stagedFiles []string, diffContent string) string {
+	return FormatDiffForPromptWithStat(stagedFiles, diffContent, "")
+}
+
+// FormatDiffForPromptWithStat formats staged files, git diff stat, and smart per-file diffs for the AI prompt context.
+func FormatDiffForPromptWithStat(stagedFiles []string, diffContent string, diffStat string) string {
+	return FormatCompactDiffForPrompt(stagedFiles, nil, diffStat, diffContent)
 }
 
 // CleanTerminalMarkdown strips markdown symbols, LaTeX math expressions, and formatting artifacts for clean CLI and Git log display.
@@ -481,7 +552,8 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 
 // RunAgyCommitCheck performs the AI review and/or commit message generation using the specified profile.
 func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []string, diffContent string, diffStat string, userMsg string, noCheck bool, model string, effort string, customPrompt string) (*CommitCheckResult, error) {
-	diffFormatted := FormatDiffForPromptWithStat(stagedFiles, diffContent, diffStat)
+	nameStatus, _ := GetStagedNameStatus("")
+	diffFormatted := FormatCompactDiffForPrompt(stagedFiles, nameStatus, diffStat, diffContent)
 
 	var promptBuilder strings.Builder
 	promptBuilder.WriteString("You are an expert software developer and Git assistant.\n")
