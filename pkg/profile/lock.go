@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -14,6 +15,9 @@ const (
 	lockFilename         = ".agys.lock"
 	keychainLockFilename = ".keychain.lock"
 )
+
+var inProcessFileMutex sync.Mutex
+var inProcessKeychainMutex sync.Mutex
 
 // GetLockFilePath returns the absolute path to ~/.agys/.agys.lock.
 func GetLockFilePath() (string, error) {
@@ -30,6 +34,9 @@ func GetLockFilePath() (string, error) {
 // WithFileLock executes function fn under an exclusive OS file lock with a 5-second default timeout.
 // This prevents cross-process race conditions when multiple agys CLI instances run concurrently.
 func WithFileLock(ctx context.Context, fn func() error) error {
+	inProcessFileMutex.Lock()
+	defer inProcessFileMutex.Unlock()
+
 	lockPath, err := GetLockFilePath()
 	if err != nil {
 		return err
@@ -61,6 +68,9 @@ func WithFileLock(ctx context.Context, fn func() error) error {
 
 // WithKeychainLock executes function fn under an exclusive OS file lock for macOS Keychain synchronization operations.
 func WithKeychainLock(ctx context.Context, fn func() error) error {
+	inProcessKeychainMutex.Lock()
+	defer inProcessKeychainMutex.Unlock()
+
 	agysDir, err := GetAgysDir()
 	if err != nil {
 		return fn()

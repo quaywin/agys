@@ -57,3 +57,24 @@ func TestEnsureDefaultModelAndEffort(t *testing.T) {
 		}
 	})
 }
+
+func TestRemoteControlArgHandling(t *testing.T) {
+	t.Run("Ensures model and remote-control flags are preserved", func(t *testing.T) {
+		args := []string{"--remote-control"}
+		res := EnsureDefaultModelAndEffort(args)
+		// Should include model and effort
+		hasModel := false
+		hasRemote := false
+		for _, a := range res {
+			if a == "--model" {
+				hasModel = true
+			}
+			if a == "--remote-control" {
+				hasRemote = true
+			}
+		}
+		if !hasModel || !hasRemote {
+			t.Errorf("expected both --model and --remote-control in result, got %v", res)
+		}
+	})
+}

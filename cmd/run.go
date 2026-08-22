@@ -115,6 +115,7 @@ var runCmd = &cobra.Command{
 
 func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) error {
 	agyArgs = EnsureDefaultModelAndEffort(agyArgs)
+	agyArgs, _, _ = profile.EnsureAvailableHubPort(agyArgs)
 
 	// Detect if the user is resuming a conversation and auto-switch to the owning profile
 	var detectedProfile string
@@ -163,6 +164,10 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 	if err != nil {
 		return err
 	}
+
+	// Synchronize tokens across all candidate locations and ensure onboarding state
+	_ = profile.SyncAllTokenLocations(profileDir)
+	_ = profile.EnsureOnboardingCompleted(profileDir)
 
 	var expectedRefreshToken string
 	if initTok, readErr := profile.ReadToken(targetProfile); readErr == nil && initTok != nil {

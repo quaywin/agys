@@ -85,6 +85,10 @@ var ideCmd = &cobra.Command{
 		// Set as current profile
 		_ = profile.SetCurrent(targetProfile)
 
+		// Automatically sync OAuth token to all locations and ensure onboarding state
+		_ = profile.SyncAllTokenLocations(profileDir)
+		_ = profile.EnsureOnboardingCompleted(profileDir)
+
 		ideDataDir := filepath.Join(profileDir, "ide-data")
 		_ = os.MkdirAll(ideDataDir, 0755)
 

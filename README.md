@@ -14,6 +14,7 @@
 | **Antigravity CLI (`agy`)** | `agys run <profile>` | `$HOME` Override | Isolated terminal sessions, real-time 5h/weekly quota tracking, auto-failover, remote SSH execution |
 | **Antigravity 2.0 GUI** | `agys gui <profile>` | macOS Keychain Sync | macOS Keychain OAuth sync, process cleanup, confirmation prompts, auto-seeding |
 | **Antigravity IDE** | `agys ide <profile>` | `--user-data-dir` | Parallel multi-window IDE sessions, independent logged-in accounts, smart auto-selection |
+| **Antigravity Remote Control** | `agys remote <profile>` | Detached Daemon / Cloud Relay | Background headless daemon, auto-port collision resolution, web UI (`localhost:PORT`) & Cloud portal (`antigravity.google`) |
 
 ---
 
@@ -316,7 +317,37 @@ agys commit -m "feat(auth): support multi-account token refresh"
 agys commit --dry-run
 ```
 
-### 16. Version & Upgrading
+### 16. Antigravity Remote Control (`agys remote`)
+
+Launch and manage background Antigravity Remote Control daemons across profiles without occupying your terminal. Supports auto-port collision resolution, credential sync, and access via both local browser (`http://localhost:PORT`) and Google Cloud Portal (`https://antigravity.google`):
+
+```bash
+# Start background Remote Control daemon for default or auto profile
+agys remote
+
+# Start background Remote Control daemon for a specific profile
+agys remote start work
+
+# Start with custom cloud instance name and specific port
+agys remote start work --name "my-macbook" --port 4400
+
+# View all active running remote daemons, ports, URLs, and uptime
+agys remote status
+# or
+agys remote ls
+
+# View or follow daemon output logs
+agys remote logs work -f
+
+# Restart daemon for a profile
+agys remote restart work
+
+# Stop a specific daemon or all running daemons
+agys remote stop work
+agys remote stop --all
+```
+
+### 17. Version & Upgrading
 
 ```bash
 # Check installed version

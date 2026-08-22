@@ -361,8 +361,10 @@ func GetTokenFilePaths(profileDir string) []string {
 	return []string{
 		filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
 		filepath.Join(profileDir, ".gemini", "antigravity", "antigravity-oauth-token"),
+		filepath.Join(profileDir, ".gemini", "jetski-standalone-oauth-token"),
 		filepath.Join(profileDir, ".gemini", "antigravity-cli", "jetski-standalone-oauth-token"),
 		filepath.Join(profileDir, ".gemini", "antigravity", "jetski-standalone-oauth-token"),
+		filepath.Join(profileDir, ".gemini", "antigravity-ide", "antigravity-oauth-token"),
 		filepath.Join(profileDir, ".gemini", "oauth_creds.json"),
 	}
 }
@@ -381,15 +383,20 @@ func ReadRawTokenData(profileDir string) ([]byte, error) {
 // WriteTokenToProfile writes token JSON to standard token file paths in profileDir.
 func WriteTokenToProfile(profileDir string, rawJSON string) error {
 	trimmed := strings.TrimSpace(rawJSON) + "\n"
-	paths := []string{
-		filepath.Join(profileDir, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
-		filepath.Join(profileDir, ".gemini", "antigravity", "antigravity-oauth-token"),
-	}
-	for _, p := range paths {
+	for _, p := range GetTokenFilePaths(profileDir) {
 		_ = os.MkdirAll(filepath.Dir(p), 0700)
 		_ = WriteFileAtomic(p, []byte(trimmed), 0600)
 	}
 	return nil
+}
+
+// SyncAllTokenLocations synchronizes existing token data across all standard token paths in profileDir.
+func SyncAllTokenLocations(profileDir string) error {
+	data, err := ReadRawTokenData(profileDir)
+	if err != nil || len(bytes.TrimSpace(data)) == 0 {
+		return nil
+	}
+	return WriteTokenToProfile(profileDir, string(data))
 }
 
 // ClearKeychainToken removes the cached generic password item from macOS Keychain.
