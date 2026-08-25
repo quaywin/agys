@@ -522,7 +522,7 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 		args = append(args, extraArgs...)
 	}
 
-	execCmd := BuildCmd(profileDir, args...)
+	execCmd := BuildCmdContext(ctx, profileDir, args...)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	execCmd.Stdout = &stdoutBuf

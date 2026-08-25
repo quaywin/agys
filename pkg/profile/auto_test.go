@@ -93,7 +93,7 @@ func TestCalculate5HQuotaScore(t *testing.T) {
 		}
 	})
 
-	t.Run("no 5h window buckets", func(t *testing.T) {
+	t.Run("fallback to weekly quota when no 5h window buckets", func(t *testing.T) {
 		summary := &QuotaSummary{
 			Groups: []QuotaGroup{
 				{
@@ -102,6 +102,22 @@ func TestCalculate5HQuotaScore(t *testing.T) {
 						{Window: "daily", RemainingFraction: 0.85},
 						{Window: "weekly", RemainingFraction: 0.99},
 					},
+				},
+			},
+		}
+
+		score := Calculate5HQuotaScore(summary)
+		if score != 0.99 {
+			t.Errorf("expected fallback Gemini weekly score 0.99, got %f", score)
+		}
+	})
+
+	t.Run("empty buckets across all groups", func(t *testing.T) {
+		summary := &QuotaSummary{
+			Groups: []QuotaGroup{
+				{
+					DisplayName: "Gemini 1.5 Pro",
+					Buckets:     []QuotaBucket{},
 				},
 			},
 		}

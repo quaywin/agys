@@ -96,8 +96,15 @@ else
 fi
 
 info "Installing ${BINARY_NAME} to ${INSTALL_DIR}..."
+rm -f "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
 cp "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+
+# On macOS, clear quarantine attributes and re-sign binary to prevent kernel AMFI SIGKILL (Killed: 9)
+if [ "${OS}" = "darwin" ]; then
+    xattr -c "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
+    codesign --force --sign - "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
+fi
 
 # Check if INSTALL_DIR is in PATH
 case ":$PATH:" in

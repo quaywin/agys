@@ -103,6 +103,25 @@ func TestRenderQuotaTable(t *testing.T) {
 			Active:      false,
 			Error:       "not logged in",
 		},
+		{
+			ProfileName: "newaccount",
+			Email:       "new@example.com",
+			Active:      true,
+			Quota: &QuotaSummary{
+				Groups: []QuotaGroup{
+					{
+						DisplayName: "Gemini Models",
+						Buckets: []QuotaBucket{
+							{
+								Window:            "weekly",
+								RemainingFraction: 1.0,
+								ResetTime:         resetIn3d,
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	var buf bytes.Buffer
@@ -130,6 +149,10 @@ func TestRenderQuotaTable(t *testing.T) {
 
 	if !strings.Contains(out, "[!] Error: not logged in") {
 		t.Errorf("expected error message in output for inactive profile, got:\n%s", out)
+	}
+
+	if !strings.Contains(out, "newaccount") || !strings.Contains(out, "100.0% [██████████]") {
+		t.Errorf("expected newaccount to show full 100.0%% quota, got:\n%s", out)
 	}
 }
 

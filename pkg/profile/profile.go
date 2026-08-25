@@ -286,6 +286,11 @@ func UnsetCurrent() error {
 
 // BuildCmd constructs an exec.Cmd for running `agy` with isolated profile environment variables.
 func BuildCmd(profileDir string, args ...string) *exec.Cmd {
+	return BuildCmdContext(context.Background(), profileDir, args...)
+}
+
+// BuildCmdContext constructs an exec.Cmd with context cancellation for running `agy` with isolated profile environment variables.
+func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *exec.Cmd {
 	_ = EnsureKeychain(profileDir)
 
 	agyPath, err := exec.LookPath("agy")
@@ -314,7 +319,7 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 		agyPath = "agy"
 	}
 
-	cmd := exec.Command(agyPath, args...)
+	cmd := exec.CommandContext(ctx, agyPath, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

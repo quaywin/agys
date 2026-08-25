@@ -56,6 +56,32 @@ func Calculate5HQuotaScore(summary *QuotaSummary) float64 {
 	if bestGeminiFraction >= 0 {
 		return bestGeminiFraction
 	}
+	if bestAnyFraction >= 0 {
+		return bestAnyFraction
+	}
+
+	// Fallback to weekly/available buckets if no 5h bucket exists (e.g., brand new account)
+	for _, group := range summary.Groups {
+		gName := strings.ToLower(strings.TrimSpace(group.DisplayName))
+		gDesc := strings.ToLower(strings.TrimSpace(group.Description))
+
+		for _, bucket := range group.Buckets {
+			d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
+			b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
+			isGemini := strings.Contains(gName, "gemini") || strings.Contains(gDesc, "gemini") || strings.Contains(d, "gemini") || strings.Contains(b, "gemini")
+
+			if bucket.RemainingFraction > bestAnyFraction {
+				bestAnyFraction = bucket.RemainingFraction
+			}
+			if isGemini && bucket.RemainingFraction > bestGeminiFraction {
+				bestGeminiFraction = bucket.RemainingFraction
+			}
+		}
+	}
+
+	if bestGeminiFraction >= 0 {
+		return bestGeminiFraction
+	}
 	return bestAnyFraction
 }
 

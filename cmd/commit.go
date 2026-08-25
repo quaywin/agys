@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/quaywin/agys/pkg/profile"
 	"github.com/spf13/cobra"
@@ -116,7 +118,9 @@ var commitCmd = &cobra.Command{
 		} else if commitNoCheck {
 			checkSummary = "Skipped (--no-check specified)."
 		} else {
-			result, err := profile.RunAgyCommitCheck(cmd.Context(), profileDir, stagedFiles, stagedDiff, stagedDiffStat, commitMsg, commitNoCheck, commitModel, commitEffort, commitPrompt)
+			checkCtx, cancelCheck := context.WithTimeout(cmd.Context(), 90*time.Second)
+			result, err := profile.RunAgyCommitCheck(checkCtx, profileDir, stagedFiles, stagedDiff, stagedDiffStat, commitMsg, commitNoCheck, commitModel, commitEffort, commitPrompt)
+			cancelCheck()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[agys] Warning: AI commit check failed (%v).\n", err)
 				if commitMsg != "" {

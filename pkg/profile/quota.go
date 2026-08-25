@@ -659,13 +659,26 @@ func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile st
 				}
 			}
 
+			// Fourth pass: cross-fallback if only one window type is available (e.g. brand new account with only weekly limit)
+			isFallback5h := false
+			isFallbackWeekly := false
+			if b5h == nil && bWeekly != nil {
+				b5h = bWeekly
+				isFallback5h = true
+			} else if bWeekly == nil && b5h != nil {
+				bWeekly = b5h
+				isFallbackWeekly = true
+			}
+
 			q5h := "N/A"
 			r5h := "-"
 			if b5h != nil {
 				pct := b5h.RemainingFraction * 100
 				bar := ProgressBar(b5h.RemainingFraction, 10)
 				q5h = fmt.Sprintf("%5.1f%% [%s]", pct, bar)
-				r5h = FormatResetTime(b5h.ResetTime, b5h.RemainingFraction)
+				if !isFallback5h {
+					r5h = FormatResetTime(b5h.ResetTime, b5h.RemainingFraction)
+				}
 			}
 
 			qWeekly := "N/A"
@@ -674,7 +687,9 @@ func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile st
 				pct := bWeekly.RemainingFraction * 100
 				bar := ProgressBar(bWeekly.RemainingFraction, 10)
 				qWeekly = fmt.Sprintf("%5.1f%% [%s]", pct, bar)
-				rWeekly = FormatResetTime(bWeekly.ResetTime, bWeekly.RemainingFraction)
+				if !isFallbackWeekly {
+					rWeekly = FormatResetTime(bWeekly.ResetTime, bWeekly.RemainingFraction)
+				}
 			}
 
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
