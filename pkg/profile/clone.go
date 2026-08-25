@@ -32,7 +32,7 @@ func Clone(srcName, dstName string) error {
 		return fmt.Errorf("destination profile %q already exists", dstName)
 	}
 
-	if err := copyDir(srcDir, dstDir); err != nil {
+	if err := copyDir(srcDir, dstDir, srcDir); err != nil {
 		return err
 	}
 
@@ -45,7 +45,7 @@ func Clone(srcName, dstName string) error {
 	return nil
 }
 
-func copyDir(src, dst string) error {
+func copyDir(src, dst, rootSrc string) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
 		return err
@@ -64,16 +64,26 @@ func copyDir(src, dst string) error {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+
+		relInsideProfile, err := filepath.Rel(rootSrc, srcPath)
+		if err != nil {
+			return err
+		}
+
+		skip, _ := ShouldSkipArchiveEntry(relInsideProfile, info)
+		if skip {
+			continue
+		}
+
 		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
+			if err := copyDir(srcPath, dstPath, rootSrc); err != nil {
 				return err
 			}
 		} else {
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-
 			if info.Mode()&os.ModeSymlink != 0 {
 				linkTarget, err := os.Readlink(srcPath)
 				if err != nil {

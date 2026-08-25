@@ -10,6 +10,70 @@ import (
 	"strings"
 )
 
+var ignoredDirNames = map[string]bool{
+	".cache":             true,
+	".npm":               true,
+	".yarn":              true,
+	".pnpm-store":        true,
+	".rustup":            true,
+	".cargo":             true,
+	".docker":            true,
+	".Trash":             true,
+	"node_modules":       true,
+	"colima":             true,
+	"_lima":              true,
+	"_disks":             true,
+	"Caches":             true,
+	"GPUCache":           true,
+	"DawnGraphiteCache":  true,
+	"DawnWebGPUCache":    true,
+	"Code Cache":         true,
+	"CachedData":         true,
+	"CachedProfilesData": true,
+	"Crashpad":           true,
+	"crashes":            true,
+}
+
+// ShouldSkipArchiveEntry determines whether a file or directory inside a profile should be excluded from export/cloning.
+func ShouldSkipArchiveEntry(relPathInsideProfile string, info os.FileInfo) (skip bool, isDir bool) {
+	if relPathInsideProfile == "." || relPathInsideProfile == "" {
+		return false, false
+	}
+
+	if info == nil {
+		return false, false
+	}
+
+	// Skip special non-regular files (sockets, fifos, devices)
+	if info.Mode()&(os.ModeSocket|os.ModeNamedPipe|os.ModeDevice) != 0 {
+		return true, info.IsDir()
+	}
+
+	base := info.Name()
+	if base == ".agys.lock" || base == ".keychain.lock" || base == ".DS_Store" {
+		return true, info.IsDir()
+	}
+
+	parts := strings.Split(filepath.ToSlash(relPathInsideProfile), "/")
+	for i, part := range parts {
+		if ignoredDirNames[part] {
+			return true, info.IsDir()
+		}
+		// Profile root specific skips
+		if i == 0 && (part == "go" || part == ".npm" || part == ".cache" || part == ".rustup" || part == ".cargo" || part == ".docker") {
+			return true, info.IsDir()
+		}
+	}
+
+	// ide-data temporary logs or blob storage
+	if strings.HasPrefix(relPathInsideProfile, "ide-data/logs") ||
+		strings.HasPrefix(relPathInsideProfile, "ide-data/blob_storage") {
+		return true, info.IsDir()
+	}
+
+	return false, false
+}
+
 // ExportProfile packages a profile directory into a gzipped tar archive.
 func ExportProfile(profileName string, writer io.Writer) error {
 	exists, profileDir, err := Exists(profileName)
@@ -27,9 +91,22 @@ func ExportProfile(profileName string, writer io.Writer) error {
 	defer tw.Close()
 
 	baseDir := filepath.Dir(profileDir)
-	return filepath.Walk(profileDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(profileDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		relInsideProfile, err := filepath.Rel(profileDir, path)
+		if err != nil {
+			return err
+		}
+
+		skip, isDir := ShouldSkipArchiveEntry(relInsideProfile, info)
+		if skip {
+			if isDir {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
 		relPath, err := filepath.Rel(baseDir, path)
@@ -59,18 +136,12 @@ func ExportProfile(profileName string, writer io.Writer) error {
 		}
 
 		if info.Mode().IsRegular() {
-			err := func() error {
-				file, err := os.Open(path)
-				if err != nil {
-					return err
-				}
-				defer file.Close()
-
-				if _, err := io.Copy(tw, file); err != nil {
-					return err
-				}
-				return nil
-			}()
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(tw, file)
+			file.Close()
 			if err != nil {
 				return err
 			}
@@ -78,6 +149,14 @@ func ExportProfile(profileName string, writer io.Writer) error {
 
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return gw.Close()
 }
 
 // ImportProfile extracts a gzipped tar archive into the profiles base directory under the target profile name.
@@ -222,6 +301,19 @@ func ExportAll(writer io.Writer) error {
 				return err
 			}
 
+			relInsideProfile, err := filepath.Rel(profileDir, path)
+			if err != nil {
+				return err
+			}
+
+			skip, isDir := ShouldSkipArchiveEntry(relInsideProfile, info)
+			if skip {
+				if isDir {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
 			relPath, err := filepath.Rel(baseDir, path)
 			if err != nil {
 				return err
@@ -249,18 +341,12 @@ func ExportAll(writer io.Writer) error {
 			}
 
 			if info.Mode().IsRegular() {
-				err := func() error {
-					file, err := os.Open(path)
-					if err != nil {
-						return err
-					}
-					defer file.Close()
-
-					if _, err := io.Copy(tw, file); err != nil {
-						return err
-					}
-					return nil
-				}()
+				file, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+				_, err = io.Copy(tw, file)
+				file.Close()
 				if err != nil {
 					return err
 				}
@@ -272,7 +358,11 @@ func ExportAll(writer io.Writer) error {
 			return err
 		}
 	}
-	return nil
+
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return gw.Close()
 }
 
 // ImportAll restores all profiles from a gzipped tar archive.

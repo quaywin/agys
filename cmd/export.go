@@ -44,6 +44,7 @@ var exportCmd = &cobra.Command{
 			}
 			defer file.Close()
 
+			fmt.Println("Exporting all profiles...")
 			if err := profile.ExportAll(file); err != nil {
 				_ = os.Remove(outPath)
 				return err
@@ -89,6 +90,7 @@ var exportCmd = &cobra.Command{
 		}
 		defer file.Close()
 
+		fmt.Printf("Exporting profile %q...\n", profileName)
 		if err := profile.ExportProfile(profileName, file); err != nil {
 			_ = os.Remove(outPath)
 			return err

@@ -4,8 +4,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -155,3 +157,75 @@ func TestImportDirectoryTraversalProtection(t *testing.T) {
 	}
 	t.Logf("Blocked malicious import as expected: %v", err)
 }
+
+func TestExportExcludesCacheAndBloat(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	profName := "bloat-profile"
+	dir, err := Create(profName)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// Create valid profile file
+	_ = os.MkdirAll(filepath.Join(dir, ".gemini", "antigravity-cli"), 0700)
+	_ = os.WriteFile(filepath.Join(dir, ".gemini", "antigravity-cli", "settings.json"), []byte(`{}`), 0600)
+
+	// Create bloat dirs that must be excluded
+	_ = os.MkdirAll(filepath.Join(dir, ".cache", "huge"), 0700)
+	_ = os.WriteFile(filepath.Join(dir, ".cache", "huge", "temp.bin"), []byte("junk"), 0600)
+
+	_ = os.MkdirAll(filepath.Join(dir, ".npm", "_cacache"), 0700)
+	_ = os.WriteFile(filepath.Join(dir, ".npm", "_cacache", "cache.dat"), []byte("junk"), 0600)
+
+	_ = os.MkdirAll(filepath.Join(dir, "Library", "Caches", "Chromium"), 0700)
+	_ = os.WriteFile(filepath.Join(dir, "Library", "Caches", "Chromium", "data"), []byte("junk"), 0600)
+
+	_ = os.MkdirAll(filepath.Join(dir, ".config", "colima", "_lima"), 0700)
+	_ = os.WriteFile(filepath.Join(dir, ".config", "colima", "_lima", "disk.img"), []byte("huge-vm-disk"), 0600)
+
+	_ = os.MkdirAll(filepath.Join(dir, "ide-data", "CachedData"), 0700)
+	_ = os.WriteFile(filepath.Join(dir, "ide-data", "CachedData", "code.js"), []byte("junk"), 0600)
+
+	var buf bytes.Buffer
+	if err := ExportProfile(profName, &buf); err != nil {
+		t.Fatalf("ExportProfile failed: %v", err)
+	}
+
+	// Read back archive entries
+	gr, err := gzip.NewReader(&buf)
+	if err != nil {
+		t.Fatalf("gzip reader failed: %v", err)
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	foundSettings := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar read error: %v", err)
+		}
+
+		if strings.Contains(hdr.Name, ".cache") ||
+			strings.Contains(hdr.Name, ".npm") ||
+			strings.Contains(hdr.Name, "Library/Caches") ||
+			strings.Contains(hdr.Name, "colima") ||
+			strings.Contains(hdr.Name, "CachedData") {
+			t.Errorf("Archive contains excluded entry: %s", hdr.Name)
+		}
+
+		if strings.Contains(hdr.Name, "settings.json") {
+			foundSettings = true
+		}
+	}
+
+	if !foundSettings {
+		t.Errorf("Expected settings.json to be included in archive")
+	}
+}
+
