@@ -292,35 +292,6 @@ func TestReadSettingsModel(t *testing.T) {
 	}
 }
 
-func TestReadModelFromTranscript(t *testing.T) {
-	tmpDir := t.TempDir()
-	tPath := filepath.Join(tmpDir, "transcript.jsonl")
-
-	content := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_SETTINGS_CHANGE>\nThe user changed setting ` + "`Model Selection`" + ` from None to Gemini 3.7 Flash (High).\n</USER_SETTINGS_CHANGE>"}`
-	_ = os.WriteFile(tPath, []byte(content), 0600)
-
-	got := ReadModelFromTranscript(tPath)
-	if got != "gemini-3.7-flash" {
-		t.Errorf("Expected 'gemini-3.7-flash', got %q", got)
-	}
-
-	// Another change later in transcript
-	content2 := content + "\n" + `{"step_index":5,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_SETTINGS_CHANGE>\nThe user changed setting ` + "`Model Selection`" + ` from Gemini 3.7 Flash to Claude Sonnet 4.6 (Thinking).\n</USER_SETTINGS_CHANGE>"}`
-	_ = os.WriteFile(tPath, []byte(content2), 0600)
-
-	got = ReadModelFromTranscript(tPath)
-	if got != "claude-sonnet-4" {
-		t.Errorf("Expected 'claude-sonnet-4', got %q", got)
-	}
-
-	// Test real file if exists
-	realFile := "/Users/quaywin/.agys/profiles/quaywin/.gemini/antigravity-cli/brain/2217de39-612e-4775-acff-442e804461b8/.system_generated/logs/transcript.jsonl"
-	if _, err := os.Stat(realFile); err == nil {
-		realGot := ReadModelFromTranscript(realFile)
-		t.Logf("ReadModelFromTranscript(realFile) = %q", realGot)
-	}
-}
-
 func TestResolveActiveModel(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -329,41 +300,26 @@ func TestResolveActiveModel(t *testing.T) {
 		t.Errorf("Expected explicit model to take priority, got %q", got)
 	}
 
-	// 2. Transcript takes priority over .active_model and settings.json
-	brainDir := filepath.Join(tmpDir, ".gemini", "antigravity-cli", "brain", "conv-123", ".system_generated", "logs")
-	_ = os.MkdirAll(brainDir, 0700)
-	tContent := `<USER_SETTINGS_CHANGE>\nThe user changed setting ` + "`Model Selection`" + ` from None to Gemini 3.7 Flash (High).\n</USER_SETTINGS_CHANGE>`
-	_ = os.WriteFile(filepath.Join(brainDir, "transcript.jsonl"), []byte(tContent), 0600)
-
-	// Even if .active_model and settings.json exist, transcript wins
-	_ = os.WriteFile(filepath.Join(tmpDir, ".active_model"), []byte("claude-opus-4"), 0600)
+	// 2. .active_model takes priority over settings.json
+	_ = os.WriteFile(filepath.Join(tmpDir, ".active_model"), []byte("gemini-2.5-pro"), 0600)
 	settingsDir := filepath.Join(tmpDir, ".gemini", "antigravity-cli")
+	_ = os.MkdirAll(settingsDir, 0700)
 	_ = os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{"model": "Claude Opus 4.6 (Thinking)"}`), 0600)
 
 	got := ResolveActiveModel(tmpDir, "")
-	if got != "gemini-3.7-flash" {
-		t.Errorf("Expected transcript to take priority over cache/settings, got %q", got)
+	if got != "gemini-2.5-pro" {
+		t.Errorf("Expected .active_model to take priority over settings.json, got %q", got)
 	}
 
-	// 3. Newer file between .active_model and settings.json wins
+	// 3. Fallback to settings.json when no .active_model
 	tmpDir2 := t.TempDir()
 	settingsDir2 := filepath.Join(tmpDir2, ".gemini", "antigravity-cli")
 	_ = os.MkdirAll(settingsDir2, 0700)
 	_ = os.WriteFile(filepath.Join(settingsDir2, "settings.json"), []byte(`{"model": "Claude Opus 4.6 (Thinking)"}`), 0600)
-	_ = os.Chtimes(filepath.Join(settingsDir2, "settings.json"), time.Now().Add(-10*time.Second), time.Now().Add(-10*time.Second))
-	_ = os.WriteFile(filepath.Join(tmpDir2, ".active_model"), []byte("gemini-2.5-pro"), 0600)
 
-	got = ResolveActiveModel(tmpDir2, "")
-	if got != "gemini-2.5-pro" {
-		t.Errorf("Expected newer .active_model to take priority over older settings.json, got %q", got)
-	}
-
-	// Conversely, if settings.json is touched later, settings.json wins
-	_ = os.Chtimes(filepath.Join(tmpDir2, ".active_model"), time.Now().Add(-10*time.Second), time.Now().Add(-10*time.Second))
-	_ = os.Chtimes(filepath.Join(settingsDir2, "settings.json"), time.Now(), time.Now())
 	got = ResolveActiveModel(tmpDir2, "")
 	if got != "claude-opus-4" {
-		t.Errorf("Expected newer settings.json to take priority over older .active_model, got %q", got)
+		t.Errorf("Expected settings.json model, got %q", got)
 	}
 
 	// 4. Fallback to default "gemini"
