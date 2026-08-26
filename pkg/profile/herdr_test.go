@@ -312,6 +312,13 @@ func TestReadModelFromTranscript(t *testing.T) {
 	if got != "claude-sonnet-4" {
 		t.Errorf("Expected 'claude-sonnet-4', got %q", got)
 	}
+
+	// Test real file if exists
+	realFile := "/Users/quaywin/.agys/profiles/quaywin/.gemini/antigravity-cli/brain/2217de39-612e-4775-acff-442e804461b8/.system_generated/logs/transcript.jsonl"
+	if _, err := os.Stat(realFile); err == nil {
+		realGot := ReadModelFromTranscript(realFile)
+		t.Logf("ReadModelFromTranscript(realFile) = %q", realGot)
+	}
 }
 
 func TestResolveActiveModel(t *testing.T) {
