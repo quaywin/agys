@@ -340,6 +340,19 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 		"XDG_CACHE_HOME":  filepath.Join(profileDir, ".cache"),
 	}
 
+	// Ensure PATH retains real user binary locations so child hook processes can locate agys
+	if userHome, errHome := os.UserHomeDir(); errHome == nil {
+		agysSep := string(filepath.Separator) + ".agys"
+		if idx := strings.Index(userHome, agysSep); idx != -1 {
+			userHome = userHome[:idx]
+		}
+		localBin := filepath.Join(userHome, ".local", "bin")
+		pathEnv := os.Getenv("PATH")
+		if !strings.Contains(pathEnv, localBin) {
+			envMap["PATH"] = localBin + string(os.PathListSeparator) + pathEnv
+		}
+	}
+
 	env := os.Environ()
 	newEnv := make([]string, 0, len(env))
 	seen := make(map[string]bool)

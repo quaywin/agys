@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-# Antigravity CLI Switcher (agys) POSIX installer script
+# Antigravity Ecosystem Switcher (agys) POSIX installer script
 # Usage: curl -fsSL https://raw.githubusercontent.com/quaywin/agys/main/install.sh | bash
 
 REPO_OWNER="quaywin"

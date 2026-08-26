@@ -33,12 +33,24 @@ emit_and_exit() {
 [ -n "${HERDR_SOCKET_PATH:-}" ] || emit_and_exit
 [ -n "${HERDR_PANE_ID:-}" ] || emit_and_exit
 
+# Locate real user home if $HOME is pointing to an isolated profile directory
+REAL_HOME="$HOME"
+case "$HOME" in
+  */.agys/profiles/*)
+    REAL_HOME="${HOME%%/.agys/profiles/*}"
+    ;;
+esac
+
 # Directly invoke agys binary in pure compiled Go (zero Python dependency)
 AGYS_BIN="agys"
 if command -v agys >/dev/null 2>&1; then
   AGYS_BIN="$(command -v agys)"
-elif [ -x "$HOME/.local/bin/agys" ]; then
-  AGYS_BIN="$HOME/.local/bin/agys"
+elif [ -x "$REAL_HOME/.local/bin/agys" ]; then
+  AGYS_BIN="$REAL_HOME/.local/bin/agys"
+elif [ -x "$REAL_HOME/go/bin/agys" ]; then
+  AGYS_BIN="$REAL_HOME/go/bin/agys"
+elif [ -x "/opt/homebrew/bin/agys" ]; then
+  AGYS_BIN="/opt/homebrew/bin/agys"
 elif [ -x "/usr/local/bin/agys" ]; then
   AGYS_BIN="/usr/local/bin/agys"
 fi

@@ -1,6 +1,6 @@
 # Antigravity Ecosystem Switcher (`agys`)
 
-`agys` (Antigravity Switcher) is an open-source CLI utility built in Go that manages and isolates multi-account profiles across the entire Google Antigravity ecosystem — supporting **Antigravity CLI (`agy`)**, **Antigravity 2.0 Desktop App (GUI)**, and **Antigravity IDE**.
+`agys` (Antigravity Switcher) is an open-source CLI utility built in Go that manages and isolates multi-account profiles across the entire Google Antigravity ecosystem — supporting **Antigravity CLI (`agy`)**, **Antigravity 2.0 Desktop App (GUI)**, **Antigravity IDE**, and **Herdr Multi-Agent Workspaces** (featuring profile-isolated agent panes, real-time 5h/weekly quota tracking, and dynamic model detection).
 
 > [!NOTE]
 > Profile directories are kept fully isolated under `~/.agys/profiles/<profile_name>/`, ensuring separate auth tokens, configs, quota tracking, and application states for every surface.
@@ -15,6 +15,7 @@
 | **Antigravity 2.0 GUI** | `agys gui <profile>` | macOS Keychain Sync | macOS Keychain OAuth sync, process cleanup, confirmation prompts, auto-seeding |
 | **Antigravity IDE** | `agys ide <profile>` | `--user-data-dir` | Parallel multi-window IDE sessions, independent logged-in accounts, smart auto-selection |
 | **Antigravity Remote Control** | `agys remote <profile>` | Detached Daemon / Cloud Relay | Background headless daemon, auto-port collision resolution, web UI (`localhost:PORT`) & Cloud portal (`antigravity.google`) |
+| **Herdr Multi-Agent Workspaces** | `agys run <profile>` | UNIX Socket RPC & Hooks | Profile-isolated agent panes, real-time sidebar model/quota badge (`agy[profile:model·%]`), dual 5H & Weekly title countdown, background quota watcher, zero-Python pure Go lifecycle hooks |
 
 ---
 
@@ -34,7 +35,7 @@
 - **Antigravity IDE Switcher (`agys ide`)**: Launch isolated, parallel sessions of the standalone Antigravity IDE for any profile (`agys ide work /path/to/project`), using profile-isolated `--user-data-dir` storage to support running multiple IDE windows logged into different accounts simultaneously.
 - **Cross-Platform & Safe In-Place Upgrade**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures, featuring atomic in-place upgrading and ad-hoc code signing (`agys upgrade`).
 - **AI-Powered Staged Commit (`agys commit`)**: Automatically selects the optimal profile (based on 5h Gemini quota), performs an AI code review check on staged git changes, generates/validates Conventional Commit messages, and executes git commit.
-- **Herdr Multi-Agent Workspace Integration**: Native plug-and-play support for [Herdr](https://herdr.dev). Automatically isolates and synchronizes agent state hooks per profile, reports real-time 5-hour quota percentages directly to the Herdr sidebar (`agy[profile:quota%]`), and sets ANSI terminal tab titles.
+- **Herdr Multi-Agent Workspace Integration**: Native plug-and-play support for [Herdr](https://herdr.dev). Automatically synchronizes lifecycle hooks per profile, reports real-time model & 5-hour/weekly quota percentages directly to the Herdr sidebar badge (e.g. `agy[quaywin:cld·84%]`), and sets rich terminal tab/window titles with reset countdowns.
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
 ---
@@ -415,8 +416,8 @@ export AGYS_DIR="/custom/path/to/.agys"
 ## CLI Usage Reference
 
 ```text
-agys isolates account profiles by dynamically overriding the HOME environment
-variable for the agy command to profile-specific base directories (~/.agys/profiles/<profile_name>/).
+agys isolates multi-account profiles across the Google Antigravity ecosystem (CLI, IDE, GUI, Remote)
+and provides native, real-time profile quota tracking (5H & Weekly) and lifecycle hooks for Herdr multi-agent workspaces.
 
 Usage:
   agys [command]
