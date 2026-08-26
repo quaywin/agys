@@ -348,7 +348,31 @@ agys remote stop work
 agys remote stop --all
 ```
 
-### 17. Version & Upgrading
+### 17. Herdr Multi-Agent Workspace Integration
+
+`agys` provides native, zero-dependency integration with [Herdr](https://herdr.dev) multi-agent terminal workspaces:
+
+* **100% Pure Go**: Native compiled binary execution with zero Python, pip, or shims dependencies.
+* **Compact Sidebar Badge**: Formatted as `agy[<profile>:<model_abbr>·<quota_pct>%]` (e.g. `agy[quaywin:cld·84%]`, `agy[tram520:gem·53%]`).
+  * Supported Model Abbreviations: `gem` (Gemini), `cld` (Claude), `gpt` (OpenAI / o1 / o3 / o4), `dsk` (DeepSeek), `qwn` (Qwen), `lma` (Llama), `mst` (Mistral).
+* **Comprehensive Window & Tab Title**: Displays both 5-Hour and Weekly reset countdowns:
+  `agys: <profile> [<abbr>] 5H: <pct>% (<reset5h>) • Wk: <pct>% (<resetWk>)`
+  *(e.g. `agys: quaywin [cld] 5H: 58% (in 1h 51m) • Wk: 85% (in 6d 20h)`)*
+* **Real-Time Dynamic Model Recognition**: Automatically catches mid-session model switches (via UI dropdowns, `/model` slash commands, or CLI arguments) in $O(1)$ time using tail-seek transcript parsing.
+* **Instant Prompt Updates (`PreInvocation`)**: Immediately updates sidebar badge upon prompt submission without waiting for response generation to complete.
+* **Background Quota Watcher & Sleep/Wake Recovery**: Background watcher awakens at quota reset boundaries, featuring **Fast Retry Backoff (15s)** when laptop wakes from sleep to allow Wi-Fi reconnection.
+* **Strict Environment Isolation**: All Herdr features (hooks, watchers, socket RPC, terminal title) strictly activate **only** inside active Herdr panes (`HERDR_ENV=1`, `HERDR_SOCKET_PATH`, `HERDR_PANE_ID`). Outside Herdr, `agys` operates as a 100% isolated standalone CLI.
+
+> [!NOTE]
+> `agys herdr-hook` is an **internal lifecycle hook bridge** executed automatically in the background by Antigravity's hook engine (`hooks.json`) to communicate with Herdr. **You do not need to invoke this command manually.**
+
+```bash
+# Internal hook subcommand executed automatically by Antigravity lifecycle hooks:
+agys herdr-hook session
+agys herdr-hook quota
+```
+
+### 18. Version & Upgrading
 
 ```bash
 # Check installed version
@@ -406,6 +430,7 @@ Available Commands:
   completion  Generate shell completion scripts
   delete      Delete a profile directory (alias: rm)
   export      Export a profile to a gzipped tar archive
+  herdr-hook  Handle Herdr multi-agent lifecycle integration hooks (Internal / Automatic)
   import      Import a profile from a gzipped tar archive
   list        List all active profile directories (alias: ls)
   priority    Manage profile priorities for auto profile selection (alias: prio, p)

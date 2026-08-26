@@ -345,16 +345,25 @@ func TestResolveActiveModel(t *testing.T) {
 		t.Errorf("Expected transcript to take priority over cache/settings, got %q", got)
 	}
 
-	// 3. .active_model takes priority over settings.json when no transcript
+	// 3. Newer file between .active_model and settings.json wins
 	tmpDir2 := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmpDir2, ".active_model"), []byte("gemini-2.5-pro"), 0600)
 	settingsDir2 := filepath.Join(tmpDir2, ".gemini", "antigravity-cli")
 	_ = os.MkdirAll(settingsDir2, 0700)
 	_ = os.WriteFile(filepath.Join(settingsDir2, "settings.json"), []byte(`{"model": "Claude Opus 4.6 (Thinking)"}`), 0600)
+	_ = os.Chtimes(filepath.Join(settingsDir2, "settings.json"), time.Now().Add(-10*time.Second), time.Now().Add(-10*time.Second))
+	_ = os.WriteFile(filepath.Join(tmpDir2, ".active_model"), []byte("gemini-2.5-pro"), 0600)
 
 	got = ResolveActiveModel(tmpDir2, "")
 	if got != "gemini-2.5-pro" {
-		t.Errorf("Expected .active_model to take priority over settings.json, got %q", got)
+		t.Errorf("Expected newer .active_model to take priority over older settings.json, got %q", got)
+	}
+
+	// Conversely, if settings.json is touched later, settings.json wins
+	_ = os.Chtimes(filepath.Join(tmpDir2, ".active_model"), time.Now().Add(-10*time.Second), time.Now().Add(-10*time.Second))
+	_ = os.Chtimes(filepath.Join(settingsDir2, "settings.json"), time.Now(), time.Now())
+	got = ResolveActiveModel(tmpDir2, "")
+	if got != "claude-opus-4" {
+		t.Errorf("Expected newer settings.json to take priority over older .active_model, got %q", got)
 	}
 
 	// 4. Fallback to default "gemini"

@@ -472,7 +472,14 @@ func GetProfileFullQuotaDetailsForModel(ctx context.Context, profileName, modelN
 
 		isGroupMatch := false
 		if mLower != "" && mLower != "auto" {
-			if strings.Contains(gDesc, mLower) || strings.Contains(gName, mLower) {
+			isOpenAI := strings.Contains(mLower, "gpt") || strings.Contains(mLower, "openai") || strings.HasPrefix(mLower, "o1") || strings.HasPrefix(mLower, "o3") || strings.HasPrefix(mLower, "o4")
+			isClaude := strings.Contains(mLower, "claude") || strings.Contains(mLower, "sonnet") || strings.Contains(mLower, "opus") || strings.Contains(mLower, "haiku") || strings.Contains(mLower, "anthropic")
+
+			if isClaude && (strings.Contains(gName, "claude") || strings.Contains(gDesc, "claude") || strings.Contains(gName, "3p")) {
+				isGroupMatch = true
+			} else if isOpenAI && (strings.Contains(gName, "gpt") || strings.Contains(gDesc, "gpt") || strings.Contains(gName, "openai") || strings.Contains(gName, "3p")) {
+				isGroupMatch = true
+			} else if strings.Contains(gDesc, mLower) || strings.Contains(gName, mLower) {
 				isGroupMatch = true
 			} else {
 				// Ambiguous short tokens that appear in many unrelated quota group descriptions

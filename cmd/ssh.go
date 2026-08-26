@@ -297,8 +297,10 @@ Examples:
 		} else {
 			fmt.Fprintf(os.Stderr, "[agys] Connecting to %s over SSH with PTY (API tunnel active)...\n", server)
 		}
-		profile.SetTerminalTitle(fmt.Sprintf("%s (%s)", targetProfile, server))
-		_ = profile.ReportHerdrMetadata(cmd.Context(), targetProfile)
+		if profile.IsInHerdrEnvironment() {
+			profile.SetTerminalTitle(fmt.Sprintf("%s (%s)", targetProfile, server))
+			_ = profile.ReportHerdrMetadata(cmd.Context(), targetProfile)
+		}
 
 		sshExecCmd := exec.CommandContext(cmd.Context(), "ssh", "-R", fmt.Sprintf("%d:127.0.0.1:%d", remotePort, proxyPort), "-t", server, remoteCmd)
 		sshExecCmd.Stdin = os.Stdin

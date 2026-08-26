@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -60,21 +59,31 @@ func resolveProfileName() string {
 	return profileName
 }
 
-// ReadSettingsModel reads the "model" field from the antigravity-cli settings.json for a given profile directory.
-// This is the source of truth when the model is changed via UI settings (not --model CLI flag).
+// ReadSettingsModel reads the "model" field from the newest settings.json across all product variants (cli, ide, antigravity).
 func ReadSettingsModel(profileDir string) string {
-	settingsPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "settings.json")
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		return ""
+	candidatePaths := []string{
+		filepath.Join(profileDir, ".gemini", "antigravity-cli", "settings.json"),
+		filepath.Join(profileDir, ".gemini", "antigravity", "settings.json"),
+		filepath.Join(profileDir, ".gemini", "antigravity-ide", "settings.json"),
 	}
-	var settings struct {
-		Model string `json:"model"`
+	var latestModel string
+	var latestMod time.Time
+	for _, sPath := range candidatePaths {
+		if info, err := os.Stat(sPath); err == nil {
+			if info.ModTime().After(latestMod) {
+				if data, err := os.ReadFile(sPath); err == nil {
+					var settings struct {
+						Model string `json:"model"`
+					}
+					if err := json.Unmarshal(data, &settings); err == nil && settings.Model != "" {
+						latestModel = strings.TrimSpace(settings.Model)
+						latestMod = info.ModTime()
+					}
+				}
+			}
+		}
 	}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(settings.Model)
+	return latestModel
 }
 
 // NormalizeModelName converts a display name (e.g. "Claude Opus 4.6 (Thinking)", "Gemini 2.5 Pro")
@@ -202,7 +211,7 @@ func FindProfileLatestTranscript(profileDir string) string {
 }
 
 // ResolveActiveModel returns the best-known active model name for a profile directory,
-// checking in priority order: explicit modelName arg > latest transcript > .active_model cache > settings.json > default "gemini".
+// checking in priority order: explicit modelName arg > latest transcript > newest of (.active_model cache vs settings.json) > default "gemini".
 // Returns a normalized API-style model ID.
 func ResolveActiveModel(profileDir, modelName string) string {
 	if modelName != "" && modelName != "auto" {
@@ -216,16 +225,53 @@ func ResolveActiveModel(profileDir, modelName string) string {
 		}
 	}
 
-	// 2. Check .active_model cache (set by --model CLI flag, hooks)
-	if data, err := os.ReadFile(filepath.Join(profileDir, ".active_model")); err == nil {
-		if m := strings.TrimSpace(string(data)); m != "" && m != "auto" {
-			return NormalizeModelName(m)
+	// 2. Compare modification timestamps of .active_model and settings.json to pick the newer configuration
+	var activeModel string
+	var activeMod time.Time
+	activePath := filepath.Join(profileDir, ".active_model")
+	if info, err := os.Stat(activePath); err == nil {
+		if data, err := os.ReadFile(activePath); err == nil {
+			if m := strings.TrimSpace(string(data)); m != "" && m != "auto" {
+				activeModel = NormalizeModelName(m)
+				activeMod = info.ModTime()
+			}
 		}
 	}
 
-	// 3. Check settings.json (profile default settings)
-	if settingsModel := ReadSettingsModel(profileDir); settingsModel != "" && settingsModel != "auto" {
-		return NormalizeModelName(settingsModel)
+	var settingsModel string
+	var settingsMod time.Time
+	candidatePaths := []string{
+		filepath.Join(profileDir, ".gemini", "antigravity-cli", "settings.json"),
+		filepath.Join(profileDir, ".gemini", "antigravity", "settings.json"),
+		filepath.Join(profileDir, ".gemini", "antigravity-ide", "settings.json"),
+	}
+	for _, sPath := range candidatePaths {
+		if info, err := os.Stat(sPath); err == nil {
+			if info.ModTime().After(settingsMod) {
+				if data, err := os.ReadFile(sPath); err == nil {
+					var settings struct {
+						Model string `json:"model"`
+					}
+					if err := json.Unmarshal(data, &settings); err == nil && settings.Model != "" && settings.Model != "auto" {
+						settingsModel = NormalizeModelName(settings.Model)
+						settingsMod = info.ModTime()
+					}
+				}
+			}
+		}
+	}
+
+	if activeModel != "" && settingsModel != "" {
+		if settingsMod.After(activeMod) {
+			return settingsModel
+		}
+		return activeModel
+	}
+	if activeModel != "" {
+		return activeModel
+	}
+	if settingsModel != "" {
+		return settingsModel
 	}
 
 	return "gemini"
@@ -258,16 +304,12 @@ func syncProfileActiveModel(profileName, modelName, transcriptPath string) strin
 
 // HandleHerdrHook executes the Herdr lifecycle hook directly in pure Go without any Python dependency.
 func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error {
-	if os.Getenv("HERDR_ENV") != "1" {
+	if !IsInHerdrEnvironment() {
 		fmt.Println("{}")
 		return nil
 	}
 	paneID := os.Getenv("HERDR_PANE_ID")
 	socketPath := os.Getenv("HERDR_SOCKET_PATH")
-	if paneID == "" || socketPath == "" {
-		fmt.Println("{}")
-		return nil
-	}
 
 	switch action {
 	case "session":
@@ -401,29 +443,15 @@ func FormatModelAbbreviation(modelName, groupName string) string {
 	return "gem"
 }
 
-// IsHerdrAvailable checks if Herdr is installed on the system or actively running.
-func IsHerdrAvailable() bool {
-	if os.Getenv("HERDR_ENV") == "1" || os.Getenv("HERDR_SOCKET_PATH") != "" {
-		return true
-	}
-	if _, err := exec.LookPath("herdr"); err == nil {
-		return true
-	}
-	if userHome, err := os.UserHomeDir(); err == nil {
-		agysSep := string(filepath.Separator) + ".agys"
-		if idx := strings.Index(userHome, agysSep); idx != -1 {
-			userHome = userHome[:idx]
-		}
-		if _, err := os.Stat(filepath.Join(userHome, ".gemini", "config", "hooks", "herdr-agent-state.sh")); err == nil {
-			return true
-		}
-	}
-	return false
+// IsInHerdrEnvironment checks if the current process is actively executing inside a Herdr workspace/pane session.
+func IsInHerdrEnvironment() bool {
+	return os.Getenv("HERDR_ENV") == "1" && os.Getenv("HERDR_SOCKET_PATH") != "" && os.Getenv("HERDR_PANE_ID") != ""
 }
 
 // SyncHerdrIntegration ensures that Herdr's antigravity integration hook is configured for the given profile directory.
+// It ONLY executes when running inside an active Herdr environment to prevent modifying non-Herdr profiles.
 func SyncHerdrIntegration(profileDir string) error {
-	if !IsHerdrAvailable() {
+	if !IsInHerdrEnvironment() {
 		return nil
 	}
 
@@ -597,14 +625,11 @@ func ReportHerdrMetadata(ctx context.Context, profileName string) error {
 
 // ReportHerdrMetadataWithModel communicates with Herdr via its UNIX domain socket to set metadata matching each pane's active model.
 func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName string) error {
-	if os.Getenv("HERDR_ENV") != "1" {
+	if !IsInHerdrEnvironment() {
 		return nil
 	}
 	paneID := os.Getenv("HERDR_PANE_ID")
 	socketPath := os.Getenv("HERDR_SOCKET_PATH")
-	if paneID == "" || socketPath == "" {
-		return nil
-	}
 
 	// Resolve active model using full fallback chain: explicit arg > .active_model cache > settings.json
 	if pDir, err := GetProfileDir(profileName); err == nil {
@@ -621,8 +646,7 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 		}
 
 		targetModel := modelName // Always prefer fresh model from hook payload
-		if targetModel == "" || targetModel == "auto" {
-			// Fall back to cached pane token only when no fresh model is available
+		if target.PaneID != paneID && target.Model != "" && (modelName == "" || modelName == "auto") {
 			targetModel = target.Model
 		}
 
@@ -704,9 +728,9 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 	return nil
 }
 
-// SetTerminalTitle sets the terminal/window/tab title using ANSI OSC escape sequence.
+// SetTerminalTitle sets the terminal/window/tab title using ANSI OSC escape sequence ONLY when inside Herdr.
 func SetTerminalTitle(titleOrProfile string) {
-	if titleOrProfile == "" {
+	if !IsInHerdrEnvironment() || titleOrProfile == "" {
 		return
 	}
 	title := titleOrProfile
@@ -720,7 +744,7 @@ func SetTerminalTitle(titleOrProfile string) {
 // One leader per profile (via OS file lock). Re-reads .active_model each cycle so /model switches are handled automatically.
 // Returns a cleanup function to stop the watcher on session exit.
 func StartHerdrQuotaWatcher(ctx context.Context, profileName string, modelName ...string) func() {
-	if os.Getenv("HERDR_ENV") != "1" || os.Getenv("HERDR_PANE_ID") == "" || os.Getenv("HERDR_SOCKET_PATH") == "" {
+	if !IsInHerdrEnvironment() {
 		return func() {}
 	}
 
@@ -755,7 +779,11 @@ func StartHerdrQuotaWatcher(ctx context.Context, profileName string, modelName .
 			_, _, resetTime, _, err := GetProfile5HQuotaDetailsForModel(fetchCtx, profileName, currentModel)
 			fetchCancel()
 
-			if err == nil && !resetTime.IsZero() {
+			if err != nil {
+				// Network error or timeout (e.g. laptop just woke from sleep and Wi-Fi is reconnecting)
+				// Use short retry backoff (15s) so quota refreshes immediately when network returns
+				waitDuration = 15 * time.Second
+			} else if !resetTime.IsZero() {
 				untilReset := time.Until(resetTime)
 				if untilReset > 0 {
 					waitDuration = untilReset + 5*time.Second
@@ -763,10 +791,9 @@ func StartHerdrQuotaWatcher(ctx context.Context, profileName string, modelName .
 						waitDuration = 10 * time.Minute
 					}
 				}
-			}
-
-			if waitDuration < 30*time.Second {
-				waitDuration = 30 * time.Second
+				if waitDuration < 30*time.Second {
+					waitDuration = 30 * time.Second
+				}
 			}
 
 			timer := time.NewTimer(waitDuration)

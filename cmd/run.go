@@ -198,14 +198,16 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(activeModel), 0600)
 	}
 
-	// Ensure Herdr integration hook and display metadata are active
-	_ = profile.SyncHerdrIntegration(profileDir)
-	profile.SetTerminalTitle(targetProfile)
-	_ = profile.ReportHerdrMetadataWithModel(cmd.Context(), targetProfile, activeModel)
+	// Ensure Herdr integration hook and display metadata are active ONLY in Herdr environment
+	if profile.IsInHerdrEnvironment() {
+		_ = profile.SyncHerdrIntegration(profileDir)
+		profile.SetTerminalTitle(targetProfile)
+		_ = profile.ReportHerdrMetadataWithModel(cmd.Context(), targetProfile, activeModel)
 
-	// Start background watcher for reset timer / periodic refresh if running in Herdr
-	stopWatcher := profile.StartHerdrQuotaWatcher(cmd.Context(), targetProfile, activeModel)
-	defer stopWatcher()
+		// Start background watcher for reset timer / periodic refresh if running in Herdr
+		stopWatcher := profile.StartHerdrQuotaWatcher(cmd.Context(), targetProfile, activeModel)
+		defer stopWatcher()
+	}
 
 	runErr := profile.RunCmdWithSignals(cmd.Context(), profileDir, agyArgs...)
 
