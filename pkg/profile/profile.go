@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 var validProfileNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -113,6 +114,7 @@ func Create(name string) (string, error) {
 		return "", fmt.Errorf("failed to create profile directory %s: %w", profileDir, err)
 	}
 	_ = EnsureKeychain(profileDir)
+	_ = SyncHerdrIntegration(profileDir)
 	return profileDir, nil
 }
 
@@ -196,6 +198,7 @@ func Rename(oldName, newName string) error {
 		_ = SetCurrent(newName)
 	}
 
+	_ = SyncHerdrIntegration(newDir)
 	return nil
 }
 
@@ -292,6 +295,7 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 // BuildCmdContext constructs an exec.Cmd with context cancellation for running `agy` with isolated profile environment variables.
 func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *exec.Cmd {
 	_ = EnsureKeychain(profileDir)
+	_ = SyncHerdrIntegration(profileDir)
 
 	agyPath, err := exec.LookPath("agy")
 	if err != nil {
@@ -325,6 +329,7 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 	cmd.Stderr = os.Stderr
 
 	envMap := map[string]string{
+		"AGYS_PROFILE":    filepath.Base(profileDir),
 		"HOME":            profileDir,
 		"USERPROFILE":     profileDir,
 		"GEMINI_DIR":      filepath.Join(profileDir, ".gemini"),
@@ -408,7 +413,9 @@ func SyncAllTokenLocations(profileDir string) error {
 // This forces `agy` to load the profile-isolated token file from disk instead of using a stale token from another profile.
 func ClearKeychainToken() {
 	if runtime.GOOS == "darwin" {
-		_ = exec.Command("security", "delete-generic-password", "-s", "gemini", "-a", "antigravity").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = exec.CommandContext(ctx, "security", "delete-generic-password", "-s", "gemini", "-a", "antigravity").Run()
 	}
 }
 
@@ -417,7 +424,10 @@ func SyncDiskTokenToKeychain(profileDir string) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
-	_ = WithKeychainLock(context.Background(), func() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_ = WithKeychainLock(ctx, func() error {
 		data, err := ReadRawTokenData(profileDir)
 		if err != nil || len(bytes.TrimSpace(data)) == 0 {
 			ClearKeychainToken()
@@ -435,7 +445,9 @@ func SyncDiskTokenToKeychain(profileDir string) {
 		}
 
 		b64Val := "go-keyring-base64:" + base64.StdEncoding.EncodeToString(bytes.TrimSpace(data))
-		_ = exec.Command("security", "add-generic-password", "-s", "gemini", "-a", "antigravity", "-w", b64Val, "-U").Run()
+		secCtx, secCancel := context.WithTimeout(ctx, 3*time.Second)
+		defer secCancel()
+		_ = exec.CommandContext(secCtx, "security", "add-generic-password", "-s", "gemini", "-a", "antigravity", "-w", b64Val, "-U").Run()
 		return nil
 	})
 }
@@ -461,13 +473,18 @@ func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
-	_ = WithKeychainLock(context.Background(), func() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_ = WithKeychainLock(ctx, func() error {
 		defer ClearKeychainToken()
 
 		// Read disk token AFTER agy execution
 		diskTok, readDiskErr := ReadTokenFromDir(profileDir)
 
-		out, err := exec.Command("security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w").Output()
+		secCtx, secCancel := context.WithTimeout(ctx, 3*time.Second)
+		defer secCancel()
+		out, err := exec.CommandContext(secCtx, "security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w").Output()
 		if err != nil || len(bytes.TrimSpace(out)) == 0 {
 			// Keychain is empty
 			if initialRefreshToken != "" && readDiskErr != nil {

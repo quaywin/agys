@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/quaywin/agys/pkg/profile"
@@ -176,6 +177,35 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 
 	// Merge trusted workspaces across all profiles prior to execution
 	_ = profile.SyncTrustedWorkspaces()
+
+	// Extract active model if specified in agyArgs
+	var activeModel string
+	for i := 0; i < len(agyArgs); i++ {
+		if agyArgs[i] == "--model" || agyArgs[i] == "-m" {
+			if i+1 < len(agyArgs) {
+				activeModel = agyArgs[i+1]
+			}
+			break
+		}
+		if strings.HasPrefix(agyArgs[i], "--model=") {
+			activeModel = strings.TrimPrefix(agyArgs[i], "--model=")
+			break
+		}
+	}
+	// Resolve model using full fallback chain: CLI flag > .active_model cache > settings.json
+	activeModel = profile.ResolveActiveModel(profileDir, activeModel)
+	if activeModel != "" {
+		_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(activeModel), 0600)
+	}
+
+	// Ensure Herdr integration hook and display metadata are active
+	_ = profile.SyncHerdrIntegration(profileDir)
+	profile.SetTerminalTitle(targetProfile)
+	_ = profile.ReportHerdrMetadataWithModel(cmd.Context(), targetProfile, activeModel)
+
+	// Start background watcher for reset timer / periodic refresh if running in Herdr
+	stopWatcher := profile.StartHerdrQuotaWatcher(cmd.Context(), targetProfile, activeModel)
+	defer stopWatcher()
 
 	runErr := profile.RunCmdWithSignals(cmd.Context(), profileDir, agyArgs...)
 

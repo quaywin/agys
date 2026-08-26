@@ -2,6 +2,7 @@ package profile
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,4 +203,26 @@ func TestTokenFingerprintedEmailCache(t *testing.T) {
 	if _, err := GetCachedEmail(pName); err == nil {
 		t.Errorf("expected error due to fingerprint mismatch after token change, got nil")
 	}
+}
+
+func TestGetProfile5HQuotaDetailsForModel(t *testing.T) {
+	// Test matching Gemini vs Claude vs Default
+	tmpDir := t.TempDir()
+	t.Setenv("AGYS_DIR", tmpDir)
+	pName := "testmodelquota"
+	pDir, err := Create(pName)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// Without token, should return error
+	_, _, _, _, err = GetProfile5HQuotaDetailsForModel(context.Background(), pName, "claude-3-7-sonnet")
+	if err == nil {
+		t.Errorf("expected error without token, got nil")
+	}
+
+	// Write dummy token
+	tokenPath := filepath.Join(pDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	_ = os.MkdirAll(filepath.Dir(tokenPath), 0700)
+	_ = os.WriteFile(tokenPath, []byte(`{"token":{"access_token":"fake"}}`), 0600)
 }

@@ -34,6 +34,7 @@
 - **Antigravity IDE Switcher (`agys ide`)**: Launch isolated, parallel sessions of the standalone Antigravity IDE for any profile (`agys ide work /path/to/project`), using profile-isolated `--user-data-dir` storage to support running multiple IDE windows logged into different accounts simultaneously.
 - **Cross-Platform & Safe In-Place Upgrade**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures, featuring atomic in-place upgrading and ad-hoc code signing (`agys upgrade`).
 - **AI-Powered Staged Commit (`agys commit`)**: Automatically selects the optimal profile (based on 5h Gemini quota), performs an AI code review check on staged git changes, generates/validates Conventional Commit messages, and executes git commit.
+- **Herdr Multi-Agent Workspace Integration**: Native plug-and-play support for [Herdr](https://herdr.dev). Automatically isolates and synchronizes agent state hooks per profile, reports real-time 5-hour quota percentages directly to the Herdr sidebar (`agy[profile:quota%]`), and sets ANSI terminal tab titles.
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
 ---

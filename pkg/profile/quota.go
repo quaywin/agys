@@ -435,6 +435,190 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 	return summary, nil
 }
 
+// ModelQuotaDetails contains 5H and Weekly quota metrics for a specific model group.
+type ModelQuotaDetails struct {
+	Fraction5H      float64
+	ResetStr5H      string
+	ResetTime5H     time.Time
+	FractionWeekly  float64
+	ResetStrWeekly  string
+	ResetTimeWeekly time.Time
+	GroupName       string
+}
+
+// GetProfileFullQuotaDetailsForModel returns both 5H and Weekly quota details matching the specified model name.
+func GetProfileFullQuotaDetailsForModel(ctx context.Context, profileName, modelName string) (*ModelQuotaDetails, error) {
+	summary, err := FetchQuota(ctx, profileName)
+	if err != nil {
+		return nil, err
+	}
+	if summary == nil {
+		return nil, fmt.Errorf("no quota summary available")
+	}
+
+	mLower := strings.ToLower(strings.TrimSpace(modelName))
+
+	details := &ModelQuotaDetails{
+		Fraction5H:     -1.0,
+		FractionWeekly: -1.0,
+	}
+
+	// 1. Dynamic pass: find the best matching group
+	var matchedGroup *QuotaGroup
+	for i := range summary.Groups {
+		group := &summary.Groups[i]
+		gName := strings.ToLower(strings.TrimSpace(group.DisplayName))
+		gDesc := strings.ToLower(strings.TrimSpace(group.Description))
+
+		isGroupMatch := false
+		if mLower != "" && mLower != "auto" {
+			if strings.Contains(gDesc, mLower) || strings.Contains(gName, mLower) {
+				isGroupMatch = true
+			} else {
+				// Ambiguous short tokens that appear in many unrelated quota group descriptions
+				ambiguous := map[string]bool{"pro": true, "max": true, "api": true, "all": true, "new": true, "old": true}
+				words := strings.FieldsFunc(mLower, func(r rune) bool {
+					return r == '-' || r == '_' || r == '.' || r == ' ' || r == '/'
+				})
+				for _, w := range words {
+					if len(w) >= 5 && !ambiguous[w] && (strings.Contains(gDesc, w) || strings.Contains(gName, w)) {
+						isGroupMatch = true
+						break
+					}
+				}
+			}
+		} else {
+			// If no model or "auto" specified, match default Gemini group
+			if strings.Contains(gName, "gemini") || strings.Contains(gDesc, "gemini") {
+				isGroupMatch = true
+			}
+		}
+
+		if isGroupMatch {
+			matchedGroup = group
+			break
+		}
+	}
+
+	// 2. Extract 5H and Weekly from matched group
+	if matchedGroup != nil {
+		details.GroupName = matchedGroup.DisplayName
+		for _, bucket := range matchedGroup.Buckets {
+			w := strings.ToLower(strings.TrimSpace(bucket.Window))
+			d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
+			b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
+
+			if details.Fraction5H < 0 && (w == "5h" || strings.Contains(w, "5h") || strings.Contains(d, "5h") || strings.Contains(b, "5h")) {
+				details.Fraction5H = bucket.RemainingFraction
+				details.ResetTime5H = bucket.ResetTime
+				details.ResetStr5H = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
+			}
+			if details.FractionWeekly < 0 && (strings.Contains(w, "week") || strings.Contains(w, "7d") || strings.Contains(d, "week") || strings.Contains(b, "week")) {
+				details.FractionWeekly = bucket.RemainingFraction
+				details.ResetTimeWeekly = bucket.ResetTime
+				details.ResetStrWeekly = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
+			}
+		}
+	}
+
+	// 3. Fallbacks for 5H if missing in matched group
+	if details.Fraction5H < 0 {
+		for _, group := range summary.Groups {
+			for _, bucket := range group.Buckets {
+				w := strings.ToLower(strings.TrimSpace(bucket.Window))
+				d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
+				b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
+
+				if w == "5h" || strings.Contains(w, "5h") || strings.Contains(d, "5h") || strings.Contains(b, "5h") {
+					details.Fraction5H = bucket.RemainingFraction
+					details.ResetTime5H = bucket.ResetTime
+					details.ResetStr5H = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
+					if details.GroupName == "" {
+						details.GroupName = group.DisplayName
+					}
+					break
+				}
+			}
+			if details.Fraction5H >= 0 {
+				break
+			}
+		}
+	}
+
+	// 4. Fallbacks for Weekly if missing in matched group
+	if details.FractionWeekly < 0 {
+		for _, group := range summary.Groups {
+			for _, bucket := range group.Buckets {
+				w := strings.ToLower(strings.TrimSpace(bucket.Window))
+				d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
+				b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
+
+				if strings.Contains(w, "week") || strings.Contains(w, "7d") || strings.Contains(d, "week") || strings.Contains(b, "week") {
+					details.FractionWeekly = bucket.RemainingFraction
+					details.ResetTimeWeekly = bucket.ResetTime
+					details.ResetStrWeekly = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
+					break
+				}
+			}
+			if details.FractionWeekly >= 0 {
+				break
+			}
+		}
+	}
+
+	// 5. Ultimate fallback if neither 5H nor weekly was found
+	if details.Fraction5H < 0 && details.FractionWeekly >= 0 {
+		details.Fraction5H = details.FractionWeekly
+		details.ResetTime5H = details.ResetTimeWeekly
+		details.ResetStr5H = details.ResetStrWeekly
+	} else if details.Fraction5H < 0 {
+		for _, group := range summary.Groups {
+			for _, bucket := range group.Buckets {
+				if bucket.RemainingFraction >= 0 {
+					details.Fraction5H = bucket.RemainingFraction
+					details.ResetTime5H = bucket.ResetTime
+					details.ResetStr5H = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
+					if details.GroupName == "" {
+						details.GroupName = group.DisplayName
+					}
+					break
+				}
+			}
+			if details.Fraction5H >= 0 {
+				break
+			}
+		}
+	}
+
+	if details.Fraction5H < 0 {
+		return nil, fmt.Errorf("no quota bucket found in summary")
+	}
+
+	return details, nil
+}
+
+// GetProfile5HQuotaDetailsForModel returns the remaining 5-hour quota fraction, formatted reset time, raw reset time, and group display name
+// matching the specified model name (e.g. "gemini-2.5-pro", "claude-3-7-sonnet", "gpt-4o", or empty for default).
+func GetProfile5HQuotaDetailsForModel(ctx context.Context, profileName, modelName string) (float64, string, time.Time, string, error) {
+	details, err := GetProfileFullQuotaDetailsForModel(ctx, profileName, modelName)
+	if err != nil {
+		return -1, "", time.Time{}, "", err
+	}
+	return details.Fraction5H, details.ResetStr5H, details.ResetTime5H, details.GroupName, nil
+}
+
+// GetProfile5HQuotaDetails returns the remaining 5-hour quota fraction, formatted reset time, and raw reset time.Time (defaulting to Gemini).
+func GetProfile5HQuotaDetails(ctx context.Context, profileName string) (float64, string, time.Time, error) {
+	frac, resetStr, resetTime, _, err := GetProfile5HQuotaDetailsForModel(ctx, profileName, "")
+	return frac, resetStr, resetTime, err
+}
+
+// GetProfile5HQuotaInfo returns the remaining 5-hour quota fraction (0.0 - 1.0) and formatted reset time for a given profile.
+func GetProfile5HQuotaInfo(ctx context.Context, profileName string) (float64, string, error) {
+	fraction, resetStr, _, err := GetProfile5HQuotaDetails(ctx, profileName)
+	return fraction, resetStr, err
+}
+
 func loadCodeAssist(ctx context.Context, accessToken string) (string, error) {
 	url := "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
 

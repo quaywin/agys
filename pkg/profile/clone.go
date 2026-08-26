@@ -42,6 +42,7 @@ func Clone(srcName, dstName string) error {
 	}
 	_ = os.Remove(filepath.Join(dstDir, emailFilename))
 	_ = os.Remove(filepath.Join(dstDir, projectIDFilename))
+	_ = SyncHerdrIntegration(dstDir)
 	return nil
 }
 
