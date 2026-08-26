@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -117,27 +118,90 @@ func NormalizeModelName(displayName string) string {
 	return result
 }
 
+var userSettingsRegex = regexp.MustCompile(`(?i)The user changed setting [` + "`" + `'\"\\ ]*Model Selection[` + "`" + `'\"\\ ]*\s+from\s+.*?\s+to\s+([^\\.\n<]+(?:\.[0-9]+[^\\.\n<]*)*)`)
+
+// ReadModelFromTranscript parses transcript.jsonl for the latest dynamic model change (e.g. from UI selector).
+func ReadModelFromTranscript(transcriptPath string) string {
+	if transcriptPath == "" {
+		return ""
+	}
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 128*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	var latestModel string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "Model Selection") {
+			if match := userSettingsRegex.FindStringSubmatch(line); len(match) > 1 {
+				latestModel = strings.TrimSpace(match[1])
+			}
+		}
+	}
+
+	if latestModel != "" {
+		return NormalizeModelName(latestModel)
+	}
+	return ""
+}
+
+// FindProfileLatestTranscript returns the path to the most recent conversation transcript.jsonl for a profile.
+func FindProfileLatestTranscript(profileDir string) string {
+	brainDir := filepath.Join(profileDir, ".gemini", "antigravity-cli", "brain")
+	entries, err := os.ReadDir(brainDir)
+	if err != nil {
+		return ""
+	}
+	var latestPath string
+	var latestMod time.Time
+	for _, e := range entries {
+		if e.IsDir() {
+			tPath := filepath.Join(brainDir, e.Name(), ".system_generated", "logs", "transcript.jsonl")
+			if info, err := os.Stat(tPath); err == nil {
+				if info.ModTime().After(latestMod) {
+					latestMod = info.ModTime()
+					latestPath = tPath
+				}
+			}
+		}
+	}
+	return latestPath
+}
+
 // ResolveActiveModel returns the best-known active model name for a profile directory,
-// checking in priority order: explicit modelName arg > settings.json (UI source of truth) > .active_model cache.
+// checking in priority order: explicit modelName arg > latest transcript > .active_model cache > settings.json > default "gemini".
 // Returns a normalized API-style model ID.
 func ResolveActiveModel(profileDir, modelName string) string {
 	if modelName != "" && modelName != "auto" {
 		return NormalizeModelName(modelName)
 	}
 
-	// settings.json is the source of truth for UI model selection (highest priority after explicit arg)
-	if settingsModel := ReadSettingsModel(profileDir); settingsModel != "" && settingsModel != "auto" {
-		return NormalizeModelName(settingsModel)
+	// 1. Check most recent conversation transcript for live UI model selection
+	if tPath := FindProfileLatestTranscript(profileDir); tPath != "" {
+		if tModel := ReadModelFromTranscript(tPath); tModel != "" && tModel != "auto" {
+			return NormalizeModelName(tModel)
+		}
 	}
 
-	// Fall back to .active_model cache (set by --model CLI flag or hooks)
+	// 2. Check .active_model cache (set by --model CLI flag, hooks)
 	if data, err := os.ReadFile(filepath.Join(profileDir, ".active_model")); err == nil {
 		if m := strings.TrimSpace(string(data)); m != "" && m != "auto" {
 			return NormalizeModelName(m)
 		}
 	}
 
-	return ""
+	// 3. Check settings.json (profile default settings)
+	if settingsModel := ReadSettingsModel(profileDir); settingsModel != "" && settingsModel != "auto" {
+		return NormalizeModelName(settingsModel)
+	}
+
+	return "gemini"
 }
 
 // HandleHerdrHook executes the Herdr lifecycle hook directly in pure Go without any Python dependency.
@@ -182,36 +246,59 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 			})
 			sendHerdrSocketRPC(ctx, socketPath, req)
 
-			// Cache active model name for this profile
-			if payload.ModelName != "" {
-				profileName := resolveProfileName()
-				if profileName != "" {
-					if pDir, err := GetProfileDir(profileName); err == nil {
-						_ = WriteFileAtomic(filepath.Join(pDir, ".active_model"), []byte(NormalizeModelName(payload.ModelName)), 0600)
+			// Detect active model from payload or transcript
+			detectedModel := payload.ModelName
+			if detectedModel == "" || detectedModel == "auto" {
+				if payload.TranscriptPath != "" {
+					detectedModel = ReadModelFromTranscript(payload.TranscriptPath)
+				}
+			}
+
+			profileName := resolveProfileName()
+			if profileName != "" {
+				if pDir, err := GetProfileDir(profileName); err == nil {
+					if detectedModel == "" || detectedModel == "auto" {
+						detectedModel = ResolveActiveModel(pDir, "")
+					}
+					norm := NormalizeModelName(detectedModel)
+					if norm != "" && norm != "auto" {
+						_ = WriteFileAtomic(filepath.Join(pDir, ".active_model"), []byte(norm), 0600)
 					}
 				}
 			}
 		}
 	case "quota":
-		// Read modelName directly from hook stdin — this is always accurate, even after /model switch
 		var quotaPayload struct {
-			ModelName string `json:"modelName"`
+			ConversationID string `json:"conversationId"`
+			TranscriptPath string `json:"transcriptPath"`
+			ModelName      string `json:"modelName"`
 		}
 		if stdin != nil {
 			_ = json.NewDecoder(stdin).Decode(&quotaPayload)
 		}
 		profileName := resolveProfileName()
 		if profileName != "" {
-			normalizedModel := NormalizeModelName(quotaPayload.ModelName)
-			// Persist the current model so the watcher also picks it up on next cycle
-			if normalizedModel != "" && normalizedModel != "auto" {
-				if pDir, err := GetProfileDir(profileName); err == nil {
-					_ = WriteFileAtomic(filepath.Join(pDir, ".active_model"), []byte(normalizedModel), 0600)
+			detectedModel := quotaPayload.ModelName
+			if detectedModel == "" || detectedModel == "auto" {
+				if quotaPayload.TranscriptPath != "" {
+					detectedModel = ReadModelFromTranscript(quotaPayload.TranscriptPath)
 				}
 			}
+
+			if pDir, err := GetProfileDir(profileName); err == nil {
+				if detectedModel == "" || detectedModel == "auto" {
+					detectedModel = ResolveActiveModel(pDir, "")
+				}
+				norm := NormalizeModelName(detectedModel)
+				if norm != "" && norm != "auto" {
+					_ = WriteFileAtomic(filepath.Join(pDir, ".active_model"), []byte(norm), 0600)
+				}
+				detectedModel = norm
+			}
+
 			quotaCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
-			_ = ReportHerdrMetadataWithModel(quotaCtx, profileName, normalizedModel)
+			_ = ReportHerdrMetadataWithModel(quotaCtx, profileName, detectedModel)
 		}
 	}
 

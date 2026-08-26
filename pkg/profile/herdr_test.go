@@ -292,34 +292,68 @@ func TestReadSettingsModel(t *testing.T) {
 	}
 }
 
+func TestReadModelFromTranscript(t *testing.T) {
+	tmpDir := t.TempDir()
+	tPath := filepath.Join(tmpDir, "transcript.jsonl")
+
+	content := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_SETTINGS_CHANGE>\nThe user changed setting ` + "`Model Selection`" + ` from None to Gemini 3.7 Flash (High).\n</USER_SETTINGS_CHANGE>"}`
+	_ = os.WriteFile(tPath, []byte(content), 0600)
+
+	got := ReadModelFromTranscript(tPath)
+	if got != "gemini-3.7-flash" {
+		t.Errorf("Expected 'gemini-3.7-flash', got %q", got)
+	}
+
+	// Another change later in transcript
+	content2 := content + "\n" + `{"step_index":5,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_SETTINGS_CHANGE>\nThe user changed setting ` + "`Model Selection`" + ` from Gemini 3.7 Flash to Claude Sonnet 4.6 (Thinking).\n</USER_SETTINGS_CHANGE>"}`
+	_ = os.WriteFile(tPath, []byte(content2), 0600)
+
+	got = ReadModelFromTranscript(tPath)
+	if got != "claude-sonnet-4" {
+		t.Errorf("Expected 'claude-sonnet-4', got %q", got)
+	}
+}
+
 func TestResolveActiveModel(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Explicit model takes priority
+	// 1. Explicit model takes highest priority
 	if got := ResolveActiveModel(tmpDir, "claude-opus-4"); got != "claude-opus-4" {
 		t.Errorf("Expected explicit model to take priority, got %q", got)
 	}
 
-	// Falls back to .active_model when no settings.json
-	_ = os.WriteFile(filepath.Join(tmpDir, ".active_model"), []byte("gemini-2.5-pro"), 0600)
-	got := ResolveActiveModel(tmpDir, "")
-	if got != "gemini-2.5-pro" {
-		t.Errorf("Expected .active_model fallback 'gemini-2.5-pro', got %q", got)
-	}
+	// 2. Transcript takes priority over .active_model and settings.json
+	brainDir := filepath.Join(tmpDir, ".gemini", "antigravity-cli", "brain", "conv-123", ".system_generated", "logs")
+	_ = os.MkdirAll(brainDir, 0700)
+	tContent := `<USER_SETTINGS_CHANGE>\nThe user changed setting ` + "`Model Selection`" + ` from None to Gemini 3.7 Flash (High).\n</USER_SETTINGS_CHANGE>`
+	_ = os.WriteFile(filepath.Join(brainDir, "transcript.jsonl"), []byte(tContent), 0600)
 
-	// settings.json takes priority over .active_model (UI is source of truth)
+	// Even if .active_model and settings.json exist, transcript wins
+	_ = os.WriteFile(filepath.Join(tmpDir, ".active_model"), []byte("claude-opus-4"), 0600)
 	settingsDir := filepath.Join(tmpDir, ".gemini", "antigravity-cli")
-	_ = os.MkdirAll(settingsDir, 0700)
 	_ = os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{"model": "Claude Opus 4.6 (Thinking)"}`), 0600)
 
-	got = ResolveActiveModel(tmpDir, "")
-	if got != "claude-opus-4" {
-		t.Errorf("Expected settings.json to take priority over .active_model, got %q", got)
+	got := ResolveActiveModel(tmpDir, "")
+	if got != "gemini-3.7-flash" {
+		t.Errorf("Expected transcript to take priority over cache/settings, got %q", got)
 	}
 
-	// "auto" falls through to settings.json
-	got = ResolveActiveModel(tmpDir, "auto")
-	if got != "claude-opus-4" {
-		t.Errorf("Expected 'auto' to fall through to settings.json, got %q", got)
+	// 3. .active_model takes priority over settings.json when no transcript
+	tmpDir2 := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmpDir2, ".active_model"), []byte("gemini-2.5-pro"), 0600)
+	settingsDir2 := filepath.Join(tmpDir2, ".gemini", "antigravity-cli")
+	_ = os.MkdirAll(settingsDir2, 0700)
+	_ = os.WriteFile(filepath.Join(settingsDir2, "settings.json"), []byte(`{"model": "Claude Opus 4.6 (Thinking)"}`), 0600)
+
+	got = ResolveActiveModel(tmpDir2, "")
+	if got != "gemini-2.5-pro" {
+		t.Errorf("Expected .active_model to take priority over settings.json, got %q", got)
+	}
+
+	// 4. Fallback to default "gemini"
+	tmpDir3 := t.TempDir()
+	got = ResolveActiveModel(tmpDir3, "")
+	if got != "gemini" {
+		t.Errorf("Expected default 'gemini', got %q", got)
 	}
 }
