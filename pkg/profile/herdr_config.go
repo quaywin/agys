@@ -34,7 +34,6 @@ func GetHerdrBackupConfigPath() string {
 }
 
 const Compact2RowTOML = `[ui.sidebar.agents]
-row_gap = 1 # herdr-agys-managed
 rows = [
   ["state_icon", "workspace", { token = "agent", fg = "#38bdf8", bold = true }],
   [

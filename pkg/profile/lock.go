@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -68,6 +69,10 @@ func WithFileLock(ctx context.Context, fn func() error) error {
 
 // WithKeychainLock executes function fn under an exclusive OS file lock for macOS Keychain synchronization operations.
 func WithKeychainLock(ctx context.Context, fn func() error) error {
+	if runtime.GOOS != "darwin" || os.Getenv("AGYS_SKIP_KEYCHAIN") == "1" {
+		return fn()
+	}
+
 	inProcessKeychainMutex.Lock()
 	defer inProcessKeychainMutex.Unlock()
 

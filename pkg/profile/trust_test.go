@@ -9,6 +9,7 @@ import (
 func TestSyncTrustedWorkspaces(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	p1Dir, err := Create("profile-1")
 	if err != nil {

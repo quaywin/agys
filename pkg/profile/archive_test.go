@@ -14,6 +14,7 @@ import (
 func TestExportImport(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	srcName := "exp-profile"
 	dstName := "imp-profile"
@@ -84,6 +85,7 @@ func TestExportImport(t *testing.T) {
 func TestExportImportAll(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	// Create two profiles
 	p1Name := "profile-one"
@@ -126,6 +128,7 @@ func TestExportImportAll(t *testing.T) {
 func TestImportDirectoryTraversalProtection(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	dstName := "safe-profile"
 
@@ -161,6 +164,7 @@ func TestImportDirectoryTraversalProtection(t *testing.T) {
 func TestExportExcludesCacheAndBloat(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	profName := "bloat-profile"
 	dir, err := Create(profName)

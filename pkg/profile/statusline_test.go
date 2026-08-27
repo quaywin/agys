@@ -53,6 +53,7 @@ func TestSessionContextSaveAndGet(t *testing.T) {
 func TestHandleStatusLine(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	pDir, err := Create("test-statusline-profile")
 	if err != nil {
@@ -105,6 +106,7 @@ func TestHandleStatusLine(t *testing.T) {
 func TestSyncStatusLineSettings(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	pDir, err := Create("test-sync-sl-profile")
 	if err != nil {

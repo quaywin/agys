@@ -60,6 +60,7 @@ func TestWriteFileAtomic_Overwrite(t *testing.T) {
 }
 
 func TestGetRealUserHome(t *testing.T) {
+	t.Setenv("AGYS_REAL_HOME", "")
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 

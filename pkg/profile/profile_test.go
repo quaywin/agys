@@ -8,6 +8,17 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	os.Setenv("AGYS_SKIP_KEYCHAIN", "1")
+	os.Unsetenv("AGYS_REAL_HOME")
+	tempAgys := filepath.Join(os.TempDir(), "agys-test-global")
+	_ = os.MkdirAll(tempAgys, 0700)
+	os.Setenv("AGYS_DIR", tempAgys)
+	code := m.Run()
+	_ = os.RemoveAll(tempAgys)
+	os.Exit(code)
+}
+
 func TestValidateName(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -37,6 +48,7 @@ func TestValidateName(t *testing.T) {
 func TestProfileLifecycle(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	profileName := "test-profile"
 
@@ -91,6 +103,7 @@ func TestProfileLifecycle(t *testing.T) {
 func TestProfileRename(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	oldName := "profile-old"
 	newName := "profile-new"
@@ -147,6 +160,7 @@ func TestProfileRename(t *testing.T) {
 func TestCurrentProfile(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	// GetCurrent should be empty initially
 	curr, err := GetCurrent()
@@ -242,6 +256,7 @@ func TestAgysDirEnv(t *testing.T) {
 func TestProjectIDCache(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	profileName := "test-cache-profile"
 	_, err := Create(profileName)
@@ -274,6 +289,7 @@ func TestProjectIDCache(t *testing.T) {
 func TestSetCurrentAuto(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	if err := SetCurrent("auto"); err != nil {
 		t.Fatalf("SetCurrent('auto') error = %v", err)
@@ -291,6 +307,7 @@ func TestSetCurrentAuto(t *testing.T) {
 func TestEnsureKeychain(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	profileName := "test-keychain-profile"
 	profileDir, err := Create(profileName)
@@ -355,6 +372,7 @@ func TestFormatHTTPError(t *testing.T) {
 func TestWithKeychainLock(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	executed := false
 	err := WithKeychainLock(nil, func() error {
@@ -372,6 +390,7 @@ func TestWithKeychainLock(t *testing.T) {
 func TestDetectDuplicateTokens(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	p1Dir, err := Create("profile-1")
 	if err != nil {
@@ -413,6 +432,7 @@ func TestDetectDuplicateTokens(t *testing.T) {
 func TestConfiguredStatus(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	pName := "config-test-profile"
 	pDir, err := Create(pName)
@@ -472,6 +492,7 @@ func TestSyncKeychainTokenToDisk_Isolation(t *testing.T) {
 
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	pName := "test-isolation-p1"
 	pDir, err := Create(pName)

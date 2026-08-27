@@ -9,6 +9,7 @@ import (
 func TestClone(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	srcName := "source-profile"
 	dstName := "dest-profile"

@@ -56,6 +56,7 @@ func TestFormatRelativeTime(t *testing.T) {
 func TestListSessionsWithCache(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	// Create profile structure
 	profileName := "testprof"
@@ -131,6 +132,7 @@ func TestListSessionsWithCache(t *testing.T) {
 func TestListSessionsEmpty(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	ctx := context.Background()
 	sessions, err := ListSessions(ctx, SessionFilter{Project: "nonexistent-project-xyz"})
@@ -183,6 +185,7 @@ func TestMatchProject(t *testing.T) {
 func TestListSessionsFromHistoryJsonl(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	profileName := "histprof"
 	baseDir, _ := GetBaseDir()
@@ -230,6 +233,7 @@ func TestListSessionsFromHistoryJsonl(t *testing.T) {
 func TestListSessionsVolumesPath(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	profileName := "volprof"
 	baseDir, _ := GetBaseDir()

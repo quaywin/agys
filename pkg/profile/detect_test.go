@@ -10,6 +10,7 @@ import (
 func TestFindProfileByConversation(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	p1 := "work"
 	p2 := "personal"
@@ -51,6 +52,7 @@ func TestFindProfileByConversation(t *testing.T) {
 func TestFindProfileByLatestConversation(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	p1 := "work"
 	p2 := "personal"
@@ -94,6 +96,7 @@ func TestFindProfileByLatestConversation(t *testing.T) {
 func TestSaveGetLastConversation(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	// Test default state: empty cache
 	id, err := GetLastConversation()
@@ -123,6 +126,7 @@ func TestSaveGetLastConversation(t *testing.T) {
 func TestSaveGetSessionFlags(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	convID := "conv-test-flags-123"
 	flags := []string{"--dangerously-skip-permissions", "--model=pro"}

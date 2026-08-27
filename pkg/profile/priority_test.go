@@ -1,12 +1,14 @@
 package profile
 
 import (
+	"path/filepath"
 	"testing"
 )
 
 func TestPriorityManagement(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	profile1 := "work"
 	profile2 := "personal"

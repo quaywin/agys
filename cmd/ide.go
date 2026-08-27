@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"github.com/quaywin/agys/pkg/profile"
 	"github.com/spf13/cobra"
@@ -94,24 +95,52 @@ var ideCmd = &cobra.Command{
 
 		fmt.Printf("Launching Antigravity IDE (%s)...\n", targetProfile)
 
-		openArgs := []string{"-n", "-a", "/Applications/Antigravity IDE.app"}
-		if projectPath != "" {
-			absPath, err := filepath.Abs(projectPath)
-			if err == nil {
-				openArgs = append(openArgs, absPath)
-			} else {
-				openArgs = append(openArgs, projectPath)
+		if runtime.GOOS == "darwin" {
+			openArgs := []string{"-n", "-a", "/Applications/Antigravity IDE.app"}
+			if projectPath != "" {
+				absPath, err := filepath.Abs(projectPath)
+				if err == nil {
+					openArgs = append(openArgs, absPath)
+				} else {
+					openArgs = append(openArgs, projectPath)
+				}
 			}
-		}
-		openArgs = append(openArgs, "--args", "--user-data-dir="+ideDataDir)
+			openArgs = append(openArgs, "--args", "--user-data-dir="+ideDataDir)
 
-		openCmd := exec.Command("open", openArgs...)
-		if err := openCmd.Run(); err != nil {
-			// Fallback to Antigravity.app if Antigravity IDE.app is missing
-			openArgs[2] = "/Applications/Antigravity.app"
-			openCmd = exec.Command("open", openArgs...)
+			openCmd := exec.Command("open", openArgs...)
 			if err := openCmd.Run(); err != nil {
-				return fmt.Errorf("failed to launch Antigravity IDE: %w", err)
+				// Fallback to Antigravity.app if Antigravity IDE.app is missing
+				openArgs[2] = "/Applications/Antigravity.app"
+				openCmd = exec.Command("open", openArgs...)
+				if err := openCmd.Run(); err != nil {
+					return fmt.Errorf("failed to launch Antigravity IDE: %w", err)
+				}
+			}
+		} else {
+			// Linux / Windows / other POSIX: look up executable in PATH
+			binNames := []string{"antigravity", "antigravity-ide", "code"}
+			var chosenBin string
+			for _, bin := range binNames {
+				if p, err := exec.LookPath(bin); err == nil && p != "" {
+					chosenBin = bin
+					break
+				}
+			}
+			if chosenBin == "" {
+				return fmt.Errorf("could not find Antigravity IDE binary (searched: %v) in $PATH", binNames)
+			}
+			ideArgs := []string{"--user-data-dir=" + ideDataDir}
+			if projectPath != "" {
+				absPath, err := filepath.Abs(projectPath)
+				if err == nil {
+					ideArgs = append(ideArgs, absPath)
+				} else {
+					ideArgs = append(ideArgs, projectPath)
+				}
+			}
+			cmd := exec.Command(chosenBin, ideArgs...)
+			if err := cmd.Start(); err != nil {
+				return fmt.Errorf("failed to start %s: %w", chosenBin, err)
 			}
 		}
 

@@ -145,6 +145,7 @@ func TestSyncAllTokenLocations(t *testing.T) {
 func TestRemoteDaemonMetadata(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	profileName := "remote-test"
 	profileDir, err := Create(profileName)

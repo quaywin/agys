@@ -15,6 +15,7 @@ import (
 func TestSyncHerdrIntegration(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 	t.Setenv("HERDR_ENV", "1")
 
 	profileName := "test-herdr-profile"
@@ -366,6 +367,7 @@ func TestReportHerdrMetadata_Compact2RowTokens(t *testing.T) {
 
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_PANE_ID", "w1:p1")
 	t.Setenv("HERDR_SOCKET_PATH", sockPath)

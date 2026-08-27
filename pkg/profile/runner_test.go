@@ -2,6 +2,7 @@ package profile
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -9,6 +10,7 @@ import (
 func TestRunCmdWithSignals_ContextCancel(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	profileName := "test-runner-profile"
 	profileDir, err := Create(profileName)

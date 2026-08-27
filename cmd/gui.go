@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -21,6 +22,10 @@ var guiCmd = &cobra.Command{
 	ValidArgsFunction: CompleteProfileNames,
 	Args:              cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if runtime.GOOS != "darwin" {
+			return fmt.Errorf("antigravity 2.0 GUI desktop application is currently only supported on macOS. On Linux, use 'agys run' for CLI or 'agys ide' for IDE")
+		}
+
 		var profileName string
 
 		if len(args) > 0 {

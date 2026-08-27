@@ -112,16 +112,8 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		_ = json.Unmarshal(input, &payload)
 	}
 
-	// Resolve current active profile directory
-	currentProfile, _ := GetCurrent()
-	var profileDir string
-	if currentProfile != "" && currentProfile != "auto" {
-		profileDir, _ = GetProfileDir(currentProfile)
-	}
-	if profileDir == "" {
-		// Fallback to real user home or agys home
-		profileDir = os.Getenv("HOME")
-	}
+	// Resolve active profile and profile directory from current session environment
+	currentProfile, profileDir := ResolveProfileFromEnv()
 
 	// Extract context window metrics
 	var ctxUsedPct float64

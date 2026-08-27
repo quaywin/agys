@@ -24,6 +24,17 @@ func GetRealUserHome() (string, error) {
 	if val := os.Getenv("AGYS_REAL_HOME"); val != "" {
 		return filepath.Clean(val), nil
 	}
+	home := os.Getenv("HOME")
+	if home != "" {
+		agysSep := string(filepath.Separator) + ".agys"
+		if idx := strings.Index(home, agysSep); idx != -1 {
+			home = home[:idx]
+		}
+		if home == "" {
+			home = "/"
+		}
+		return filepath.Clean(home), nil
+	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("unable to determine user home directory: %w", err)
@@ -72,6 +83,31 @@ func GetProfileDir(name string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(baseDir, name), nil
+}
+
+// ResolveProfileFromEnv detects the active profile name and profile directory from the current HOME environment variable.
+// If HOME points inside ~/.agys/profiles/<name>, it extracts (<name>, <profileDir>).
+// Otherwise, it falls back to GetCurrent() and GetProfileDir().
+func ResolveProfileFromEnv() (string, string) {
+	home := os.Getenv("HOME")
+	if home != "" {
+		agysProfiles := string(filepath.Separator) + ".agys" + string(filepath.Separator) + "profiles" + string(filepath.Separator)
+		if idx := strings.Index(home, agysProfiles); idx != -1 {
+			sub := home[idx+len(agysProfiles):]
+			parts := strings.Split(sub, string(filepath.Separator))
+			if len(parts) > 0 && parts[0] != "" {
+				profName := parts[0]
+				return profName, filepath.Clean(home)
+			}
+		}
+	}
+	curr, _ := GetCurrent()
+	if curr != "" && curr != "auto" {
+		if pDir, err := GetProfileDir(curr); err == nil {
+			return curr, pDir
+		}
+	}
+	return curr, home
 }
 
 // ValidateName ensures profile names contain only allowed characters and are not reserved keywords.
@@ -439,7 +475,7 @@ func SyncAllTokenLocations(profileDir string) error {
 // ClearKeychainToken removes the cached generic password item from macOS Keychain.
 // This forces `agy` to load the profile-isolated token file from disk instead of using a stale token from another profile.
 func ClearKeychainToken() {
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == "darwin" && os.Getenv("AGYS_SKIP_KEYCHAIN") != "1" {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = exec.CommandContext(ctx, "security", "delete-generic-password", "-s", "gemini", "-a", "antigravity").Run()
@@ -448,7 +484,7 @@ func ClearKeychainToken() {
 
 // SyncDiskTokenToKeychain loads the profile's isolated token file from disk and seeds macOS Keychain if present.
 func SyncDiskTokenToKeychain(profileDir string) {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" || os.Getenv("AGYS_SKIP_KEYCHAIN") == "1" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -497,7 +533,7 @@ func ReadTokenFromDir(profileDir string) (*OAuthToken, error) {
 // If initialRefreshToken was non-empty before agy ran, but the disk token is missing after agy ran (e.g. user logged out),
 // it invalidates email cache and refrains from restoring stale Keychain tokens.
 func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" || os.Getenv("AGYS_SKIP_KEYCHAIN") == "1" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -603,11 +639,11 @@ func SyncKeychainTokenToDisk(profileDir string, initialRefreshToken string) {
 // This prevents macOS SecurityAgent from showing system UI popup dialogs ("A keychain cannot be found")
 // while avoiding running security CLI commands that prompt for passwords.
 func EnsureKeychain(profileDir string) error {
-	SyncDiskTokenToKeychain(profileDir)
-
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
+
+	SyncDiskTokenToKeychain(profileDir)
 
 	userHome, err := os.UserHomeDir()
 	if err != nil {

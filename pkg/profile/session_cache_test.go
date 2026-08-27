@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -8,6 +9,7 @@ import (
 func TestSessionCacheLoadSave(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 
 	// Test loading when cache doesn't exist
 	cache, err := LoadSessionCache()
