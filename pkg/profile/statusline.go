@@ -142,9 +142,12 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		})
 	}
 
-	// If active model is provided in payload, update .active_model cache
+	// If active model is provided in payload, update .active_model cache only if changed
 	if payload.Model.ID != "" && profileDir != "" {
-		_ = WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(payload.Model.ID+"\n"), 0600)
+		activeModelPath := filepath.Join(profileDir, ".active_model")
+		if curr, err := os.ReadFile(activeModelPath); err != nil || strings.TrimSpace(string(curr)) != payload.Model.ID {
+			_ = WriteFileAtomic(activeModelPath, []byte(payload.Model.ID+"\n"), 0600)
+		}
 	}
 
 	// If inside Herdr environment, trigger immediate metadata refresh for instant zero-latency sidebar update

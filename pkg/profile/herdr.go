@@ -288,14 +288,14 @@ func SyncHerdrIntegration(profileDir string) error {
 
 	hookFile := filepath.Join(hookDir, "herdr-agent-state.sh")
 
-	// Always write the latest synchronized hook script
+	// Write synchronized hook script if missing or updated
 	scriptContent := []byte(defaultHerdrHookScript)
-	if err := WriteFileAtomic(hookFile, scriptContent, 0755); err != nil {
-		return fmt.Errorf("failed to write herdr hook file: %w", err)
+	if existingData, err := os.ReadFile(hookFile); err != nil || !bytes.Equal(existingData, scriptContent) {
+		if err := WriteFileAtomic(hookFile, scriptContent, 0755); err != nil {
+			return fmt.Errorf("failed to write herdr hook file: %w", err)
+		}
+		_ = os.Chmod(hookFile, 0755)
 	}
-
-	// Ensure executable permission
-	_ = os.Chmod(hookFile, 0755)
 
 	// Ensure hooks.json is configured with PreInvocation, PostInvocation, and Stop hooks
 	hooksJSONPath := filepath.Join(profileDir, ".gemini", "config", "hooks.json")
@@ -356,7 +356,12 @@ func ensureHooksJSON(hooksJSONPath, hookScriptPath string) error {
 		return err
 	}
 
-	return WriteFileAtomic(hooksJSONPath, []byte(string(updatedData)+"\n"), 0600)
+	newBytes := []byte(string(updatedData) + "\n")
+	if data != nil && bytes.Equal(data, newBytes) {
+		return nil
+	}
+
+	return WriteFileAtomic(hooksJSONPath, newBytes, 0600)
 }
 
 func sendHerdrSocketRPC(ctx context.Context, socketPath string, data []byte) []byte {
@@ -508,15 +513,28 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 	quotaCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
-	targetPanes := getMatchingHerdrPanes(quotaCtx, socketPath, paneID, profileName, modelName)
+	var targetPanes []HerdrPaneMatch
+	if updateContext && paneID != "" {
+		// Inline hook is per-pane: update ONLY the current pane to prevent triggering multi-pane render cascades or model overwrite.
+		targetPanes = []HerdrPaneMatch{{
+			PaneID: paneID,
+			Model:  modelName,
+		}}
+	} else {
+		targetPanes = getMatchingHerdrPanes(quotaCtx, socketPath, paneID, profileName, modelName)
+	}
+
 	for _, target := range targetPanes {
 		if target.PaneID == "" {
 			continue
 		}
 
-		targetModel := modelName // Always prefer fresh model from hook payload
-		if target.PaneID != paneID && target.Model != "" && (modelName == "" || modelName == "auto") {
-			targetModel = target.Model
+		targetModel := target.Model
+		if targetModel == "" || targetModel == "auto" {
+			targetModel = modelName
+		}
+		if targetModel == "" {
+			targetModel = "gemini"
 		}
 
 		displayAgent := profileName

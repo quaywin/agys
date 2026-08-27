@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -57,7 +58,12 @@ func updateSettingsTrustedWorkspaces(settingsPath string, allTrusted []string) e
 		return err
 	}
 
-	return WriteFileAtomic(settingsPath, []byte(string(updatedJSON)+"\n"), 0600)
+	newBytes := []byte(string(updatedJSON) + "\n")
+	if data != nil && string(bytes.TrimSpace(data)) == string(bytes.TrimSpace(newBytes)) {
+		return nil
+	}
+
+	return WriteFileAtomic(settingsPath, newBytes, 0600)
 }
 
 // SyncTrustedWorkspaces merges trustedWorkspaces across all profiles so any workspace trusted in one profile is trusted in all.
