@@ -85,10 +85,15 @@ func GetProfileDir(name string) (string, error) {
 	return filepath.Join(baseDir, name), nil
 }
 
-// ResolveProfileFromEnv detects the active profile name and profile directory from the current HOME environment variable.
+// ResolveProfileFromEnv detects the active profile name and profile directory from AGYS_PROFILE or HOME environment variable.
 // If HOME points inside ~/.agys/profiles/<name>, it extracts (<name>, <profileDir>).
 // Otherwise, it falls back to GetCurrent() and GetProfileDir().
 func ResolveProfileFromEnv() (string, string) {
+	if prof := os.Getenv("AGYS_PROFILE"); prof != "" {
+		if pDir, err := GetProfileDir(prof); err == nil {
+			return prof, pDir
+		}
+	}
 	home := os.Getenv("HOME")
 	if home != "" {
 		agysProfiles := string(filepath.Separator) + ".agys" + string(filepath.Separator) + "profiles" + string(filepath.Separator)
@@ -97,7 +102,10 @@ func ResolveProfileFromEnv() (string, string) {
 			parts := strings.Split(sub, string(filepath.Separator))
 			if len(parts) > 0 && parts[0] != "" {
 				profName := parts[0]
-				return profName, filepath.Clean(home)
+				if pDir, err := GetProfileDir(profName); err == nil {
+					return profName, pDir
+				}
+				return profName, home[:idx+len(agysProfiles)+len(profName)]
 			}
 		}
 	}

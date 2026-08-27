@@ -195,6 +195,9 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 		_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(activeModel), 0600)
 	}
 
+	// Ensure statusLine hook is configured in settings.json to capture real-time context window and render footer telemetry
+	_ = profile.SyncStatusLineSettings(profileDir)
+
 	// Ensure Herdr integration hook and display metadata are active ONLY in Herdr environment
 	if profile.IsInHerdrEnvironment() {
 		_ = profile.SyncHerdrIntegration(profileDir)

@@ -11,6 +11,7 @@ func TestHerdrCommands(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.toml")
 	t.Setenv("HERDR_CONFIG_FILE", configPath)
+	t.Setenv("HERDR_CONFIG_PATH", configPath)
 
 	// 1. herdr status before configure
 	var buf bytes.Buffer

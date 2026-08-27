@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -142,6 +143,14 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		})
 	}
 
+	activeModel := payload.Model.ID
+	if activeModel == "" {
+		activeModel = payload.Model.DisplayName
+	}
+	if profileDir != "" {
+		activeModel = ResolveActiveModel(profileDir, activeModel)
+	}
+
 	// If active model is provided in payload, update .active_model cache only if changed
 	if payload.Model.ID != "" && profileDir != "" {
 		activeModelPath := filepath.Join(profileDir, ".active_model")
@@ -150,15 +159,28 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		}
 	}
 
+	// Retrieve real-time quota details for CLI statusline footer & Herdr update
+	var quotaDetails *ModelQuotaDetails
+	if currentProfile != "" {
+		quotaCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		quotaDetails, _ = GetProfileFullQuotaDetailsForModel(quotaCtx, currentProfile, activeModel)
+		cancel()
+	}
+
 	// If inside Herdr environment, trigger immediate metadata refresh for instant zero-latency sidebar update
 	if IsInHerdrEnvironment() && currentProfile != "" {
-		activeModel := payload.Model.ID
-		if activeModel == "" {
-			activeModel = payload.Model.DisplayName
-		}
 		reportCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cancel()
-		_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel)
+		_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel, quotaDetails)
+	}
+
+	// Format high-contrast real-time telemetry string for Antigravity CLI footer
+	useColor := os.Getenv("NO_COLOR") == ""
+	ctxPct := int(ctxUsedPct + 0.5)
+	statusLineStr := FormatStatusLineText(currentProfile, activeModel, ctxPct, hasCtx, inputTokens, quotaDetails, useColor)
+
+	if stdout != nil && statusLineStr != "" {
+		fmt.Fprintln(stdout, statusLineStr)
 	}
 
 	// Chain previous statusLine command if one was preserved
@@ -167,6 +189,111 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	}
 
 	return nil
+}
+
+// FormatTokens formats an integer token count into a compact human-readable string (e.g. 14500 -> "14.5k", 1200000 -> "1.2M").
+func FormatTokens(tokens int64) string {
+	if tokens >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(tokens)/1_000_000.0)
+	}
+	if tokens >= 1_000 {
+		return fmt.Sprintf("%.1fk", float64(tokens)/1_000.0)
+	}
+	if tokens > 0 {
+		return fmt.Sprintf("%d", tokens)
+	}
+	return ""
+}
+
+// FormatStatusLineText formats the real-time statusline text rendered in Antigravity CLI's footer bar.
+// Example: [davidnguyen] · 5% ctx (14.5k) · gemini-3.7-flash · 5H: 95% (1h26m) · Wk: 79% (6h35m)
+func FormatStatusLineText(profileName, modelName string, ctxPct int, hasCtx bool, inputTokens int64, quotaDetails *ModelQuotaDetails, useColor bool) string {
+	var parts []string
+
+	sep := " · "
+	if useColor {
+		sep = "\033[90m · \033[0m"
+	}
+
+	// 1. Profile Name
+	if profileName != "" {
+		pStr := fmt.Sprintf("[%s]", profileName)
+		if useColor {
+			pStr = fmt.Sprintf("\033[1;36m[%s]\033[0m", profileName)
+		}
+		parts = append(parts, pStr)
+	}
+
+	// 2. Context Window % and input tokens
+	if hasCtx {
+		ctxStr := fmt.Sprintf("%d%% ctx", ctxPct)
+		if tokStr := FormatTokens(inputTokens); tokStr != "" {
+			ctxStr = fmt.Sprintf("%d%% ctx (%s)", ctxPct, tokStr)
+		}
+		if useColor {
+			if ctxPct >= 80 {
+				ctxStr = fmt.Sprintf("\033[1;31m%s\033[0m", ctxStr)
+			} else if ctxPct >= 50 {
+				ctxStr = fmt.Sprintf("\033[33m%s\033[0m", ctxStr)
+			} else {
+				ctxStr = fmt.Sprintf("\033[36m%s\033[0m", ctxStr)
+			}
+		}
+		parts = append(parts, ctxStr)
+	}
+
+	// 3. Active Model
+	if modelName != "" {
+		mStr := modelName
+		if useColor {
+			mStr = fmt.Sprintf("\033[94m%s\033[0m", modelName)
+		}
+		parts = append(parts, mStr)
+	}
+
+	// 4. 5H Quota
+	if quotaDetails != nil && quotaDetails.Fraction5H >= 0 {
+		pct5h := int(quotaDetails.Fraction5H*100 + 0.5)
+		q5hStr := fmt.Sprintf("5H: %d%%", pct5h)
+		if quotaDetails.CompactReset5H != "" {
+			q5hStr = fmt.Sprintf("5H: %d%% (%s)", pct5h, quotaDetails.CompactReset5H)
+		}
+		if useColor {
+			if pct5h >= 20 {
+				q5hStr = fmt.Sprintf("\033[32m%s\033[0m", q5hStr)
+			} else if pct5h > 5 {
+				q5hStr = fmt.Sprintf("\033[33m%s\033[0m", q5hStr)
+			} else {
+				q5hStr = fmt.Sprintf("\033[1;31m%s\033[0m", q5hStr)
+			}
+		}
+		parts = append(parts, q5hStr)
+	}
+
+	// 5. Weekly Quota
+	if quotaDetails != nil && quotaDetails.FractionWeekly >= 0 {
+		pctWk := int(quotaDetails.FractionWeekly*100 + 0.5)
+		qWkStr := fmt.Sprintf("Wk: %d%%", pctWk)
+		if quotaDetails.CompactResetWeekly != "" {
+			qWkStr = fmt.Sprintf("Wk: %d%% (%s)", pctWk, quotaDetails.CompactResetWeekly)
+		}
+		if useColor {
+			if pctWk >= 20 {
+				qWkStr = fmt.Sprintf("\033[35m%s\033[0m", qWkStr)
+			} else if pctWk > 5 {
+				qWkStr = fmt.Sprintf("\033[33m%s\033[0m", qWkStr)
+			} else {
+				qWkStr = fmt.Sprintf("\033[1;31m%s\033[0m", qWkStr)
+			}
+		}
+		parts = append(parts, qWkStr)
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return strings.Join(parts, sep)
 }
 
 func chainPreviousStatusLine(ctx context.Context, profileDir string, input []byte, stdout, stderr io.Writer) {

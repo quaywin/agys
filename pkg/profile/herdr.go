@@ -157,6 +157,9 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 	paneID := os.Getenv("HERDR_PANE_ID")
 	socketPath := os.Getenv("HERDR_SOCKET_PATH")
 
+	currentProfile, profileDir := ResolveProfileFromEnv()
+	activeModel := ResolveActiveModel(profileDir, "")
+
 	if action == "session" && stdin != nil {
 		var payload struct {
 			ConversationID string `json:"conversationId"`
@@ -181,6 +184,12 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 			})
 			sendHerdrSocketRPC(ctx, socketPath, req)
 		}
+	} else if action == "quota" || action == "stop" {
+		if currentProfile != "" {
+			quotaCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+			defer cancel()
+			_ = ReportHerdrMetadataWithModel(quotaCtx, currentProfile, activeModel)
+		}
 	}
 
 	fmt.Println("{}")
@@ -203,6 +212,17 @@ func ToSuperscriptPercent(pct int) string {
 		}
 	}
 	return string(out) + "%"
+}
+
+func formatModelContext(ctxPct int, hasCtx bool, model string) string {
+	if hasCtx && model != "" {
+		return fmt.Sprintf("%d%% ctx · %s", ctxPct, model)
+	} else if model != "" {
+		return model
+	} else if hasCtx {
+		return fmt.Sprintf("%d%% ctx", ctxPct)
+	}
+	return ""
 }
 
 // FormatModelAbbreviation converts a full model name or group name into a clean, compact 3-letter abbreviation.
@@ -488,8 +508,8 @@ func ReportHerdrMetadata(ctx context.Context, profileName string) error {
 }
 
 // ReportHerdrMetadataWithModel communicates with Herdr via its UNIX domain socket to set metadata including live context window metrics.
-func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName string) error {
-	return reportHerdrMetadataInternal(ctx, profileName, modelName, true)
+func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName string, preloadedDetails ...*ModelQuotaDetails) error {
+	return reportHerdrMetadataInternal(ctx, profileName, modelName, true, preloadedDetails...)
 }
 
 // ReportHerdrQuotaOnly communicates with Herdr via its UNIX domain socket to update ONLY quota metrics (5H & Weekly) and reset countdowns,
@@ -498,7 +518,7 @@ func ReportHerdrQuotaOnly(ctx context.Context, profileName, modelName string) er
 	return reportHerdrMetadataInternal(ctx, profileName, modelName, false)
 }
 
-func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName string, updateContext bool) error {
+func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName string, updateContext bool, preloadedDetails ...*ModelQuotaDetails) error {
 	if !IsInHerdrEnvironment() {
 		return nil
 	}
@@ -565,38 +585,49 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		// Handle Row 2: Context window + Model
 		var ctxPct int
 		var hasCtx bool
-		if updateContext {
-			if pDir, pErr := GetProfileDir(profileName); pErr == nil {
-				if ctxPct, hasCtx = GetSessionContext(pDir); hasCtx {
-					tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
-				}
-			}
+		if pDir, pErr := GetProfileDir(profileName); pErr == nil {
+			ctxPct, hasCtx = GetSessionContext(pDir)
+		}
 
-			var modelCtxStr string
-			if targetModel != "" {
-				if hasCtx {
-					modelCtxStr = fmt.Sprintf("%d%% ctx · %s", ctxPct, targetModel)
-				} else {
-					modelCtxStr = targetModel
-				}
-			} else if hasCtx {
-				modelCtxStr = fmt.Sprintf("%d%% ctx", ctxPct)
+		modelCtxStr := formatModelContext(ctxPct, hasCtx, targetModel)
+		if updateContext {
+			if hasCtx {
+				tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
 			}
 			if modelCtxStr != "" {
 				tokens["quota_model_context"] = modelCtxStr
 			}
 		} else {
-			// Watcher polling: strictly preserve existing context tokens on the pane to prevent any overwrite or conflict
+			// Watcher polling: strictly preserve existing context tokens on the pane, or fallback to session context
 			if target.QuotaModelContext != "" {
 				tokens["quota_model_context"] = target.QuotaModelContext
+			} else if modelCtxStr != "" {
+				tokens["quota_model_context"] = modelCtxStr
 			}
+
 			if target.QuotaContext != "" {
 				tokens["quota_context"] = target.QuotaContext
+			} else if hasCtx {
+				tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
 			}
 		}
 
-		details, err := GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
+		var details *ModelQuotaDetails
+		var err error
+		if len(preloadedDetails) > 0 && preloadedDetails[0] != nil && (targetModel == modelName || targetModel == "") {
+			details = preloadedDetails[0]
+		} else {
+			details, err = GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
+		}
 		if err == nil && details != nil && details.Fraction5H >= 0 {
+			// Clear all tier keys first so Herdr only renders the newly active tier
+			tokens["quota_5h_normal"] = ""
+			tokens["quota_5h_warning"] = ""
+			tokens["quota_5h_danger"] = ""
+			tokens["quota_week_normal"] = ""
+			tokens["quota_week_warning"] = ""
+			tokens["quota_week_danger"] = ""
+
 			pct5h := int(details.Fraction5H*100 + 0.5)
 			pct5hStr := fmt.Sprintf("%d%%", pct5h)
 			if details.GroupName != "" {
