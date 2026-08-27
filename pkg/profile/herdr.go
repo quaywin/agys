@@ -383,10 +383,13 @@ func sendHerdrSocketRPC(ctx context.Context, socketPath string, data []byte) []b
 	return bytes.TrimSpace(line)
 }
 
-// HerdrPaneMatch represents a matched Herdr pane along with its specific active model.
+// HerdrPaneMatch represents a matched Herdr pane along with its specific active model and existing tokens.
 type HerdrPaneMatch struct {
-	PaneID string
-	Model  string
+	PaneID            string
+	Model             string
+	QuotaModelContext string
+	QuotaContext      string
+	Title             string
 }
 
 func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profileName, currentModel string) []HerdrPaneMatch {
@@ -426,11 +429,14 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 			}
 			isMatch := false
 			paneModel := ""
+			var quotaModelContext, quotaContext string
 			if p.Tokens != nil {
 				if p.Tokens["profile"] == profileName {
 					isMatch = true
 				}
 				paneModel = p.Tokens["model"]
+				quotaModelContext = p.Tokens["quota_model_context"]
+				quotaContext = p.Tokens["quota_context"]
 			}
 			if !isMatch {
 				if strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s:", profileName)) || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s]", profileName)) || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s ", profileName)) {
@@ -439,9 +445,31 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 					isMatch = true
 				}
 			}
-			if isMatch && !seen[p.PaneID] {
-				targetPanes = append(targetPanes, HerdrPaneMatch{PaneID: p.PaneID, Model: paneModel})
-				seen[p.PaneID] = true
+			if isMatch {
+				if !seen[p.PaneID] {
+					targetPanes = append(targetPanes, HerdrPaneMatch{
+						PaneID:            p.PaneID,
+						Model:             paneModel,
+						QuotaModelContext: quotaModelContext,
+						QuotaContext:      quotaContext,
+						Title:             p.Title,
+					})
+					seen[p.PaneID] = true
+				} else {
+					for i := range targetPanes {
+						if targetPanes[i].PaneID == p.PaneID {
+							if targetPanes[i].QuotaModelContext == "" {
+								targetPanes[i].QuotaModelContext = quotaModelContext
+							}
+							if targetPanes[i].QuotaContext == "" {
+								targetPanes[i].QuotaContext = quotaContext
+							}
+							if targetPanes[i].Title == "" {
+								targetPanes[i].Title = p.Title
+							}
+						}
+					}
+				}
 			}
 		}
 	}
@@ -451,11 +479,21 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 
 // ReportHerdrMetadata communicates with Herdr via its UNIX domain socket to set display_agent, title, and quota for all matching panes.
 func ReportHerdrMetadata(ctx context.Context, profileName string) error {
-	return ReportHerdrMetadataWithModel(ctx, profileName, "")
+	return reportHerdrMetadataInternal(ctx, profileName, "", true)
 }
 
-// ReportHerdrMetadataWithModel communicates with Herdr via its UNIX domain socket to set metadata matching each pane's active model.
+// ReportHerdrMetadataWithModel communicates with Herdr via its UNIX domain socket to set metadata including live context window metrics.
 func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName string) error {
+	return reportHerdrMetadataInternal(ctx, profileName, modelName, true)
+}
+
+// ReportHerdrQuotaOnly communicates with Herdr via its UNIX domain socket to update ONLY quota metrics (5H & Weekly) and reset countdowns,
+// explicitly preserving existing context window tokens and title state to prevent conflicts with live turn-by-turn stream hooks.
+func ReportHerdrQuotaOnly(ctx context.Context, profileName, modelName string) error {
+	return reportHerdrMetadataInternal(ctx, profileName, modelName, false)
+}
+
+func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName string, updateContext bool) error {
 	if !IsInHerdrEnvironment() {
 		return nil
 	}
@@ -483,6 +521,9 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 
 		displayAgent := profileName
 		title := fmt.Sprintf("agys: %s", profileName)
+		if target.Title != "" {
+			title = target.Title
+		}
 		tokens := map[string]string{
 			"profile": profileName,
 		}
@@ -490,30 +531,37 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 			tokens["model"] = targetModel
 		}
 
-		// Check session context window usage
-		var ctxStr string
+		// Handle Row 2: Context window + Model
 		var ctxPct int
 		var hasCtx bool
-		if pDir, pErr := GetProfileDir(profileName); pErr == nil {
-			if ctxPct, hasCtx = GetSessionContext(pDir); hasCtx {
-				ctxStr = fmt.Sprintf("ctx %d%%", ctxPct)
-				tokens["quota_context"] = ctxStr
+		if updateContext {
+			if pDir, pErr := GetProfileDir(profileName); pErr == nil {
+				if ctxPct, hasCtx = GetSessionContext(pDir); hasCtx {
+					tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
+				}
 			}
-		}
 
-		// Row 2: % ctx + Full Model ID (e.g. 32% ctx · claude-3-7-sonnet)
-		var modelCtxStr string
-		if targetModel != "" {
-			if hasCtx {
-				modelCtxStr = fmt.Sprintf("%d%% ctx · %s", ctxPct, targetModel)
-			} else {
-				modelCtxStr = targetModel
+			var modelCtxStr string
+			if targetModel != "" {
+				if hasCtx {
+					modelCtxStr = fmt.Sprintf("%d%% ctx · %s", ctxPct, targetModel)
+				} else {
+					modelCtxStr = targetModel
+				}
+			} else if hasCtx {
+				modelCtxStr = fmt.Sprintf("%d%% ctx", ctxPct)
 			}
-		} else if hasCtx {
-			modelCtxStr = fmt.Sprintf("%d%% ctx", ctxPct)
-		}
-		if modelCtxStr != "" {
-			tokens["quota_model_context"] = modelCtxStr
+			if modelCtxStr != "" {
+				tokens["quota_model_context"] = modelCtxStr
+			}
+		} else {
+			// Watcher polling: strictly preserve existing context tokens on the pane to prevent any overwrite or conflict
+			if target.QuotaModelContext != "" {
+				tokens["quota_model_context"] = target.QuotaModelContext
+			}
+			if target.QuotaContext != "" {
+				tokens["quota_context"] = target.QuotaContext
+			}
 		}
 
 		details, err := GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
@@ -526,8 +574,24 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 			tokens["quota"] = pct5hStr
 
 			var titleParts []string
-			if hasCtx {
-				titleParts = append(titleParts, fmt.Sprintf("Ctx: %d%%", ctxPct))
+			if updateContext {
+				if hasCtx {
+					titleParts = append(titleParts, fmt.Sprintf("Ctx: %d%%", ctxPct))
+				}
+			} else {
+				// Preserve existing Ctx string in title
+				if strings.Contains(target.Title, "Ctx: ") {
+					idx := strings.Index(target.Title, "Ctx: ")
+					rest := target.Title[idx:]
+					end := strings.Index(rest, " •")
+					if end == -1 {
+						end = len(rest)
+					}
+					titleParts = append(titleParts, rest[:end])
+				} else if target.QuotaContext != "" && strings.HasPrefix(target.QuotaContext, "ctx ") {
+					pct := strings.TrimPrefix(target.QuotaContext, "ctx ")
+					titleParts = append(titleParts, fmt.Sprintf("Ctx: %s", pct))
+				}
 			}
 
 			if details.ResetStr5H != "" && details.ResetStr5H != "-" {
@@ -672,7 +736,7 @@ func StartHerdrQuotaWatcher(ctx context.Context, profileName string, modelName .
 			case <-ticker.C:
 				currentModel := ResolveActiveModel(pDir, "")
 				reportCtx, reportCancel := context.WithTimeout(watchCtx, 6*time.Second)
-				_ = ReportHerdrMetadataWithModel(reportCtx, profileName, currentModel)
+				_ = ReportHerdrQuotaOnly(reportCtx, profileName, currentModel)
 				reportCancel()
 			}
 		}

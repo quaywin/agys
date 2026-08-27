@@ -10,7 +10,7 @@ command = ["go", "build", "-o", "./bin/agys", "."]
 platforms = ["macos", "linux", "windows"]
 
 [[startup]]
-command = ["agys", "herdr", "configure"]
+command = ["sh", "-c", "command -v agys >/dev/null 2>&1 || curl -fsSL https://raw.githubusercontent.com/quaywin/agys/main/install.sh | bash; agys herdr configure"]
 
 [[panes]]
 id = "quota"
@@ -18,7 +18,7 @@ title = "Antigravity Quota"
 placement = "popup"
 width = "85%"
 height = 22
-command = ["sh", "-c", "agys quota 2>/dev/null || ./bin/agys quota; printf '\\n\\033[90mPress [Enter] to close...\\033[0m'; read -r _"]
+command = ["sh", "-c", "agys quota; printf '\\n\\033[90mPress [Enter] to close...\\033[0m'; read -r _"]
 platforms = ["macos", "linux"]
 
 [[actions]]

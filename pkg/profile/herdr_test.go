@@ -405,3 +405,71 @@ func TestReportHerdrMetadata_Compact2RowTokens(t *testing.T) {
 		t.Errorf("No payload received on mock socket within timeout")
 	}
 }
+
+func TestReportHerdrQuotaOnly_PreservesExistingContext(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_quotaonly_test_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan string, 1)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				// Pane already has a live 42% context token from inline statusline hook
+				_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","title":"agys: quota-profile [cld] Ctx: 42%","tokens":{"profile":"quota-profile","model":"claude-3-7-sonnet","quota_model_context":"42% ctx · claude-3-7-sonnet","quota_context":"ctx 42%"}}]}}` + "\n"))
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					received <- reqStr
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	_, err = Create("quota-profile")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	// Call ReportHerdrQuotaOnly (simulating 60s background watcher)
+	err = ReportHerdrQuotaOnly(context.Background(), "quota-profile", "claude-3-7-sonnet")
+	if err != nil {
+		t.Fatalf("ReportHerdrQuotaOnly error: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		// Verify that existing 42% context window was strictly preserved
+		if !strings.Contains(payload, "42% ctx · claude-3-7-sonnet") {
+			t.Errorf("Expected ReportHerdrQuotaOnly to preserve '42%% ctx · claude-3-7-sonnet', got: %s", payload)
+		}
+		if !strings.Contains(payload, "Ctx: 42%") {
+			t.Errorf("Expected title in payload to preserve 'Ctx: 42%%', got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("No payload received on mock socket within timeout")
+	}
+}
+
