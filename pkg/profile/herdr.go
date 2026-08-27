@@ -83,6 +83,38 @@ func ReadSettingsModel(profileDir string) string {
 	return latestModel
 }
 
+// SyncModelToSettings updates the "model" field in settings.json to match the active model,
+// preventing startup flicker where the previous model is shown for a few seconds.
+func SyncModelToSettings(profileDir, modelName string) {
+	if profileDir == "" || modelName == "" {
+		return
+	}
+	candidatePaths := []string{
+		filepath.Join(profileDir, ".gemini", "antigravity-cli", "settings.json"),
+		filepath.Join(profileDir, ".gemini", "antigravity", "settings.json"),
+		filepath.Join(profileDir, ".gemini", "antigravity-ide", "settings.json"),
+	}
+	for _, sPath := range candidatePaths {
+		data, err := os.ReadFile(sPath)
+		if err != nil {
+			continue
+		}
+		var settings map[string]interface{}
+		if err := json.Unmarshal(data, &settings); err != nil {
+			continue
+		}
+		currModel, _ := settings["model"].(string)
+		if NormalizeModelName(currModel) == NormalizeModelName(modelName) {
+			continue
+		}
+		settings["model"] = modelName
+		out, err := json.MarshalIndent(settings, "", "  ")
+		if err == nil {
+			_ = WriteFileAtomic(sPath, []byte(string(out)+"\n"), 0600)
+		}
+	}
+}
+
 // NormalizeModelName converts a display name (e.g. "Claude Opus 4.6 (Thinking)", "Gemini 2.5 Pro")
 // into a lowercase, hyphenated API-style ID (e.g. "claude-opus-4", "gemini-2.5-pro").
 // If the name is already in API format, it is returned as-is (lowercased).
@@ -158,10 +190,20 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 
 	currentProfile, profileDir := ResolveProfileFromEnv()
 	if IsAuto(currentProfile) || currentProfile == "" {
-		if best, _, err := SelectBestProfile(ctx); err == nil && best != "" {
-			currentProfile = best
-			if pDir, pErr := GetProfileDir(best); pErr == nil {
-				profileDir = pDir
+		if paneID != "" && socketPath != "" {
+			if paneProf := resolveProfileFromPane(ctx, socketPath, paneID); paneProf != "" {
+				currentProfile = paneProf
+				if pDir, pErr := GetProfileDir(paneProf); pErr == nil {
+					profileDir = pDir
+				}
+			}
+		}
+		if IsAuto(currentProfile) || currentProfile == "" {
+			if best, _, err := SelectBestProfile(ctx); err == nil && best != "" {
+				currentProfile = best
+				if pDir, pErr := GetProfileDir(best); pErr == nil {
+					profileDir = pDir
+				}
 			}
 		}
 	}
@@ -499,6 +541,66 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 	return targetPanes
 }
 
+func resolveProfileFromPane(ctx context.Context, socketPath, paneID string) string {
+	if socketPath == "" || paneID == "" {
+		return ""
+	}
+	req, _ := json.Marshal(map[string]interface{}{
+		"id":     fmt.Sprintf("agys:pane_prof:%d", time.Now().UnixNano()),
+		"method": "pane.list",
+		"params": map[string]interface{}{},
+	})
+	resp := sendHerdrSocketRPC(ctx, socketPath, req)
+	if len(resp) == 0 {
+		return ""
+	}
+	var parsed struct {
+		Result struct {
+			Panes []struct {
+				PaneID                string            `json:"pane_id"`
+				DisplayAgent          string            `json:"display_agent"`
+				TerminalTitle         string            `json:"terminal_title"`
+				TerminalTitleStripped string            `json:"terminal_title_stripped"`
+				Tokens                map[string]string `json:"tokens"`
+			} `json:"panes"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return ""
+	}
+	for _, p := range parsed.Result.Panes {
+		if p.PaneID == paneID {
+			// 1. Terminal title is set directly by the active process inside the pane (most reliable)
+			title := p.TerminalTitle
+			if title == "" {
+				title = p.TerminalTitleStripped
+			}
+			if strings.HasPrefix(title, "agys: ") {
+				parts := strings.Fields(strings.TrimPrefix(title, "agys: "))
+				if len(parts) > 0 && !IsAuto(parts[0]) {
+					if _, err := GetProfileDir(parts[0]); err == nil {
+						return parts[0]
+					}
+				}
+			}
+			// 2. Tokens profile
+			if p.Tokens != nil && p.Tokens["profile"] != "" && !IsAuto(p.Tokens["profile"]) {
+				if _, err := GetProfileDir(p.Tokens["profile"]); err == nil {
+					return p.Tokens["profile"]
+				}
+			}
+			// 3. Display agent
+			if p.DisplayAgent != "" && !IsAuto(p.DisplayAgent) {
+				if _, err := GetProfileDir(p.DisplayAgent); err == nil {
+					return p.DisplayAgent
+				}
+			}
+			break
+		}
+	}
+	return ""
+}
+
 // ReportHerdrMetadata communicates with Herdr via its UNIX domain socket to set display_agent, title, and quota for all matching panes.
 func ReportHerdrMetadata(ctx context.Context, profileName string) error {
 	return reportHerdrMetadataInternal(ctx, profileName, "", true)
@@ -521,6 +623,19 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 	}
 	paneID := os.Getenv("HERDR_PANE_ID")
 	socketPath := os.Getenv("HERDR_SOCKET_PATH")
+
+	if IsAuto(profileName) || profileName == "" {
+		if paneID != "" && socketPath != "" {
+			if paneProf := resolveProfileFromPane(ctx, socketPath, paneID); paneProf != "" {
+				profileName = paneProf
+			}
+		}
+		if IsAuto(profileName) || profileName == "" {
+			if best, _, err := SelectBestProfile(ctx); err == nil && best != "" {
+				profileName = best
+			}
+		}
+	}
 
 	// Resolve active model using full fallback chain: explicit arg > .active_model cache > settings.json
 	if pDir, err := GetProfileDir(profileName); err == nil {
@@ -546,11 +661,11 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			continue
 		}
 
-		targetModel := target.Model
+		targetModel := modelName
 		if targetModel == "" || targetModel == "auto" {
-			targetModel = modelName
+			targetModel = target.Model
 		}
-		if targetModel == "" {
+		if targetModel == "" || targetModel == "auto" {
 			targetModel = "gemini"
 		}
 
@@ -561,19 +676,12 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		}
 		tokens := map[string]string{
 			"profile":            profileName,
-			"quota_5h":           "",
 			"quota_5h_normal":    "",
 			"quota_5h_warning":   "",
 			"quota_5h_danger":    "",
-			"quota_week":         "",
 			"quota_week_normal":  "",
 			"quota_week_warning": "",
 			"quota_week_danger":  "",
-			"quota_summary":      "",
-			"quota":              "",
-			"reset":              "",
-			"quota_weekly":       "",
-			"reset_weekly":       "",
 		}
 		if targetModel != "" {
 			tokens["model"] = targetModel
@@ -611,7 +719,7 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 
 		var details *ModelQuotaDetails
 		var err error
-		if len(preloadedDetails) > 0 && preloadedDetails[0] != nil && (targetModel == modelName || targetModel == "") {
+		if len(preloadedDetails) > 0 && preloadedDetails[0] != nil {
 			details = preloadedDetails[0]
 		} else {
 			details, err = GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
@@ -630,8 +738,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			if details.GroupName != "" {
 				tokens["group"] = details.GroupName
 			}
-			tokens["quota"] = pct5hStr
-
 			var titleParts []string
 			if updateContext {
 				if hasCtx {
@@ -655,7 +761,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 
 			if details.ResetStr5H != "" && details.ResetStr5H != "-" {
 				titleParts = append(titleParts, fmt.Sprintf("5H: %s (%s)", pct5hStr, details.ResetStr5H))
-				tokens["reset"] = details.ResetStr5H
 			} else {
 				titleParts = append(titleParts, fmt.Sprintf("5H: %s", pct5hStr))
 			}
@@ -665,7 +770,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			if details.CompactReset5H != "" {
 				quota5hStr = fmt.Sprintf("%s %s", pct5hStr, details.CompactReset5H)
 			}
-			tokens["quota_5h"] = quota5hStr
 			if pct5h >= 20 {
 				tokens["quota_5h_normal"] = quota5hStr
 			} else if pct5h > 5 {
@@ -678,10 +782,8 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			if details.FractionWeekly >= 0 {
 				pctWk := int(details.FractionWeekly*100 + 0.5)
 				pctWkStr := fmt.Sprintf("%d%%", pctWk)
-				tokens["quota_weekly"] = pctWkStr
 				if details.ResetStrWeekly != "" && details.ResetStrWeekly != "-" {
 					titleParts = append(titleParts, fmt.Sprintf("Wk: %s (%s)", pctWkStr, details.ResetStrWeekly))
-					tokens["reset_weekly"] = details.ResetStrWeekly
 				} else {
 					titleParts = append(titleParts, fmt.Sprintf("Wk: %s", pctWkStr))
 				}
@@ -691,7 +793,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 				if details.CompactResetWeekly != "" {
 					quotaWkStr = fmt.Sprintf("%s %s", pctWkStr, details.CompactResetWeekly)
 				}
-				tokens["quota_week"] = quotaWkStr
 				if pctWk >= 20 {
 					tokens["quota_week_normal"] = quotaWkStr
 				} else if pctWk > 5 {
@@ -700,16 +801,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 					tokens["quota_week_danger"] = quotaWkStr
 				}
 			}
-
-			// Format compact summary token for row 3 (Quota only): "85% 2h · 90% 3d"
-			var summaryParts []string
-			if quota5hStr != "" {
-				summaryParts = append(summaryParts, quota5hStr)
-			}
-			if quotaWkStr != "" {
-				summaryParts = append(summaryParts, quotaWkStr)
-			}
-			tokens["quota_summary"] = strings.Join(summaryParts, " · ")
 
 			modelAbbr := FormatModelAbbreviation(targetModel, details.GroupName)
 			if modelAbbr != "" {

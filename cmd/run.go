@@ -195,6 +195,7 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 	activeModel = profile.ResolveActiveModel(profileDir, activeModel)
 	if activeModel != "" {
 		_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(activeModel), 0600)
+		profile.SyncModelToSettings(profileDir, activeModel)
 	}
 
 	// Ensure statusLine hook is configured in settings.json to capture real-time context window and render footer telemetry

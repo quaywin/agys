@@ -151,11 +151,12 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		activeModel = ResolveActiveModel(profileDir, activeModel)
 	}
 
-	// If active model is provided in payload, update .active_model cache only if changed
+	// If active model is provided in payload, update .active_model cache and settings.json only if changed
 	if payload.Model.ID != "" && profileDir != "" {
 		activeModelPath := filepath.Join(profileDir, ".active_model")
 		if curr, err := os.ReadFile(activeModelPath); err != nil || strings.TrimSpace(string(curr)) != payload.Model.ID {
 			_ = WriteFileAtomic(activeModelPath, []byte(payload.Model.ID+"\n"), 0600)
+			SyncModelToSettings(profileDir, payload.Model.ID)
 		}
 	}
 

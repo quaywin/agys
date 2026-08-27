@@ -529,3 +529,61 @@ func TestReportHerdrMetadata_ClearsStaleQuotaTiers(t *testing.T) {
 	}
 }
 
+func TestSyncModelToSettings(t *testing.T) {
+	tmpDir := t.TempDir()
+	cliDir := filepath.Join(tmpDir, ".gemini", "antigravity-cli")
+	_ = os.MkdirAll(cliDir, 0700)
+	sPath := filepath.Join(cliDir, "settings.json")
+	_ = os.WriteFile(sPath, []byte(`{"model":"Claude Opus 4.6 (Thinking)","enableTelemetry":false}`), 0600)
+
+	SyncModelToSettings(tmpDir, "gemini-3.7-flash")
+
+	data, err := os.ReadFile(sPath)
+	if err != nil {
+		t.Fatalf("Failed to read settings.json: %v", err)
+	}
+	if !strings.Contains(string(data), `"model": "gemini-3.7-flash"`) {
+		t.Errorf("Expected model in settings.json to be updated to gemini-3.7-flash, got: %s", string(data))
+	}
+}
+
+func TestResolveProfileFromPane(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_prof_test_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w8:p1","terminal_title":"agys: my-active-profile [gem] Ctx: 15%","tokens":{"profile":"my-active-profile"}}]}}` + "\n"))
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	_, _ = Create("my-active-profile")
+
+	got := resolveProfileFromPane(context.Background(), sockPath, "w8:p1")
+	if got != "my-active-profile" {
+		t.Errorf("Expected 'my-active-profile', got %q", got)
+	}
+}
+
+
