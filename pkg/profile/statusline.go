@@ -167,6 +167,13 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		cancel()
 	}
 
+	// Fallback to quota in stdin payload if API returned no quota
+	if (quotaDetails == nil || quotaDetails.Fraction5H < 0) && len(payload.Quota) > 0 {
+		if fb := parsePayloadQuota(payload.Quota); fb != nil {
+			quotaDetails = fb
+		}
+	}
+
 	// If inside Herdr environment, trigger immediate metadata refresh for instant zero-latency sidebar update
 	if IsInHerdrEnvironment() && currentProfile != "" {
 		reportCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
@@ -177,7 +184,7 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	// Format high-contrast real-time telemetry string for Antigravity CLI footer
 	useColor := os.Getenv("NO_COLOR") == ""
 	ctxPct := int(ctxUsedPct + 0.5)
-	statusLineStr := FormatStatusLineText(currentProfile, activeModel, ctxPct, hasCtx, inputTokens, quotaDetails, useColor)
+	statusLineStr := FormatStatusLineText(currentProfile, activeModel, ctxPct, hasCtx, quotaDetails, useColor)
 
 	if stdout != nil && statusLineStr != "" {
 		fmt.Fprintln(stdout, statusLineStr)
@@ -191,23 +198,59 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	return nil
 }
 
-// FormatTokens formats an integer token count into a compact human-readable string (e.g. 14500 -> "14.5k", 1200000 -> "1.2M").
-func FormatTokens(tokens int64) string {
-	if tokens >= 1_000_000 {
-		return fmt.Sprintf("%.1fM", float64(tokens)/1_000_000.0)
+func parsePayloadQuota(quotaMap map[string]struct {
+	RemainingFraction    float64 `json:"remaining_fraction"`
+	RemainingFractionAlt float64 `json:"remainingFraction"`
+	ResetTime            string  `json:"reset_time"`
+	ResetTimeAlt         string  `json:"resetTime"`
+	ResetInSeconds       uint64  `json:"reset_in_seconds"`
+	ResetInSecondsAlt    uint64  `json:"resetInSeconds"`
+}) *ModelQuotaDetails {
+	if len(quotaMap) == 0 {
+		return nil
 	}
-	if tokens >= 1_000 {
-		return fmt.Sprintf("%.1fk", float64(tokens)/1_000.0)
+	details := &ModelQuotaDetails{
+		Fraction5H:     -1.0,
+		FractionWeekly: -1.0,
 	}
-	if tokens > 0 {
-		return fmt.Sprintf("%d", tokens)
+	for key, q := range quotaMap {
+		k := strings.ToLower(key)
+		frac := q.RemainingFraction
+		if frac == 0 && q.RemainingFractionAlt > 0 {
+			frac = q.RemainingFractionAlt
+		}
+		rTime := q.ResetTime
+		if rTime == "" {
+			rTime = q.ResetTimeAlt
+		}
+		var parsedReset time.Time
+		if rTime != "" {
+			if tVal, tErr := time.Parse(time.RFC3339, rTime); tErr == nil {
+				parsedReset = tVal
+			} else if tVal, tErr := time.Parse("2006-01-02T15:04:05Z", rTime); tErr == nil {
+				parsedReset = tVal
+			}
+		}
+		if strings.Contains(k, "5h") || strings.Contains(k, "gemini") {
+			details.Fraction5H = frac
+			details.ResetTime5H = parsedReset
+			details.CompactReset5H = FormatCompactResetTime(parsedReset, frac)
+		} else if strings.Contains(k, "week") || strings.Contains(k, "7d") {
+			details.FractionWeekly = frac
+			details.ResetTimeWeekly = parsedReset
+			details.CompactResetWeekly = FormatCompactResetTime(parsedReset, frac)
+		}
 	}
-	return ""
+	if details.Fraction5H >= 0 || details.FractionWeekly >= 0 {
+		return details
+	}
+	return nil
 }
 
 // FormatStatusLineText formats the real-time statusline text rendered in Antigravity CLI's footer bar.
-// Example: [davidnguyen] · 5% ctx (14.5k) · gemini-3.7-flash · 5H: 95% (1h26m) · Wk: 79% (6h35m)
-func FormatStatusLineText(profileName, modelName string, ctxPct int, hasCtx bool, inputTokens int64, quotaDetails *ModelQuotaDetails, useColor bool) string {
+// Layout: [profile] · % ctx · model · 5H: % (reset) · Wk: % (reset)
+// Example: [davidnguyen] · 5% ctx · gemini-3.7-flash · 5H: 95% (1h26m) · Wk: 79% (6h35m)
+func FormatStatusLineText(profileName, modelName string, ctxPct int, hasCtx bool, quotaDetails *ModelQuotaDetails, useColor bool) string {
 	var parts []string
 
 	sep := " · "
@@ -224,12 +267,9 @@ func FormatStatusLineText(profileName, modelName string, ctxPct int, hasCtx bool
 		parts = append(parts, pStr)
 	}
 
-	// 2. Context Window % and input tokens
+	// 2. % Context Window
 	if hasCtx {
 		ctxStr := fmt.Sprintf("%d%% ctx", ctxPct)
-		if tokStr := FormatTokens(inputTokens); tokStr != "" {
-			ctxStr = fmt.Sprintf("%d%% ctx (%s)", ctxPct, tokStr)
-		}
 		if useColor {
 			if ctxPct >= 80 {
 				ctxStr = fmt.Sprintf("\033[1;31m%s\033[0m", ctxStr)
@@ -254,9 +294,9 @@ func FormatStatusLineText(profileName, modelName string, ctxPct int, hasCtx bool
 	// 4. 5H Quota
 	if quotaDetails != nil && quotaDetails.Fraction5H >= 0 {
 		pct5h := int(quotaDetails.Fraction5H*100 + 0.5)
-		q5hStr := fmt.Sprintf("5H: %d%%", pct5h)
+		q5hStr := fmt.Sprintf("%d%%", pct5h)
 		if quotaDetails.CompactReset5H != "" {
-			q5hStr = fmt.Sprintf("5H: %d%% (%s)", pct5h, quotaDetails.CompactReset5H)
+			q5hStr = fmt.Sprintf("%d%% (%s)", pct5h, quotaDetails.CompactReset5H)
 		}
 		if useColor {
 			if pct5h >= 20 {
@@ -273,9 +313,9 @@ func FormatStatusLineText(profileName, modelName string, ctxPct int, hasCtx bool
 	// 5. Weekly Quota
 	if quotaDetails != nil && quotaDetails.FractionWeekly >= 0 {
 		pctWk := int(quotaDetails.FractionWeekly*100 + 0.5)
-		qWkStr := fmt.Sprintf("Wk: %d%%", pctWk)
+		qWkStr := fmt.Sprintf("%d%%", pctWk)
 		if quotaDetails.CompactResetWeekly != "" {
-			qWkStr = fmt.Sprintf("Wk: %d%% (%s)", pctWk, quotaDetails.CompactResetWeekly)
+			qWkStr = fmt.Sprintf("%d%% (%s)", pctWk, quotaDetails.CompactResetWeekly)
 		}
 		if useColor {
 			if pctWk >= 20 {

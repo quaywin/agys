@@ -136,17 +136,6 @@ func TestReportHerdrMetadata_MockSocket(t *testing.T) {
 	}
 }
 
-func TestToSuperscriptPercent(t *testing.T) {
-	if got := ToSuperscriptPercent(87); got != "⁸⁷%" {
-		t.Errorf("expected ⁸⁷%%, got %s", got)
-	}
-	if got := ToSuperscriptPercent(100); got != "¹⁰⁰%" {
-		t.Errorf("expected ¹⁰⁰%%, got %s", got)
-	}
-	if got := ToSuperscriptPercent(0); got != "⁰%" {
-		t.Errorf("expected ⁰%%, got %s", got)
-	}
-}
 
 func TestSetTerminalTitle(t *testing.T) {
 	// Should not panic on empty or valid profile name

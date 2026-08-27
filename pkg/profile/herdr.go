@@ -196,23 +196,6 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 	return nil
 }
 
-// ToSuperscriptPercent converts an integer percentage into a compact unicode superscript string (e.g. 87 -> "⁸⁷%").
-func ToSuperscriptPercent(pct int) string {
-	superscripts := map[rune]rune{
-		'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-		'5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-	}
-	s := fmt.Sprintf("%d", pct)
-	var out []rune
-	for _, r := range s {
-		if sup, ok := superscripts[r]; ok {
-			out = append(out, sup)
-		} else {
-			out = append(out, r)
-		}
-	}
-	return string(out) + "%"
-}
 
 func formatModelContext(ctxPct int, hasCtx bool, model string) string {
 	if hasCtx && model != "" {
@@ -282,7 +265,10 @@ func FormatModelAbbreviation(modelName, groupName string) string {
 
 // IsInHerdrEnvironment checks if the current process is actively executing inside a Herdr workspace/pane session.
 func IsInHerdrEnvironment() bool {
-	return os.Getenv("HERDR_ENV") == "1" && os.Getenv("HERDR_SOCKET_PATH") != "" && os.Getenv("HERDR_PANE_ID") != ""
+	if os.Getenv("HERDR_SOCKET_PATH") != "" && os.Getenv("HERDR_PANE_ID") != "" {
+		return true
+	}
+	return os.Getenv("HERDR_ENV") == "1" || os.Getenv("HERDR_ENV") == "true"
 }
 
 // SyncHerdrIntegration ensures that Herdr's antigravity integration hook is configured for the given profile directory.

@@ -23,10 +23,61 @@ var httpClient = &http.Client{
 }
 
 const (
-	projectIDFilename = "project_id"
-	emailFilename     = "email"
-	oauthTokenURL     = "https://oauth2.googleapis.com/token"
+	projectIDFilename  = "project_id"
+	emailFilename      = "email"
+	quotaCacheFilename = "quota_cache.json"
+	oauthTokenURL      = "https://oauth2.googleapis.com/token"
 )
+
+// CachedProfileQuota stores cached user quota summary with a timestamp.
+type CachedProfileQuota struct {
+	Summary   *QuotaSummary `json:"summary"`
+	UpdatedAt time.Time     `json:"updated_at"`
+}
+
+// SaveCachedQuota saves the quota summary for a profile to local disk cache.
+func SaveCachedQuota(profileName string, summary *QuotaSummary) error {
+	if profileName == "" || summary == nil {
+		return nil
+	}
+	profileDir, err := GetProfileDir(profileName)
+	if err != nil {
+		return err
+	}
+	cached := CachedProfileQuota{
+		Summary:   summary,
+		UpdatedAt: time.Now(),
+	}
+	data, err := json.Marshal(cached)
+	if err != nil {
+		return err
+	}
+	return WriteFileAtomic(filepath.Join(profileDir, quotaCacheFilename), data, 0600)
+}
+
+// GetCachedQuota returns the cached quota summary if available. If maxAge > 0 and the cache is older than maxAge,
+// it returns (summary, false) so callers can use it as a fallback if network fails.
+func GetCachedQuota(profileName string, maxAge time.Duration) (*QuotaSummary, bool) {
+	if profileName == "" {
+		return nil, false
+	}
+	profileDir, err := GetProfileDir(profileName)
+	if err != nil {
+		return nil, false
+	}
+	data, err := os.ReadFile(filepath.Join(profileDir, quotaCacheFilename))
+	if err != nil {
+		return nil, false
+	}
+	var cached CachedProfileQuota
+	if err := json.Unmarshal(data, &cached); err != nil || cached.Summary == nil {
+		return nil, false
+	}
+	if maxAge > 0 && time.Since(cached.UpdatedAt) > maxAge {
+		return cached.Summary, false
+	}
+	return cached.Summary, true
+}
 
 func calculateTokenFingerprint(token *OAuthToken) string {
 	if token == nil || token.Token.AccessToken == "" {
@@ -376,10 +427,20 @@ func formatHTTPError(statusCode int, body []byte) error {
 }
 
 // FetchQuota retrieves the quota summary for a specific profile.
+// It returns fresh cached quota (< 45 seconds old) immediately, or fetches from API and caches the result.
 func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) {
+	// 0. Fast-path: Check fresh cache (TTL 45s) for instant 0ms latency
+	if cached, fresh := GetCachedQuota(profileName, 45*time.Second); fresh && cached != nil {
+		return cached, nil
+	}
+
 	// 1. Read token
 	token, err := ReadToken(profileName)
 	if err != nil {
+		// If read token failed, fallback to stale cached quota if available (< 4 hours)
+		if stale, _ := GetCachedQuota(profileName, 4*time.Hour); stale != nil {
+			return stale, nil
+		}
 		return nil, err
 	}
 
@@ -394,6 +455,9 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 
 	accessToken := token.Token.AccessToken
 	if accessToken == "" {
+		if stale, _ := GetCachedQuota(profileName, 4*time.Hour); stale != nil {
+			return stale, nil
+		}
 		return nil, fmt.Errorf("access token is empty (not logged in)")
 	}
 
@@ -426,6 +490,16 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 				}
 			}
 		}
+	}
+
+	if err == nil && summary != nil {
+		_ = SaveCachedQuota(profileName, summary)
+		return summary, nil
+	}
+
+	// 4. Fallback to stale cached quota if API network request failed (< 4 hours)
+	if stale, _ := GetCachedQuota(profileName, 4*time.Hour); stale != nil {
+		return stale, nil
 	}
 
 	if err != nil {

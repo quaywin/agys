@@ -116,27 +116,6 @@ func TestHandleStatusLine(t *testing.T) {
 	}
 }
 
-func TestFormatTokens(t *testing.T) {
-	tests := []struct {
-		tokens   int64
-		expected string
-	}{
-		{0, ""},
-		{500, "500"},
-		{1000, "1.0k"},
-		{14500, "14.5k"},
-		{1000000, "1.0M"},
-		{2500000, "2.5M"},
-	}
-
-	for _, tt := range tests {
-		got := FormatTokens(tt.tokens)
-		if got != tt.expected {
-			t.Errorf("FormatTokens(%d) = %q, expected %q", tt.tokens, got, tt.expected)
-		}
-	}
-}
-
 func TestFormatStatusLineText(t *testing.T) {
 	// 1. Full data without colors
 	quota := &ModelQuotaDetails{
@@ -145,20 +124,20 @@ func TestFormatStatusLineText(t *testing.T) {
 		FractionWeekly:     0.79,
 		CompactResetWeekly: "6h35m",
 	}
-	s := FormatStatusLineText("davidnguyen", "gemini-3.7-flash", 5, true, 14500, quota, false)
-	expected := "[davidnguyen] · 5% ctx (14.5k) · gemini-3.7-flash · 5H: 95% (1h26m) · Wk: 79% (6h35m)"
+	s := FormatStatusLineText("davidnguyen", "gemini-3.7-flash", 5, true, quota, false)
+	expected := "[davidnguyen] · 5% ctx · gemini-3.7-flash · 95% (1h26m) · 79% (6h35m)"
 	if s != expected {
 		t.Errorf("FormatStatusLineText() = %q, expected %q", s, expected)
 	}
 
 	// 2. Full data with colors
-	sColored := FormatStatusLineText("davidnguyen", "gemini-3.7-flash", 5, true, 14500, quota, true)
+	sColored := FormatStatusLineText("davidnguyen", "gemini-3.7-flash", 5, true, quota, true)
 	if !strings.Contains(sColored, "[davidnguyen]") || !strings.Contains(sColored, "\033[") {
 		t.Errorf("expected colored string to contain ANSI escapes, got: %q", sColored)
 	}
 
 	// 3. No quota data (offline or error)
-	sNoQuota := FormatStatusLineText("davidnguyen", "gemini-3.7-flash", 10, true, 0, nil, false)
+	sNoQuota := FormatStatusLineText("davidnguyen", "gemini-3.7-flash", 10, true, nil, false)
 	expectedNoQuota := "[davidnguyen] · 10% ctx · gemini-3.7-flash"
 	if sNoQuota != expectedNoQuota {
 		t.Errorf("FormatStatusLineText() = %q, expected %q", sNoQuota, expectedNoQuota)
@@ -169,7 +148,7 @@ func TestFormatStatusLineText(t *testing.T) {
 		Fraction5H:     0.03,
 		CompactReset5H: "45m",
 	}
-	sCrit := FormatStatusLineText("davidnguyen", "gemini-3.7-flash", 85, true, 50000, quotaCrit, true)
+	sCrit := FormatStatusLineText("davidnguyen", "gemini-3.7-flash", 85, true, quotaCrit, true)
 	// Should contain red ANSI for 85% ctx and red ANSI for 3% quota
 	if !strings.Contains(sCrit, "\033[1;31m") {
 		t.Errorf("expected critical alert color ANSI code in output, got: %q", sCrit)
