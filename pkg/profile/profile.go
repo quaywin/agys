@@ -18,7 +18,7 @@ import (
 
 var validProfileNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-// GetRealUserHome returns the actual user home directory (e.g. /Users/quaywin or /home/user),
+// GetRealUserHome returns the actual user home directory (e.g. /Users/username or /home/user),
 // correctly stripping any active profile path (e.g. ~/.agys/profiles/<name>) when HOME is overridden.
 func GetRealUserHome() (string, error) {
 	if val := os.Getenv("AGYS_REAL_HOME"); val != "" {
@@ -389,17 +389,31 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 		"GEMINI_DIR":      filepath.Join(profileDir, ".gemini"),
 		"GEMINI_CLI_DIR":  filepath.Join(profileDir, ".gemini", "antigravity-cli"),
 		"ANTIGRAVITY_DIR": filepath.Join(profileDir, ".gemini", "antigravity-cli"),
-		"XDG_CONFIG_HOME": filepath.Join(profileDir, ".config"),
-		"XDG_DATA_HOME":   filepath.Join(profileDir, ".local", "share"),
-		"XDG_CACHE_HOME":  filepath.Join(profileDir, ".cache"),
+		"XDG_CONFIG_HOME":   filepath.Join(profileDir, ".config"),
+		"XDG_DATA_HOME":     filepath.Join(profileDir, ".local", "share"),
+		"XDG_CACHE_HOME":    filepath.Join(profileDir, ".cache"),
+		"HERDR_CONFIG_PATH": GetHerdrConfigPath(),
 	}
 
-	// Ensure PATH retains real user binary locations so child hook processes can locate agys
+	// Ensure PATH retains real user binary locations so child hook processes can locate agys, herdr, git, etc.
 	if realUserHome != "" {
-		localBin := filepath.Join(realUserHome, ".local", "bin")
+		candidates := []string{
+			filepath.Join(realUserHome, ".local", "bin"),
+			filepath.Join(realUserHome, "go", "bin"),
+			"/opt/homebrew/bin",
+			"/usr/local/bin",
+		}
 		pathEnv := os.Getenv("PATH")
-		if !strings.Contains(pathEnv, localBin) {
-			envMap["PATH"] = localBin + string(os.PathListSeparator) + pathEnv
+		var missing []string
+		for _, c := range candidates {
+			if info, err := os.Stat(c); err == nil && info.IsDir() {
+				if !strings.Contains(pathEnv, c) {
+					missing = append(missing, c)
+				}
+			}
+		}
+		if len(missing) > 0 {
+			envMap["PATH"] = strings.Join(missing, string(os.PathListSeparator)) + string(os.PathListSeparator) + pathEnv
 		}
 	}
 
@@ -645,15 +659,9 @@ func EnsureKeychain(profileDir string) error {
 
 	SyncDiskTokenToKeychain(profileDir)
 
-	userHome, err := os.UserHomeDir()
+	userHome, err := GetRealUserHome()
 	if err != nil {
 		return nil
-	}
-
-	// Determine the real user home directory if HOME is currently overridden to a profile folder
-	agysSep := string(filepath.Separator) + ".agys"
-	if idx := strings.Index(userHome, agysSep); idx != -1 {
-		userHome = userHome[:idx]
 	}
 
 	realKeychainsDir := filepath.Join(userHome, "Library", "Keychains")

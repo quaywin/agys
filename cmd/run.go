@@ -55,28 +55,14 @@ var runCmd = &cobra.Command{
 				profileName = firstArg
 				agyArgs = args[1:]
 			} else {
-				// Check if default profile is set
-				current, err := profile.GetCurrent()
+				defaultProf, err := resolveDefaultProfile()
 				if err != nil {
 					return err
 				}
-				if current != "" {
-					if profile.IsAuto(current) {
-						profileName = profile.AutoProfileKeyword
-						agyArgs = args
-					} else {
-						currentExists, _, err := profile.Exists(current)
-						if err != nil {
-							return err
-						}
-						if currentExists {
-							profileName = current
-							agyArgs = args
-						}
-					}
-				}
-
-				if profileName == "" {
+				if defaultProf != "" {
+					profileName = defaultProf
+					agyArgs = args
+				} else {
 					if profile.ValidateName(firstArg) != nil && strings.HasPrefix(firstArg, "-") {
 						return fmt.Errorf("no profile specified and no default profile set. Specify a profile or set one with `agys use <profile_name>`")
 					}
@@ -84,34 +70,41 @@ var runCmd = &cobra.Command{
 				}
 			}
 		} else {
-			// Check if default profile is set when no args provided
-			current, err := profile.GetCurrent()
+			defaultProf, err := resolveDefaultProfile()
 			if err != nil {
 				return err
 			}
-			if current != "" {
-				if profile.IsAuto(current) {
-					profileName = profile.AutoProfileKeyword
-					agyArgs = args
-				} else {
-					currentExists, _, err := profile.Exists(current)
-					if err != nil {
-						return err
-					}
-					if currentExists {
-						profileName = current
-						agyArgs = args
-					}
-				}
-			}
-
-			if profileName == "" {
+			if defaultProf != "" {
+				profileName = defaultProf
+				agyArgs = args
+			} else {
 				return fmt.Errorf("no profile specified and no default profile set. Specify a profile or set one with `agys use <profile_name>`")
 			}
 		}
 
 		return runWithProfile(cmd, profileName, agyArgs)
 	},
+}
+
+func resolveDefaultProfile() (string, error) {
+	current, err := profile.GetCurrent()
+	if err != nil {
+		return "", err
+	}
+	if current == "" {
+		return "", nil
+	}
+	if profile.IsAuto(current) {
+		return profile.AutoProfileKeyword, nil
+	}
+	currentExists, _, err := profile.Exists(current)
+	if err != nil {
+		return "", err
+	}
+	if currentExists {
+		return current, nil
+	}
+	return "", nil
 }
 
 func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) error {

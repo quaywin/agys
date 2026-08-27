@@ -278,6 +278,9 @@ func SyncHerdrIntegration(profileDir string) error {
 		_ = ApplyHerdr2RowConfig(configPath)
 	}
 
+	// Remove any shadowed legacy .config/herdr in profileDir to ensure global config is always respected
+	_ = os.RemoveAll(filepath.Join(profileDir, ".config", "herdr"))
+
 	hookDir := filepath.Join(profileDir, ".gemini", "config", "hooks")
 	if err := os.MkdirAll(hookDir, 0700); err != nil {
 		return fmt.Errorf("failed to create hooks directory: %w", err)

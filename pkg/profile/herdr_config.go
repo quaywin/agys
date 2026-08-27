@@ -14,6 +14,9 @@ const (
 
 // GetHerdrConfigPath returns the absolute path to Herdr's config.toml.
 func GetHerdrConfigPath() string {
+	if custom := os.Getenv("HERDR_CONFIG_PATH"); custom != "" {
+		return custom
+	}
 	if custom := os.Getenv("HERDR_CONFIG_FILE"); custom != "" {
 		return custom
 	}
@@ -21,11 +24,11 @@ func GetHerdrConfigPath() string {
 	if err == nil && realHome != "" {
 		return filepath.Join(realHome, ".config", "herdr", "config.toml")
 	}
-	home := os.Getenv("HOME")
-	if home == "" {
-		home = "/Users/quaywin"
+	homeDir, _ := os.UserHomeDir()
+	if homeDir == "" {
+		homeDir = "/"
 	}
-	return filepath.Join(home, ".config", "herdr", "config.toml")
+	return filepath.Join(homeDir, ".config", "herdr", "config.toml")
 }
 
 // GetHerdrBackupConfigPath returns the path to the backup config file.

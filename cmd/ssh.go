@@ -157,9 +157,9 @@ automatically syncing local profile credentials, tunneling API requests through 
 
 Examples:
   agys ssh user@remote-server
-  agys ssh user@remote-server quaywin
-  agys ssh user@remote-server /var/www/myproject quaywin
-  agys ssh user@remote-server /var/www/myproject quaywin -- --dangerously-skip-permissions
+  agys ssh user@remote-server work
+  agys ssh user@remote-server /var/www/myproject work
+  agys ssh user@remote-server /var/www/myproject work -- --dangerously-skip-permissions
 `,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -269,18 +269,18 @@ Examples:
 		sshEnv := fmt.Sprintf("export AGYS_SSH_SERVER=%s; export AGYS_SSH_PATH=%s;", shellQuote(server), shellQuote(remotePath))
 
 		innerCmd := fmt.Sprintf(
-			`export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.gemini/antigravity-cli/bin:/usr/local/bin:$PATH"; `+
+			`export PATH="$HOME/.local/bin:$HOME/bin:$HOME/go/bin:$HOME/.gemini/antigravity-cli/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"; `+
 				`%s`+
 				`%s`+
 				`if ! command -v agy >/dev/null 2>&1; then `+
 				`echo "[agys] Auto-installing agy (Antigravity CLI) on %s (downloading ~70MB release package over SSH tunnel, please wait)..." >&2; `+
 				`curl -fsSL https://antigravity.google/cli/install.sh | bash || true; `+
-				`export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.gemini/antigravity-cli/bin:/usr/local/bin:$PATH"; `+
+				`export PATH="$HOME/.local/bin:$HOME/bin:$HOME/go/bin:$HOME/.gemini/antigravity-cli/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"; `+
 				`fi; `+
 				`if ! command -v agys >/dev/null 2>&1; then `+
 				`echo "[agys] Auto-installing agys (profile switcher) on %s..." >&2; `+
 				`curl -fsSL https://raw.githubusercontent.com/quaywin/agys/main/install.sh | bash || true; `+
-				`export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.gemini/antigravity-cli/bin:/usr/local/bin:$PATH"; `+
+				`export PATH="$HOME/.local/bin:$HOME/bin:$HOME/go/bin:$HOME/.gemini/antigravity-cli/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"; `+
 				`fi; `+
 				`%sif command -v agys >/dev/null 2>&1; then exec %s%s; `+
 				`elif command -v agy >/dev/null 2>&1; then exec agy%s; `+

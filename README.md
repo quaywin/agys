@@ -1,42 +1,91 @@
 # Antigravity Ecosystem Switcher (`agys`)
 
-`agys` (Antigravity Switcher) is an open-source CLI utility built in Go that manages and isolates multi-account profiles across the entire Google Antigravity ecosystem — supporting **Antigravity CLI (`agy`)**, **Antigravity 2.0 Desktop App (GUI)**, **Antigravity IDE**, and **Herdr Multi-Agent Workspaces** (featuring profile-isolated agent panes, real-time 5h/weekly quota tracking, and dynamic model detection).
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-black?style=flat&logo=apple)](https://github.com/quaywin/agys)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Herdr](https://img.shields.io/badge/Herdr-Native%20Integration-8b5cf6?style=flat)](https://herdr.dev)
+
+> **Zero-Collision Multi-Account Orchestration for Antigravity & Herdr — Powered by Dynamic `$HOME` Sandboxing.**
+
+`agys` (Antigravity Switcher) is a pure Go CLI utility that isolates and orchestrates multi-account profiles across the entire Google Antigravity ecosystem — supporting **Herdr Multi-Agent Workspaces**, **Antigravity CLI (`agy`)**, **Antigravity IDE**, **Antigravity 2.0 Desktop App (GUI)**, and **Antigravity Remote Control**.
 
 > [!NOTE]
-> Profile directories are kept fully isolated under `~/.agys/profiles/<profile_name>/`, ensuring separate auth tokens, configs, quota tracking, and application states for every surface.
+> Each profile is strictly sandboxed under `~/.agys/profiles/<profile_name>/`. Dynamic `$HOME` routing guarantees zero auth token bleed, separate configs, isolated quota tracking, and conflict-free multi-pane agent swarms.
 
 ---
 
-## Supported Antigravity Surfaces
+## ⚡ Herdr Multi-Agent Workspace Spotlight
+
+`agys` provides first-class, zero-dependency integration and an official [Herdr Plugin](https://herdr.dev/docs/plugins/) designed for power developers running parallel agent swarms.
+
+<p align="center">
+  <img src="assets/herdr_sidebar.png" alt="Herdr Multi-Agent Sidebar with agys 3-Row Telemetry" width="360" />
+</p>
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ ● agys · davidnguyen                                        │ ◄── Workspace & Active Profile
+│   5% ctx · gemini-3.7-flash                                 │ ◄── Context Window % & Active Model
+│   95% 1h26m · 79% 6h35m                                     │ ◄── High-Contrast 5H & Weekly Quotas
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 🎯 Why Herdr Users Love `agys`
+- 🛡️ **Per-Pane Sandboxing**: Run 10+ Herdr panes with different Google accounts simultaneously without session collision or auth token bleed.
+- 🎨 **3-Row High-Contrast Sidebar**: Real-time project name, active profile (cyan bold), live context window % + full model ID (light blue), and dual 5H & Weekly quotas (green/purple).
+- ⚡ **Hybrid Telemetry (0ms + 60s Watcher)**:
+  - **Turn-by-Turn Push (0ms)**: Captures context window usage and model switches instantly via Antigravity `statusLine` hook streaming.
+  - **Passive Polling Watcher (60s)**: Background single-leader file-locked goroutine auto-updates reset countdowns and auto-recovers quotas upon 5h reset.
+- 🏷️ **Rich Window & Tab Titles**: Shows live model abbreviation, context %, and dual reset countdown timers:
+  `agys: <profile> [<model_abbr>] Ctx: <pct>% • 5H: <pct>% (<eta>) • Wk: <pct>% (<eta>)`
+- 🚀 **100% Pure Go**: Native binary execution — zero Python, pip, shims, or wrapper overhead.
+
+### 🔌 Quick Herdr Setup
+
+Install the Herdr Plugin (the 3-row sidebar layout and telemetry are configured **100% automatically**):
+
+```bash
+# Install Herdr Plugin from Marketplace (or link locally)
+herdr plugin install quaywin/agys
+# or: herdr plugin link /path/to/agys
+```
+
+> [!TIP]
+> **Zero Manual Configuration**: Even without installing the plugin, simply launching `agys run <profile>` in any Herdr pane will automatically detect the environment and configure the 3-row sidebar layout on the fly!
+
+---
+
+## 🌐 Supported Antigravity Surfaces
 
 | Surface | Command | Mechanism | Highlights |
 | :--- | :--- | :--- | :--- |
-| **Antigravity CLI (`agy`)** | `agys run <profile>` | `$HOME` Override | Isolated terminal sessions, real-time 5h/weekly quota tracking, auto-failover, remote SSH execution |
-| **Antigravity 2.0 GUI** | `agys gui <profile>` | macOS Keychain Sync | macOS Keychain OAuth sync, process cleanup, confirmation prompts, auto-seeding |
+| **Herdr Multi-Agent** | `agys run <profile>` | Socket RPC & Lifecycle Hooks | 3-row sidebar telemetry, rich title countdowns, 0ms context tracking, per-pane isolation |
+| **Antigravity CLI (`agy`)** | `agys run <profile>` | `$HOME` Override | Isolated terminal sessions, real-time 5h/weekly quota tracking, auto-failover, session resume |
 | **Antigravity IDE** | `agys ide <profile>` | `--user-data-dir` | Parallel multi-window IDE sessions, independent logged-in accounts, smart auto-selection |
-| **Antigravity Remote Control** | `agys remote <profile>` | Detached Daemon / Cloud Relay | Background headless daemon, auto-port collision resolution, web UI (`localhost:PORT`) & Cloud portal (`antigravity.google`) |
-| **Herdr Multi-Agent Workspaces** | `agys run <profile>` | UNIX Socket RPC & Hooks | Profile-isolated agent panes, 3-row clean sidebar layout (Workspace & Profile, Context Window % & Model ID, 5H & Weekly Quota), real-time `statusLine` context tracking, dual 5H & Weekly title countdown, background quota watcher, zero-Python pure Go lifecycle hooks |
+| **Antigravity 2.0 GUI** | `agys gui <profile>` | macOS Keychain Sync | macOS Keychain OAuth sync, process cleanup, confirmation prompts, auto-seeding |
+| **Antigravity Remote** | `agys remote <profile>` | Detached Daemon / Cloud Relay | Headless daemon, auto-port collision resolution, web UI & Cloud portal (`antigravity.google`) |
+| **Remote Server (SSH)** | `agys ssh <host>` | SSH API Reverse Tunnel | 0.1s token sync, remote agent auto-bootstrap, datacenter IP geo-block bypass |
 
 ---
 
-## Features
+## ✨ Features
 
-- **Profile Isolation & Token Protection**: Each profile gets an isolated home directory (`~/.agys/profiles/<profile_name>/`) with automatic macOS Keychain token clearing on profile switch to prevent cross-account auth bleed.
-- **Google Account Email Display**: Automatically fetches and caches the associated Google Account Email (e.g. `user@gmail.com`) for each profile, displayed directly in `agys list` and `agys quota`.
-- **Real-Time Model Quota Tracking**: Real-time 5-hour and weekly quota status across profiles in parallel (with optional JSON output), powered by the `daily-cloudcode-pa` endpoint.
-- **Auto Profile Selection**: Dynamically selects the profile with the best 5-hour Gemini quota based on profile priorities (`agys auto` or `agys use auto`).
-- **Profile Priority & Quota Threshold**: Configure custom profile priorities (`agys priority set work 10`) with smart 50% quota threshold fallback.
-- **Interactive Terminal Support**: Preserves `os.Stdin`, `os.Stdout`, and `os.Stderr` streaming so interactive logins and typing token responses work seamlessly.
-- **Default Active Profile & All-Profile Run (`--all` / `-a`)**: Set a default profile (`agys use work` or `agys use auto`) to run commands (`agys run -- status`) without re-typing profile names, or execute commands sequentially across ALL active profiles using `agys run --all` / `agys run -a`.
-- **Shell Auto-Completion & Aliases**: Built-in completion generator for `bash`, `zsh`, `fish`, `powershell` with tab-completion for profile names, plus shell alias generation (`agys alias`).
-- **Profile Cloning, Export & Import**: Duplicate a profile instantly (`agys clone`), or pack/unpack profiles to archives (`agys export` / `agys import`) with built-in path-traversal safety checks.
-- **Remote SSH Execution (`agys ssh`)**: Run `agy` natively on any remote Linux server over SSH with instant 0.1s profile credential sync, automatic remote agent auto-bootstrap, SSH API reverse-tunneling to bypass remote IP geo-blocking, dynamic port allocation for parallel connections, and zero-orphan process guarantees.
-- **Desktop App GUI Switcher (`agys gui`)**: Launch the Antigravity 2.0 Desktop App GUI isolated to any profile (`agys gui work`), featuring automatic macOS Keychain OAuth token synchronization, auto-seeding, graceful process termination, and interactive confirmation prompts.
-- **Antigravity IDE Switcher (`agys ide`)**: Launch isolated, parallel sessions of the standalone Antigravity IDE for any profile (`agys ide work /path/to/project`), using profile-isolated `--user-data-dir` storage to support running multiple IDE windows logged into different accounts simultaneously.
-- **Cross-Platform & Safe In-Place Upgrade**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures, featuring atomic in-place upgrading and ad-hoc code signing (`agys upgrade`).
-- **AI-Powered Staged Commit (`agys commit`)**: Automatically selects the optimal profile (based on 5h Gemini quota), performs an AI code review check on staged git changes, generates/validates Conventional Commit messages, and executes git commit.
-- **Herdr Multi-Agent Workspace Integration**: Native plug-and-play support for [Herdr](https://herdr.dev). Automatically synchronizes lifecycle hooks per profile, configures a 3-row clean sidebar layout (Workspace & Profile, Context Window % + Full Model ID, 5H & Weekly Quotas with high-contrast color indicators), and sets rich terminal tab/window titles with reset countdowns.
-- **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
+- **Dynamic `$HOME` Sandboxing**: Complete environment isolation per profile (`~/.agys/profiles/<profile>/`) with automatic Keychain token protection.
+- **Real-Time 5H & Weekly Quota HUD**: Parallel model quota tracking across all configured accounts powered by the `daily-cloudcode-pa` endpoint.
+- **Smart Auto Profile Selection**: Automatically routes commands to the profile with the best 5-hour Gemini quota, respecting custom priority weights (`agys priority set`).
+- **Session History & Resume (`agys resume`)**: Search, inspect, and resume past conversation sessions by project or profile with interactive selection and preserved CLI flags.
+- **Cross-Platform Native (macOS & Linux)**: 100% pure Go static binary with zero CGO dependencies; safe token file sandboxing on Linux and seamless Keychain synchronization on macOS.
+- **Robust Path & Environment Preservation**: Bulletproof `$HOME` and `$PATH` routing (`~/.local/bin`, `~/go/bin`, Homebrew) guaranteeing child hooks and tools run without `command not found` or config shadowing.
+- **Herdr Multi-Agent Integration**: Native 3-row sidebar telemetry, rich terminal tab titles, and live reset countdowns.
+- **Fast Plugin Management (`agys plugin`)**: Install, list, and uninstall plugins across single or all profiles (`--all`) without session overhead.
+- **Parallel Antigravity IDE (`agys ide`)**: Launch multiple independent IDE windows simultaneously logged into different Google accounts.
+- **Desktop App GUI Switcher (`agys gui`)**: Seamless macOS Keychain OAuth synchronization and profile switching for the Antigravity 2.0 GUI.
+- **Remote SSH Execution (`agys ssh`)**: Run `agy` on any remote Linux server with instant 0.1s credential sync and reverse-tunneled API calls to bypass datacenter geo-blocking.
+- **Headless Remote Control Daemon (`agys remote`)**: Background daemon management with dynamic port allocation and Google Cloud Relay access.
+- **AI-Powered Staged Commit (`agys commit`)**: Reviews staged git changes using the best-quota profile and generates conventional commit messages.
+- **Backup & Migration**: Instant profile cloning (`agys clone`), bulk export/import (`agys export` / `agys import`) with path-traversal safety checks.
+- **Shell Completions & Aliases**: Built-in tab-completion for `zsh`, `bash`, `fish`, `powershell` and alias generation (`agys alias`).
+- **In-Place Atomic Upgrades**: Safe self-upgrades with ad-hoc code signing (`agys upgrade`).
 
 ---
 
@@ -65,222 +114,120 @@ mv agys ~/.local/bin/
 
 ---
 
-## Quick Start
+## 🚀 Quick Start & Core Workflows
 
 ### 1. Add & Authenticate a Profile
-Create a new profile folder and trigger `agy login` under the isolated environment:
+Create a new isolated sandbox and log in via `agy login`:
 
 ```bash
 agys add work
+agys add personal
 ```
 
-### 2. List Profiles
-Display all active configured profiles along with their associated Google Account Emails:
+### 2. List Profiles & View Google Accounts
+Display all configured profiles with their Google Account emails and priority weights:
 
 ```bash
 agys list
 # Active Profiles:
 #   - personal (user.personal@gmail.com) [prio: 0] (/Users/user/.agys/profiles/personal)
 #   - work (user.work@company.com) (default) [prio: 10] (/Users/user/.agys/profiles/work)
+
+# Or show a compact quota summary directly in list view:
+agys list -q
+# or: agys ls --quota
 ```
 
-### 3. Set a Default Profile
-Set an active default profile so you can omit the profile argument when executing commands:
-
-```bash
-# Set default profile to a specific profile
-agys use work
-
-# Set default profile to auto mode (picks best profile based on 5h Gemini quota)
-agys use auto
-
-# View current default profile
-agys use
-
-# Clear default profile
-agys use --unset
-```
-
-### 4. Automatic Profile Selection & Priorities
-Instead of manually picking a profile, `agys` can automatically select the profile with the best 5-hour Gemini quota while respecting custom profile priorities and a 50% quota threshold:
-
-```bash
-# Execute agy command using auto-selected best profile
-agys auto -- status
-# or
-agys run auto -- status
-
-# Set custom priorities for your profiles (higher number = higher priority)
-agys priority set work 10
-agys priority set personal 5
-
-# List configured profile priorities
-agys priority list
-```
-
-> **How Auto Selection Works**: `agys` checks profiles starting from the highest priority. If a high-priority profile has **>= 50% 5h quota**, it is selected. If its quota drops below 50%, `agys` switches to a lower-priority profile that has >= 50% quota. If all profiles are below 50%, `agys` selects the profile with the highest remaining 5h quota overall.
-
-### 5. Run Commands Under a Profile
-Execute any `agy` command isolated to a specific profile, your configured default, or sequentially across all profiles:
-
-```bash
-# Run command with explicit profile name
-agys run work -- status
-
-# Run command using default profile (or auto mode if set via `agys use auto`)
-agys run -- status
-
-# Run command sequentially across ALL active profiles
-agys run --all -- status
-# or using shorthand (-a)
-agys run -a -- status
-```
-
-### 6. Fast Plugin Management (`agys plugin`)
-Install, list, or uninstall `agy` plugins directly with optional `--all` (`-a`) support across all profiles without session overhead:
-
-```bash
-# Install plugin for a specific profile (or current default profile)
-agys plugin install https://github.com/obra/superpowers work
-
-# Install plugin for ALL active profiles simultaneously
-agys plugin install https://github.com/obra/superpowers --all
-# or using shorthand (-a)
-agys plugin install https://github.com/obra/superpowers -a
-
-# List installed plugins across ALL active profiles
-agys plugin list --all
-
-# Uninstall plugin from ALL active profiles (use short plugin name, not repo URL)
-agys plugin uninstall superpowers --all
-```
-
-### 7. Rename a Profile
-Rename an existing profile directory:
-
-```bash
-agys rename work company
-# or
-agys mv work company
-```
-
-### 7. Delete a Profile
-Remove a profile directory:
-
-```bash
-agys delete work
-# or skip confirmation prompt:
-agys delete work --force
-```
-
-### 8. Clone a Profile
-Duplicate an existing profile's configuration and credentials:
-
-```bash
-agys clone work work-copy
-# or using alias
-agys cp work work-copy
-```
-
-### 9. Export & Import Profiles
-Package configurations for backups or migrating setup between computers:
-
-```bash
-# Export a single profile to a compressed .tar.gz archive
-agys export work -o work_profile.tar.gz
-
-# Export all profiles into a single archive
-agys export --all -o all_profiles.tar.gz
-
-# Import a single profile from a compressed archive (inferred profile name "work_profile")
-agys import work_profile.tar.gz
-
-# Import a profile with an explicit target name, overwriting if it exists
-agys import work_profile.tar.gz personal-backup --force
-
-# Import all profiles from a bulk archive, overwriting existing ones
-agys import all_profiles.tar.gz --all --force
-```
-
-### 10. Check Quota Status
-Display the remaining model quota and refresh windows for one or all profiles:
+### 3. Check Quota HUD (`agys quota`)
+Display remaining 5-hour and weekly model quotas with reset countdown timers across all accounts in parallel:
 
 ```bash
 # Check detailed quota for all profiles in parallel
 agys quota
-# or
+# or shorthand:
 agys q
 
 # Check quota for a specific profile
 agys quota work
 
-# Output detailed quota in JSON format for automation
+# Output structured JSON for scripts or automation
 agys quota --json
-
-# Show a compact quota summary directly when listing profiles
-agys list -q
-# or
-agys ls --quota
 ```
 
-### 11. Shell Aliases & Auto-Completion
+### 4. Set Default Profile & Auto Selection
+Set a default active profile or enable intelligent quota-based auto selection:
 
 ```bash
-# Generate shell aliases for your profiles (e.g. alias agy-work="agys run work --")
-eval "$(agys alias)"
+# Set a fixed default profile
+agys use work
 
-# Enable tab-completion in Zsh / Bash / Fish
-source <(agys completion zsh)
-# or for bash:
-source <(agys completion bash)
+# Enable auto mode (dynamically picks profile with best 5h Gemini quota)
+agys use auto
+
+# View current default setting
+agys use
+
+# Clear default profile
+agys use --unset
+
+# Configure custom profile priorities (higher number = higher priority)
+agys priority set work 10
+agys priority set personal 5
+agys priority list
 ```
 
-### 12. Remote SSH Execution (`agys ssh`)
+> **How Auto Selection Works**: `agys` evaluates profiles starting from the highest priority. If a high-priority profile has **>= 50% 5h quota**, it is selected. If its quota drops below 50%, `agys` falls back to a lower-priority profile that has >= 50% quota. If all profiles are below 50%, `agys` selects the profile with the highest remaining 5h quota overall.
 
-Execute `agy` natively on a remote Linux server over SSH using your local profiles and credentials:
+### 5. Run Commands Under a Profile
+Execute any `agy` command isolated to a specific profile, your default profile, or sequentially across all profiles:
 
 ```bash
-# Connect to remote server using default or auto profile
-agys ssh user@remote-server
+# Run command with an explicit profile
+agys run work -- status
 
-# Connect to a specific remote project folder using a specific profile
-agys ssh user@remote-server /var/www/myproject work
+# Run command using default profile (or auto mode if set via `agys use auto`)
+agys run -- status
 
-# Connect using auto profile selection (picks profile with best 5h quota)
-agys ssh user@remote-server /var/www/myproject auto
+# Execute using auto profile directly
+agys auto -- status
 
-# Pass extra agy flags directly
-agys ssh user@remote-server /var/www/myproject work -- --dangerously-skip-permissions
+# Execute sequentially across ALL active profiles
+agys run --all -- status
+# or using shorthand (-a):
+agys run -a -- status
 ```
 
-**Key Advantages:**
-- **Zero Remote Setup**: Auto-installs `agy` binary on the remote host if missing.
-- **Instant Credential Sync**: Syncs local OAuth tokens to remote in 0.1s without re-authenticating.
-- **Geo-Block Bypass**: Tunnels Gemini API calls through an SSH reverse tunnel (`-R <port>`) back to your local machine, allowing full AI access even on datacenter IPs in unsupported regions.
-- **Zero Orphan Processes**: Uses `exec` process replacement bound directly to OpenSSH `sshd`. On disconnect, all remote child processes are cleanly terminated.
-- **Parallel SSH Support**: Dynamic port allocation (`10800 + PID % 1000`) enables multiple simultaneous SSH sessions without port collisions.
+> **Smart Model & Effort Defaults**: `agys run` automatically defaults to `--model gemini-3.7-flash --effort high` if no model or reasoning effort is explicitly passed in your arguments. You can override at any time with `-m / --model` or `--effort`.
 
-### 13. Launch Desktop App GUI (`agys gui`)
-
-Launch the Antigravity 2.0 Desktop App GUI with isolated profile settings and automatic macOS Keychain token synchronization:
+### 6. Search & Resume Conversation Sessions (`agys resume`)
+List and resume previous conversation sessions by project and profile with preserved CLI flags and interactive TTY selection:
 
 ```bash
-# Launch Desktop App GUI using default or auto profile
-agys gui
+# List recent sessions for current project and prompt to choose interactively
+agys resume
 
-# Launch Desktop App GUI for a specific profile
-agys gui work
+# Resume a specific session directly by index number
+agys resume 1
 
-# Launch Desktop App GUI using auto profile selection (picks profile with best 5h quota)
-agys gui auto
+# List sessions across ALL projects and profiles
+agys resume --all
+# or shorthand:
+agys resume -a
 
-# Force restart GUI without interactive confirmation prompt
-agys gui work --force
+# Filter sessions by project name or profile
+agys resume --project my-project
+agys resume --profile work
+
+# Output sessions as JSON
+agys resume --json
 ```
 
-### 14. Launch Antigravity IDE (`agys ide`)
+---
 
-Launch the standalone Antigravity IDE isolated to any profile with dedicated `--user-data-dir` storage. Each profile maintains its own independent IDE session, allowing you to run **multiple IDE windows in parallel** logged into different Google accounts simultaneously:
+## 🖥️ Ecosystem Surfaces & Integrations
+
+### 7. Standalone Antigravity IDE (`agys ide`)
+Launch the standalone Antigravity IDE isolated to any profile with dedicated `--user-data-dir` storage. Run **multiple IDE windows in parallel** logged into different Google accounts simultaneously:
 
 ```bash
 # Launch Antigravity IDE using default or auto profile
@@ -289,24 +236,80 @@ agys ide
 # Launch Antigravity IDE for a specific profile
 agys ide work
 
-# Open a specific project folder in Antigravity IDE for a profile
-agys ide work /var/www/myproject
+# Open a specific project directory in Antigravity IDE
+agys ide work /path/to/my-project
 
-# Launch Antigravity IDE using auto profile selection (picks profile with best 5h quota)
-agys ide auto /var/www/myproject
+# Auto-select profile with best quota and launch IDE
+agys ide auto /path/to/my-project
 ```
 
-> **Note on Initial Setup**: When launching `agys ide <profile>` for the first time on a new profile, log in once via the IDE prompt. The IDE will permanently remember that profile's session in `~/.agys/profiles/<profile>/ide-data/`, allowing seamless future launches and parallel multi-account IDE windows.
+> **Cross-Platform Support**: On macOS, `agys ide` launches `/Applications/Antigravity IDE.app`. On Linux, it automatically detects `antigravity`, `antigravity-ide`, or `code` binaries from `$PATH` and launches with profile `--user-data-dir`.
 
-### 15. Staged AI Commit (`agys commit`)
+> **First-Time Setup**: When launching `agys ide <profile>` for the first time, log in once via the IDE prompt. The IDE permanently saves that profile's session in `~/.agys/profiles/<profile>/ide-data/`, enabling instant multi-window launches.
 
-Inspect staged git changes using AI (auto-selecting the profile with best quota), perform code review checks, and commit with an AI-generated or custom message:
+### 8. Antigravity Desktop App GUI (`agys gui`)
+Launch the Antigravity 2.0 Desktop App GUI with isolated profile settings and automatic macOS Keychain OAuth token synchronization:
+
+```bash
+# Launch GUI for default or auto profile
+agys gui
+
+# Launch GUI for a specific profile
+agys gui work
+
+# Force restart GUI without interactive confirmation prompt
+agys gui work --force
+```
+
+### 9. Headless Remote Control Daemon (`agys remote`)
+Launch and manage background Antigravity Remote Control daemons across profiles without occupying your terminal. Supports auto-port collision resolution, credential sync, and web/cloud portal access (`antigravity.google`):
+
+```bash
+# Start background Remote Control daemon for default or auto profile
+agys remote
+
+# Start daemon for a specific profile on custom port
+agys remote start work --port 4400 --name "my-macbook"
+
+# View all active daemons, ports, URLs, and uptime
+agys remote status
+# or: agys remote ls
+
+# Follow daemon output logs
+agys remote logs work -f
+
+# Restart or stop daemons
+agys remote restart work
+agys remote stop work
+agys remote stop --all
+```
+
+### 10. Remote SSH Execution & Geo-Bypass (`agys ssh`)
+Run `agy` natively on any remote Linux server over SSH using local profile credentials:
+
+```bash
+# Connect to remote server using default or auto profile
+agys ssh user@remote-server
+
+# Connect to a remote project folder using a specific profile
+agys ssh user@remote-server /var/www/myproject work
+
+# Pass extra agy flags directly
+agys ssh user@remote-server /var/www/myproject work -- --dangerously-skip-permissions
+```
+
+* **Instant Credential Sync**: Syncs local OAuth tokens in 0.1s without remote login.
+* **Geo-Block Bypass**: Tunnels Gemini API calls through an SSH reverse tunnel (`-R <port>`) back to your local machine, allowing full access from datacenter IPs.
+* **Zero Orphan Processes**: Direct process replacement (`exec`) cleanly terminates remote processes upon SSH disconnect.
+
+### 11. AI-Powered Staged Git Commit (`agys commit`)
+Inspect staged git changes with AI (auto-selecting the best-quota profile), perform code review checks, and commit with an AI-generated conventional commit message:
 
 ```bash
 # Auto-select best profile, review staged code, generate commit message, and prompt for confirmation
 agys commit
 
-# Use specific profile to check staged code and commit
+# Use a specific profile to check staged code and commit
 agys commit work
 
 # Automatically stage all modified tracked files (-a) and commit with auto-confirmation (-y)
@@ -315,131 +318,74 @@ agys commit -a -y
 # Provide custom message while running AI code review check
 agys commit -m "feat(auth): support multi-account token refresh"
 
-# Perform AI code check and commit message generation without executing git commit
+# Dry run mode (generates commit message without executing git commit)
 agys commit --dry-run
 ```
 
-### 16. Antigravity Remote Control (`agys remote`)
+---
 
-Launch and manage background Antigravity Remote Control daemons across profiles without occupying your terminal. Supports auto-port collision resolution, credential sync, and access via both local browser (`http://localhost:PORT`) and Google Cloud Portal (`https://antigravity.google`):
+## ⚙️ Profile & Ecosystem Management
 
-```bash
-# Start background Remote Control daemon for default or auto profile
-agys remote
-
-# Start background Remote Control daemon for a specific profile
-agys remote start work
-
-# Start with custom cloud instance name and specific port
-agys remote start work --name "my-macbook" --port 4400
-
-# View all active running remote daemons, ports, URLs, and uptime
-agys remote status
-# or
-agys remote ls
-
-# View or follow daemon output logs
-agys remote logs work -f
-
-# Restart daemon for a profile
-agys remote restart work
-
-# Stop a specific daemon or all running daemons
-agys remote stop work
-agys remote stop --all
-```
-
-### 17. Herdr Multi-Agent Workspace & Plugin Integration
-
-`agys` provides native, zero-dependency integration and an official [Herdr Plugin](https://herdr.dev/docs/plugins/) for managing multi-agent workflows with automated 3-row sidebar telemetry and rich window titles:
-
-#### 🎨 3-Row Sidebar Telemetry (`~/.config/herdr/config.toml`)
-Herdr sidebar displays a clean 3-row layout with high-contrast color indicators:
-
-```text
-● nextcert-backend  quaywin_thang
-  32% ctx · claude-3-7-sonnet
-  85% 2h · 90% 3d
-```
-
-* **Row 1 (Workspace & Profile)**: State dot (`●`), Project Folder Name (`workspace`), and Active Profile (`quaywin_thang` in Cyan `#38bdf8` bold).
-* **Row 2 (Context Window & Model)**: Real-time Session Context Window % (`32% ctx`) + Full Model ID (`claude-3-7-sonnet` in Light Blue `#93c5fd`).
-* **Row 3 (Account Quotas)**: Color-coded 5-Hour Quota (`85% 2h` in Green `#4ade80`) and Weekly Quota (`90% 3d` in Purple `#a78bfa`).
-
-#### ⚡ Automated & Manual Sidebar Configuration (`agys herdr`)
-Configuration is 100% automated via Herdr startup hooks. You can also inspect or manage sidebar configurations manually:
+### 12. Fast Plugin Management (`agys plugin`)
+Install, list, or uninstall `agy` plugins directly with optional `--all` (`-a`) support across all profiles without session overhead:
 
 ```bash
-# Apply clean 3-row sidebar layout to ~/.config/herdr/config.toml
-agys herdr configure
+# Install plugin for a specific profile (or current default profile)
+agys plugin install https://github.com/obra/superpowers work
 
-# Check current Herdr sidebar configuration status
-agys herdr status
+# Install plugin for ALL active profiles simultaneously
+agys plugin install https://github.com/obra/superpowers --all
+# or shorthand (-a):
+agys plugin install https://github.com/obra/superpowers -a
 
-# Restore original Herdr sidebar configuration from backup
-agys herdr uninstall
+# List installed plugins across ALL active profiles
+agys plugin list --all
+
+# Uninstall plugin from ALL active profiles
+agys plugin uninstall superpowers --all
 ```
 
-#### 🔌 Install as a Herdr Plugin
-```bash
-# Install directly from Herdr Marketplace
-herdr plugin install quaywin/agys
-
-# Or link working copy locally during development
-herdr plugin link /path/to/agys
-```
-
-#### ⌨️ Herdr Keybindings & Shortcuts (`~/.config/herdr/config.toml`)
-Bind keys in Herdr to popup the Quota Dashboard or launch Auto-Agent in a split pane:
-
-```toml
-# Popup Quota HUD Dashboard
-[[keys.command]]
-key = "prefix+t"
-type = "plugin_action"
-command = "quaywin.agys.quota"
-description = "Check Antigravity Quota HUD"
-
-# Split pane and launch profile with best quota
-[[keys.command]]
-key = "prefix+a"
-type = "plugin_action"
-command = "quaywin.agys.run-auto"
-description = "Launch Best Antigravity Profile"
-
-# AI Staged Git Commit in active pane
-[[keys.command]]
-key = "prefix+c"
-type = "plugin_action"
-command = "quaywin.agys.commit"
-description = "AI Staged Git Commit"
-```
-
-#### 🛠️ Native Socket & Telemetry Integration Features
-* **100% Pure Go**: Native compiled binary execution with zero Python, pip, or shims dependencies.
-* **Hybrid Telemetry (Active + Passive)**:
-  * **Active Push (0ms latency)**: Captures turn-by-turn context window usage and model changes instantly via Antigravity `statusLine` hook streaming.
-  * **Passive Polling (60s watcher)**: Background goroutine with single-leader OS File Lock (`.quota_watcher.lock`) updates reset countdowns (ETA) and auto-recovers quotas upon 5h reset.
-* **Comprehensive Window & Tab Title**: Displays Context Window %, active model abbreviation, and dual 5H & Weekly reset countdowns:
-  `agys: <profile> [<abbr>] Ctx: <pct>% • 5H: <pct>% (<reset5h>) • Wk: <pct>% (<resetWk>)`
-  *(e.g. `agys: quaywin_thang [cld] Ctx: 32% • 5H: 85% (in 2h 15m) • Wk: 90% (in 3d 4h)`)*
-* **Strict Environment Isolation**: All Herdr features (hooks, watchers, socket RPC, terminal title) strictly activate **only** inside active Herdr panes (`HERDR_ENV=1`, `HERDR_SOCKET_PATH`, `HERDR_PANE_ID`). Outside Herdr, `agys` operates as a 100% isolated standalone CLI.
-
-> [!NOTE]
-> `agys herdr-hook` and `agys statusline-hook` are **internal lifecycle hook bridges** executed automatically in the background by Antigravity's hook engine (`hooks.json`, `settings.json`) to communicate with Herdr. **You do not need to invoke these commands manually.**
-
-### 18. Version & Upgrading
+### 13. Profile Utilities: Clone, Export, Import, Rename, Delete
 
 ```bash
-# Check installed version
-agys version
-# or
-agys --version
+# Duplicate an existing profile (credentials and config)
+agys clone work work-copy
+# or alias: agys cp work work-copy
 
-# Upgrade to the latest release automatically
+# Export profile(s) to a compressed archive
+agys export work -o work_profile.tar.gz
+agys export --all -o all_profiles.tar.gz
+
+# Import profile(s) from an archive
+agys import work_profile.tar.gz
+agys import all_profiles.tar.gz --all --force
+
+# Rename a profile directory
+agys rename work company
+# or alias: agys mv work company
+
+# Delete a profile directory
+agys delete work --force
+# or alias: agys rm work --force
+```
+
+### 14. Shell Aliases & Auto-Completions
+
+```bash
+# Generate shell aliases for configured profiles (e.g. alias agy-work="agys run work --")
+eval "$(agys alias)"
+
+# Enable tab-completions in Zsh / Bash / Fish
+source <(agys completion zsh)
+source <(agys completion bash)
+```
+
+### 15. Self-Upgrade (`agys upgrade`)
+
+```bash
+# Upgrade agys CLI to latest release automatically
 agys upgrade
-# or
-agys update
+# or alias: agys update
 
 # Check if an update is available without installing
 agys upgrade --check
@@ -447,28 +393,24 @@ agys upgrade --check
 
 ---
 
-## Directory & Configuration Layout
+## 📁 Directory & Configuration Layout
 
-`agys` stores all data under `~/.agys/` by default (or the custom directory specified by the `AGYS_DIR` environment variable):
+`agys` stores all data under `~/.agys/` by default (configurable via the `AGYS_DIR` environment variable):
 
 ```text
 ~/.agys/
 ├── current                  # Active default profile setting (created by `agys use`)
 ├── priorities.json          # Configured profile priorities (created by `agys priority set`)
-└── profiles/                # Base directory storing isolated profiles
+└── profiles/                # Base directory storing isolated sandboxes
     ├── work/                # Isolated HOME directory for profile "work"
+    │   ├── .gemini/         # Antigravity CLI credentials, config, transcript
+    │   └── ide-data/        # Antigravity IDE isolated user-data-dir
     └── personal/            # Isolated HOME directory for profile "personal"
-```
-
-To use a custom location for profiles:
-
-```bash
-export AGYS_DIR="/custom/path/to/.agys"
 ```
 
 ---
 
-## CLI Usage Reference
+## 📖 Complete CLI Reference
 
 ```text
 agys isolates multi-account profiles across the Google Antigravity ecosystem (CLI, IDE, GUI, Remote)
@@ -483,16 +425,21 @@ Available Commands:
   auto             Execute agy command automatically using profile with the best 5h Gemini quota
   clone            Clone an existing profile to a new profile (alias: cp)
   commit           Check staged git files with AI and commit using auto-selected or specified profile
-  completion       Generate shell completion scripts
+  completion       Generate shell completion scripts (bash, zsh, fish, powershell)
   delete           Delete a profile directory (alias: rm)
   export           Export a profile to a gzipped tar archive
+  gui              Launch Antigravity 2.0 Desktop App GUI with isolated profile settings
   herdr            Manage Herdr multi-agent workspace integration (configure, status, uninstall)
   herdr-hook       Handle Herdr multi-agent lifecycle integration hooks (Internal / Automatic)
+  ide              Launch standalone Antigravity IDE isolated to a profile
   import           Import a profile from a gzipped tar archive
   list             List all active profile directories (alias: ls)
+  plugin           Manage plugins across isolated profiles (install, list, uninstall)
   priority         Manage profile priorities for auto profile selection (alias: prio, p)
   quota            Check model quota and usage for profile(s) (alias: q)
+  remote           Manage background Antigravity Remote Control daemons (start, stop, logs, status)
   rename           Rename an existing profile directory (alias: mv)
+  resume           List and resume previous conversation sessions by project and profile (alias: r)
   run              Execute agy command with specified profile, auto quota selection, or default profile
   ssh              Execute agys/agy natively on a remote server over SSH
   statusline-hook  Handle Antigravity statusLine context window hook (Internal / Automatic)
@@ -507,15 +454,34 @@ Flags:
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
 graph TD
-    User[User Shell] -->|agys run work| AGYS[agys CLI Local]
-    User -->|agys ssh user@server work| AGYS
-    AGYS -->|Sync Token 0.1s & API Reverse Tunnel| RemoteServer[Remote Linux Host over SSH]
-    RemoteServer -->|exec agys run work| AGY[agy CLI Process on Remote]
-    AGY -->|Read/Write Isolated Profile| Dir[~/.agys/profiles/work/]
-    AGY -->|Tunnel API Calls| AGYS
-    AGYS -->|Gemini API Request| GoogleCloud[Google Cloud AI]
+    UserShell["User Shell / Herdr Pane"] -->|agys run work| AGYS["agys CLI Engine"]
+
+    subgraph Sandboxing ["Dynamic $HOME Sandboxing"]
+        AGYS -->|Route $HOME| ProfWork["~/.agys/profiles/work/"]
+        AGYS -->|Route $HOME| ProfPersonal["~/.agys/profiles/personal/"]
+    end
+
+    subgraph Ecosystem ["Antigravity Ecosystem Surfaces"]
+        AGYS -->|Launch CLI| AGYCLI["agy CLI Process"]
+        AGYS -->|--user-data-dir| AGYIDE["Antigravity IDE"]
+        AGYS -->|Keychain Sync| AGYGUI["Antigravity 2.0 GUI"]
+        AGYS -->|Daemon Manager| AGYRemote["Remote Control Daemon"]
+        AGYS -->|SSH Reverse Tunnel| RemoteHost["Remote Linux Server"]
+    end
+
+    subgraph HerdrIntegration ["Herdr Multi-Agent Integration"]
+        AGYCLI -->|statusLine Hook 0ms| HerdrSocket["Herdr UNIX Socket"]
+        AGYS -->|Quota Watcher 60s| HerdrSocket
+        HerdrSocket -->|3-Row Telemetry & Titles| HerdrSidebar["Herdr UI & Terminal Panes"]
+    end
 ```
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
