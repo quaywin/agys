@@ -543,7 +543,20 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			title = target.Title
 		}
 		tokens := map[string]string{
-			"profile": profileName,
+			"profile":            profileName,
+			"quota_5h":           "",
+			"quota_5h_normal":    "",
+			"quota_5h_warning":   "",
+			"quota_5h_danger":    "",
+			"quota_week":         "",
+			"quota_week_normal":  "",
+			"quota_week_warning": "",
+			"quota_week_danger":  "",
+			"quota_summary":      "",
+			"quota":              "",
+			"reset":              "",
+			"quota_weekly":       "",
+			"reset_weekly":       "",
 		}
 		if targetModel != "" {
 			tokens["model"] = targetModel

@@ -473,3 +473,70 @@ func TestReportHerdrQuotaOnly_PreservesExistingContext(t *testing.T) {
 	}
 }
 
+func TestReportHerdrMetadata_ClearsStaleQuotaTiers(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_tier_test_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan string, 1)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+			if strings.Contains(reqStr, "pane.report_metadata") {
+				received <- reqStr
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	_, err = Create("tier-profile")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	err = ReportHerdrMetadataWithModel(context.Background(), "tier-profile", "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("ReportHerdrMetadataWithModel error: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		// Ensure warning and danger tokens are explicitly cleared to "" in payload to prevent Herdr from rendering stale tokens
+		if !strings.Contains(payload, `"quota_5h_warning":""`) {
+			t.Errorf("Expected payload to explicitly clear 'quota_5h_warning', got: %s", payload)
+		}
+		if !strings.Contains(payload, `"quota_5h_danger":""`) {
+			t.Errorf("Expected payload to explicitly clear 'quota_5h_danger', got: %s", payload)
+		}
+		if !strings.Contains(payload, `"quota_week_warning":""`) {
+			t.Errorf("Expected payload to explicitly clear 'quota_week_warning', got: %s", payload)
+		}
+		if !strings.Contains(payload, `"quota_week_danger":""`) {
+			t.Errorf("Expected payload to explicitly clear 'quota_week_danger', got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("No payload received on mock socket within timeout")
+	}
+}
+
