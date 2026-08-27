@@ -39,8 +39,18 @@ var resumeCmd = &cobra.Command{
 			args = args[:dashIdx]
 		}
 
-		if len(args) > 0 {
+		if len(args) == 1 {
 			if idx, err := strconv.Atoi(args[0]); err == nil && idx > 0 {
+				selectedIndex = idx
+			} else {
+				filterProjectArg = args[0]
+			}
+		} else if len(args) >= 2 {
+			if idx, err := strconv.Atoi(args[0]); err == nil && idx > 0 {
+				selectedIndex = idx
+				filterProjectArg = args[1]
+			} else if idx, err := strconv.Atoi(args[1]); err == nil && idx > 0 {
+				filterProjectArg = args[0]
 				selectedIndex = idx
 			} else {
 				filterProjectArg = args[0]
@@ -60,7 +70,9 @@ var resumeCmd = &cobra.Command{
 			if cwd != "" {
 				root := profile.FindProjectRoot(cwd)
 				if root != "" {
-					activeProjectFilter = filepath.Base(root)
+					activeProjectFilter = root
+				} else {
+					activeProjectFilter = cwd
 				}
 			}
 		}
@@ -77,13 +89,6 @@ var resumeCmd = &cobra.Command{
 			return fmt.Errorf("failed to list sessions: %w", err)
 		}
 
-		// If no sessions found with current project filter, fallback to all sessions
-		if len(sessions) == 0 && activeProjectFilter != "" && resumeProject == "" && filterProjectArg == "" {
-			filter.Project = ""
-			sessions, _ = profile.ListSessions(cmd.Context(), filter)
-			activeProjectFilter = ""
-		}
-
 		if resumeJSON {
 			jsonOut, err := profile.RenderSessionsJSON(sessions)
 			if err != nil {
@@ -94,24 +99,33 @@ var resumeCmd = &cobra.Command{
 		}
 
 		if len(sessions) == 0 {
-			fmt.Println("No previous conversation sessions found.")
+			if activeProjectFilter != "" && !resumeAll {
+				fmt.Printf("No previous conversation sessions found for project %q.\nUse 'agys resume -a' to view sessions across all projects.\n", filepath.Base(activeProjectFilter))
+			} else {
+				fmt.Println("No previous conversation sessions found.")
+			}
 			return nil
 		}
 
-		// If selectedIndex was passed directly as arg (e.g. `agys resume 1`)
+		// Helper to resume selected session
+		resumeSession := func(chosen profile.ConversationSession) error {
+			fmt.Fprintf(os.Stderr, "[agys] Resuming session %s (Project: %s, Profile: %s)\n", chosen.ConvID, chosen.ProjectName, chosen.Profile)
+			agyArgs := buildResumeAgyArgs(chosen.ConvID, extraAgyArgs)
+			return runWithProfileAndDir(cmd, chosen.Profile, agyArgs, chosen.ProjectPath)
+		}
+
+		// If selectedIndex was passed directly as arg (e.g. `agys resume 1` or `agys resume caudata 1`)
 		if selectedIndex > 0 {
 			if selectedIndex > len(sessions) {
 				return fmt.Errorf("invalid session index %d: out of range (1..%d)", selectedIndex, len(sessions))
 			}
 			chosen := sessions[selectedIndex-1]
-			fmt.Fprintf(os.Stderr, "[agys] Resuming session %s (Project: %s, Profile: %s)\n", chosen.ConvID, chosen.ProjectName, chosen.Profile)
-			agyArgs := buildResumeAgyArgs(chosen.ConvID, extraAgyArgs)
-			return runWithProfile(cmd, chosen.Profile, agyArgs)
+			return resumeSession(chosen)
 		}
 
 		// Header notice
-		if activeProjectFilter != "" {
-			fmt.Printf("Recent Sessions for Project %q (use -a / --all to view all projects):\n\n", activeProjectFilter)
+		if activeProjectFilter != "" && !resumeAll {
+			fmt.Printf("Recent Sessions for Project %q (use -a / --all to view all projects):\n\n", filepath.Base(activeProjectFilter))
 		} else {
 			fmt.Println("Recent Sessions across all Projects & Profiles:")
 			fmt.Println()
@@ -157,9 +171,7 @@ var resumeCmd = &cobra.Command{
 			}
 
 			chosen := sessions[choice-1]
-			fmt.Fprintf(os.Stderr, "[agys] Resuming session %s (Project: %s, Profile: %s)\n", chosen.ConvID, chosen.ProjectName, chosen.Profile)
-			agyArgs := buildResumeAgyArgs(chosen.ConvID, extraAgyArgs)
-			return runWithProfile(cmd, chosen.Profile, agyArgs)
+			return resumeSession(chosen)
 		}
 
 		fmt.Println("To resume a session, run: agys resume <NUM> or agys run <PROFILE> -- --conversation=<CONVERSATION_ID>")

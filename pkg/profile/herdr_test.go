@@ -329,3 +329,77 @@ func TestResolveActiveModel(t *testing.T) {
 		t.Errorf("Expected default 'gemini', got %q", got)
 	}
 }
+
+func TestReportHerdrMetadata_Compact2RowTokens(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_compact_test_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan string, 1)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","tokens":{"profile":"compact-profile"}}]}}` + "\n"))
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					received <- reqStr
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	pDir, err := Create("compact-profile")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	// Seed session context (35%)
+	_ = SaveSessionContext(pDir, &SessionContextState{
+		UsedPercentage: 35.0,
+		ModelID:        "claude-3-7-sonnet",
+	})
+
+	err = ReportHerdrMetadataWithModel(context.Background(), "compact-profile", "claude-3-7-sonnet")
+	if err != nil {
+		t.Fatalf("ReportHerdrMetadataWithModel error: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		// Line 1: Identity & Profile (without [ ])
+		if !strings.Contains(payload, `"display_agent":"compact-profile"`) {
+			t.Errorf("Expected display_agent to be 'compact-profile', got: %s", payload)
+		}
+		// Line 2: % ctx + Full Model ID
+		if !strings.Contains(payload, "35% ctx · claude-3-7-sonnet") {
+			t.Errorf("Expected payload to contain '35%% ctx · claude-3-7-sonnet', got: %s", payload)
+		}
+		if !strings.Contains(payload, "quota_model_context") {
+			t.Errorf("Expected payload to contain quota_model_context token, got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("No payload received on mock socket within timeout")
+	}
+}

@@ -1,6 +1,7 @@
 # Binaries
 agys
 agys.exe
+bin/
 
 # OS generated files
 .DS_Store

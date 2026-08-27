@@ -18,10 +18,11 @@ import (
 
 var validProfileNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-// GetAgysDir returns the root configuration directory (~/.agys or $AGYS_DIR).
-func GetAgysDir() (string, error) {
-	if custom := os.Getenv("AGYS_DIR"); custom != "" {
-		return custom, nil
+// GetRealUserHome returns the actual user home directory (e.g. /Users/quaywin or /home/user),
+// correctly stripping any active profile path (e.g. ~/.agys/profiles/<name>) when HOME is overridden.
+func GetRealUserHome() (string, error) {
+	if val := os.Getenv("AGYS_REAL_HOME"); val != "" {
+		return filepath.Clean(val), nil
 	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -31,7 +32,22 @@ func GetAgysDir() (string, error) {
 	if idx := strings.Index(homeDir, agysSep); idx != -1 {
 		homeDir = homeDir[:idx]
 	}
-	return filepath.Join(homeDir, ".agys"), nil
+	if homeDir == "" {
+		homeDir = "/"
+	}
+	return filepath.Clean(homeDir), nil
+}
+
+// GetAgysDir returns the root configuration directory (~/.agys or $AGYS_DIR).
+func GetAgysDir() (string, error) {
+	if custom := os.Getenv("AGYS_DIR"); custom != "" {
+		return custom, nil
+	}
+	realHome, err := GetRealUserHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(realHome, ".agys"), nil
 }
 
 // GetBaseDir returns the global base directory for storing profiles (~/.agys/profiles).
@@ -292,44 +308,46 @@ func BuildCmd(profileDir string, args ...string) *exec.Cmd {
 	return BuildCmdContext(context.Background(), profileDir, args...)
 }
 
+// GetAgyPath locates the agy executable binary on the system.
+func GetAgyPath() string {
+	agyPath, err := exec.LookPath("agy")
+	if err == nil {
+		return agyPath
+	}
+	if userHome, errHome := GetRealUserHome(); errHome == nil {
+		candidates := []string{
+			filepath.Join(userHome, ".local", "bin", "agy"),
+			filepath.Join(userHome, "bin", "agy"),
+			filepath.Join(userHome, ".gemini", "antigravity-cli", "bin", "agy"),
+			"/usr/local/bin/agy",
+			"/opt/homebrew/bin/agy",
+		}
+		for _, candidate := range candidates {
+			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+				return candidate
+			}
+		}
+	}
+	return "agy"
+}
+
 // BuildCmdContext constructs an exec.Cmd with context cancellation for running `agy` with isolated profile environment variables.
 func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *exec.Cmd {
 	_ = EnsureKeychain(profileDir)
 	_ = SyncHerdrIntegration(profileDir)
 
-	agyPath, err := exec.LookPath("agy")
-	if err != nil {
-		if userHome, errHome := os.UserHomeDir(); errHome == nil {
-			agysSep := string(filepath.Separator) + ".agys"
-			if idx := strings.Index(userHome, agysSep); idx != -1 {
-				userHome = userHome[:idx]
-			}
-			candidates := []string{
-				filepath.Join(userHome, ".local", "bin", "agy"),
-				filepath.Join(userHome, "bin", "agy"),
-				filepath.Join(userHome, ".gemini", "antigravity-cli", "bin", "agy"),
-				"/usr/local/bin/agy",
-			}
-			for _, candidate := range candidates {
-				if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-					agyPath = candidate
-					err = nil
-					break
-				}
-			}
-		}
-	}
-	if err != nil {
-		agyPath = "agy"
-	}
+	agyPath := GetAgyPath()
 
 	cmd := exec.CommandContext(ctx, agyPath, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
+	realUserHome, _ := GetRealUserHome()
+
 	envMap := map[string]string{
 		"AGYS_PROFILE":    filepath.Base(profileDir),
+		"AGYS_REAL_HOME":  realUserHome,
 		"HOME":            profileDir,
 		"USERPROFILE":     profileDir,
 		"GEMINI_DIR":      filepath.Join(profileDir, ".gemini"),
@@ -341,12 +359,8 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 	}
 
 	// Ensure PATH retains real user binary locations so child hook processes can locate agys
-	if userHome, errHome := os.UserHomeDir(); errHome == nil {
-		agysSep := string(filepath.Separator) + ".agys"
-		if idx := strings.Index(userHome, agysSep); idx != -1 {
-			userHome = userHome[:idx]
-		}
-		localBin := filepath.Join(userHome, ".local", "bin")
+	if realUserHome != "" {
+		localBin := filepath.Join(realUserHome, ".local", "bin")
 		pathEnv := os.Getenv("PATH")
 		if !strings.Contains(pathEnv, localBin) {
 			envMap["PATH"] = localBin + string(os.PathListSeparator) + pathEnv

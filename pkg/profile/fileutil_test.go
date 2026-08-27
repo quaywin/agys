@@ -58,3 +58,58 @@ func TestWriteFileAtomic_Overwrite(t *testing.T) {
 		t.Errorf("expected overwritten content %q, got %q", "v2-updated", string(readData))
 	}
 }
+
+func TestGetRealUserHome(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	home, err := GetRealUserHome()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if home != tempHome {
+		t.Errorf("expected %q, got %q", tempHome, home)
+	}
+
+	// Test when HOME points inside a profile directory
+	profileHome := filepath.Join(tempHome, ".agys", "profiles", "testprof")
+	t.Setenv("HOME", profileHome)
+
+	homeFromProfile, err := GetRealUserHome()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if homeFromProfile != tempHome {
+		t.Errorf("expected stripped home %q, got %q", tempHome, homeFromProfile)
+	}
+
+	// Test AGYS_REAL_HOME env override
+	overrideHome := filepath.Join(tempHome, "custom_real_home")
+	t.Setenv("AGYS_REAL_HOME", overrideHome)
+
+	homeOverride, err := GetRealUserHome()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if homeOverride != overrideHome {
+		t.Errorf("expected %q, got %q", overrideHome, homeOverride)
+	}
+}
+
+func TestExpandTilde(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_REAL_HOME", tempHome)
+
+	if res := ExpandTilde("~/Projects_1/agys"); res != filepath.Join(tempHome, "Projects_1", "agys") {
+		t.Errorf("unexpected expansion: %s", res)
+	}
+
+	if res := ExpandTilde("~"); res != tempHome {
+		t.Errorf("unexpected expansion for ~: %s", res)
+	}
+
+	if res := ExpandTilde("/absolute/path"); res != "/absolute/path" {
+		t.Errorf("absolute path should remain unchanged: %s", res)
+	}
+}

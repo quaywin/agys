@@ -15,7 +15,7 @@
 | **Antigravity 2.0 GUI** | `agys gui <profile>` | macOS Keychain Sync | macOS Keychain OAuth sync, process cleanup, confirmation prompts, auto-seeding |
 | **Antigravity IDE** | `agys ide <profile>` | `--user-data-dir` | Parallel multi-window IDE sessions, independent logged-in accounts, smart auto-selection |
 | **Antigravity Remote Control** | `agys remote <profile>` | Detached Daemon / Cloud Relay | Background headless daemon, auto-port collision resolution, web UI (`localhost:PORT`) & Cloud portal (`antigravity.google`) |
-| **Herdr Multi-Agent Workspaces** | `agys run <profile>` | UNIX Socket RPC & Hooks | Profile-isolated agent panes, real-time sidebar model/quota badge (`agy[profile:model·%]`), dual 5H & Weekly title countdown, background quota watcher, zero-Python pure Go lifecycle hooks |
+| **Herdr Multi-Agent Workspaces** | `agys run <profile>` | UNIX Socket RPC & Hooks | Profile-isolated agent panes, 3-row clean sidebar layout (Workspace & Profile, Context Window % & Model ID, 5H & Weekly Quota), real-time `statusLine` context tracking, dual 5H & Weekly title countdown, background quota watcher, zero-Python pure Go lifecycle hooks |
 
 ---
 
@@ -35,7 +35,7 @@
 - **Antigravity IDE Switcher (`agys ide`)**: Launch isolated, parallel sessions of the standalone Antigravity IDE for any profile (`agys ide work /path/to/project`), using profile-isolated `--user-data-dir` storage to support running multiple IDE windows logged into different accounts simultaneously.
 - **Cross-Platform & Safe In-Place Upgrade**: Binary packages available for macOS and Linux across `amd64` and `arm64` architectures, featuring atomic in-place upgrading and ad-hoc code signing (`agys upgrade`).
 - **AI-Powered Staged Commit (`agys commit`)**: Automatically selects the optimal profile (based on 5h Gemini quota), performs an AI code review check on staged git changes, generates/validates Conventional Commit messages, and executes git commit.
-- **Herdr Multi-Agent Workspace Integration**: Native plug-and-play support for [Herdr](https://herdr.dev). Automatically synchronizes lifecycle hooks per profile, reports real-time model & 5-hour/weekly quota percentages directly to the Herdr sidebar badge (e.g. `agy[quaywin:cld·84%]`), and sets rich terminal tab/window titles with reset countdowns.
+- **Herdr Multi-Agent Workspace Integration**: Native plug-and-play support for [Herdr](https://herdr.dev). Automatically synchronizes lifecycle hooks per profile, configures a 3-row clean sidebar layout (Workspace & Profile, Context Window % + Full Model ID, 5H & Weekly Quotas with high-contrast color indicators), and sets rich terminal tab/window titles with reset countdowns.
 - **Zero-Dependency One-Liner Install**: Easy installation via POSIX shell script.
 
 ---
@@ -349,29 +349,84 @@ agys remote stop work
 agys remote stop --all
 ```
 
-### 17. Herdr Multi-Agent Workspace Integration
+### 17. Herdr Multi-Agent Workspace & Plugin Integration
 
-`agys` provides native, zero-dependency integration with [Herdr](https://herdr.dev) multi-agent terminal workspaces:
+`agys` provides native, zero-dependency integration and an official [Herdr Plugin](https://herdr.dev/docs/plugins/) for managing multi-agent workflows with automated 3-row sidebar telemetry and rich window titles:
 
+#### 🎨 3-Row Sidebar Telemetry (`~/.config/herdr/config.toml`)
+Herdr sidebar displays a clean 3-row layout with high-contrast color indicators:
+
+```text
+● nextcert-backend  quaywin_thang
+  32% ctx · claude-3-7-sonnet
+  85% 2h · 90% 3d
+```
+
+* **Row 1 (Workspace & Profile)**: State dot (`●`), Project Folder Name (`workspace`), and Active Profile (`quaywin_thang` in Cyan `#38bdf8` bold).
+* **Row 2 (Context Window & Model)**: Real-time Session Context Window % (`32% ctx`) + Full Model ID (`claude-3-7-sonnet` in Light Blue `#93c5fd`).
+* **Row 3 (Account Quotas)**: Color-coded 5-Hour Quota (`85% 2h` in Green `#4ade80`) and Weekly Quota (`90% 3d` in Purple `#a78bfa`).
+
+#### ⚡ Automated & Manual Sidebar Configuration (`agys herdr`)
+Configuration is 100% automated via Herdr startup hooks. You can also inspect or manage sidebar configurations manually:
+
+```bash
+# Apply clean 3-row sidebar layout to ~/.config/herdr/config.toml
+agys herdr configure
+
+# Check current Herdr sidebar configuration status
+agys herdr status
+
+# Restore original Herdr sidebar configuration from backup
+agys herdr uninstall
+```
+
+#### 🔌 Install as a Herdr Plugin
+```bash
+# Install directly from Herdr Marketplace
+herdr plugin install quaywin/agys
+
+# Or link working copy locally during development
+herdr plugin link /path/to/agys
+```
+
+#### ⌨️ Herdr Keybindings & Shortcuts (`~/.config/herdr/config.toml`)
+Bind keys in Herdr to popup the Quota Dashboard or launch Auto-Agent in a split pane:
+
+```toml
+# Popup Quota HUD Dashboard
+[[keys.command]]
+key = "prefix+t"
+type = "plugin_action"
+command = "quaywin.agys.quota"
+description = "Check Antigravity Quota HUD"
+
+# Split pane and launch profile with best quota
+[[keys.command]]
+key = "prefix+a"
+type = "plugin_action"
+command = "quaywin.agys.run-auto"
+description = "Launch Best Antigravity Profile"
+
+# AI Staged Git Commit in active pane
+[[keys.command]]
+key = "prefix+c"
+type = "plugin_action"
+command = "quaywin.agys.commit"
+description = "AI Staged Git Commit"
+```
+
+#### 🛠️ Native Socket & Telemetry Integration Features
 * **100% Pure Go**: Native compiled binary execution with zero Python, pip, or shims dependencies.
-* **Compact Sidebar Badge**: Formatted as `agy[<profile>:<model_abbr>·<quota_pct>%]` (e.g. `agy[quaywin:cld·84%]`, `agy[tram520:gem·53%]`).
-  * Supported Model Abbreviations: `gem` (Gemini), `cld` (Claude), `gpt` (OpenAI / o1 / o3 / o4), `dsk` (DeepSeek), `qwn` (Qwen), `lma` (Llama), `mst` (Mistral).
-* **Comprehensive Window & Tab Title**: Displays both 5-Hour and Weekly reset countdowns:
-  `agys: <profile> [<abbr>] 5H: <pct>% (<reset5h>) • Wk: <pct>% (<resetWk>)`
-  *(e.g. `agys: quaywin [cld] 5H: 58% (in 1h 51m) • Wk: 85% (in 6d 20h)`)*
-* **Real-Time Dynamic Model Recognition**: Automatically catches mid-session model switches (via UI dropdowns, `/model` slash commands, or CLI arguments) in $O(1)$ time using tail-seek transcript parsing.
-* **Instant Prompt Updates (`PreInvocation`)**: Immediately updates sidebar badge upon prompt submission without waiting for response generation to complete.
-* **Background Quota Watcher & Sleep/Wake Recovery**: Background watcher awakens at quota reset boundaries, featuring **Fast Retry Backoff (15s)** when laptop wakes from sleep to allow Wi-Fi reconnection.
+* **Hybrid Telemetry (Active + Passive)**:
+  * **Active Push (0ms latency)**: Captures turn-by-turn context window usage and model changes instantly via Antigravity `statusLine` hook streaming.
+  * **Passive Polling (60s watcher)**: Background goroutine with single-leader OS File Lock (`.quota_watcher.lock`) updates reset countdowns (ETA) and auto-recovers quotas upon 5h reset.
+* **Comprehensive Window & Tab Title**: Displays Context Window %, active model abbreviation, and dual 5H & Weekly reset countdowns:
+  `agys: <profile> [<abbr>] Ctx: <pct>% • 5H: <pct>% (<reset5h>) • Wk: <pct>% (<resetWk>)`
+  *(e.g. `agys: quaywin_thang [cld] Ctx: 32% • 5H: 85% (in 2h 15m) • Wk: 90% (in 3d 4h)`)*
 * **Strict Environment Isolation**: All Herdr features (hooks, watchers, socket RPC, terminal title) strictly activate **only** inside active Herdr panes (`HERDR_ENV=1`, `HERDR_SOCKET_PATH`, `HERDR_PANE_ID`). Outside Herdr, `agys` operates as a 100% isolated standalone CLI.
 
 > [!NOTE]
-> `agys herdr-hook` is an **internal lifecycle hook bridge** executed automatically in the background by Antigravity's hook engine (`hooks.json`) to communicate with Herdr. **You do not need to invoke this command manually.**
-
-```bash
-# Internal hook subcommand executed automatically by Antigravity lifecycle hooks:
-agys herdr-hook session
-agys herdr-hook quota
-```
+> `agys herdr-hook` and `agys statusline-hook` are **internal lifecycle hook bridges** executed automatically in the background by Antigravity's hook engine (`hooks.json`, `settings.json`) to communicate with Herdr. **You do not need to invoke these commands manually.**
 
 ### 18. Version & Upgrading
 
@@ -423,25 +478,27 @@ Usage:
   agys [command]
 
 Available Commands:
-  add         Create a new profile and perform agy login
-  alias       Generate shell aliases for configured profiles
-  auto        Execute agy command automatically using profile with the best 5h Gemini quota
-  clone       Clone an existing profile to a new profile (alias: cp)
-  commit      Check staged git files with AI and commit using auto-selected or specified profile
-  completion  Generate shell completion scripts
-  delete      Delete a profile directory (alias: rm)
-  export      Export a profile to a gzipped tar archive
-  herdr-hook  Handle Herdr multi-agent lifecycle integration hooks (Internal / Automatic)
-  import      Import a profile from a gzipped tar archive
-  list        List all active profile directories (alias: ls)
-  priority    Manage profile priorities for auto profile selection (alias: prio, p)
-  quota       Check model quota and usage for profile(s) (alias: q)
-  rename      Rename an existing profile directory (alias: mv)
-  run         Execute agy command with specified profile, auto quota selection, or default profile
-  ssh         Execute agys/agy natively on a remote server over SSH
-  upgrade     Upgrade agys CLI to the latest version (alias: update)
-  use         Set or display the default active profile
-  version     Display version information for agys CLI
+  add              Create a new profile and perform agy login
+  alias            Generate shell aliases for configured profiles
+  auto             Execute agy command automatically using profile with the best 5h Gemini quota
+  clone            Clone an existing profile to a new profile (alias: cp)
+  commit           Check staged git files with AI and commit using auto-selected or specified profile
+  completion       Generate shell completion scripts
+  delete           Delete a profile directory (alias: rm)
+  export           Export a profile to a gzipped tar archive
+  herdr            Manage Herdr multi-agent workspace integration (configure, status, uninstall)
+  herdr-hook       Handle Herdr multi-agent lifecycle integration hooks (Internal / Automatic)
+  import           Import a profile from a gzipped tar archive
+  list             List all active profile directories (alias: ls)
+  priority         Manage profile priorities for auto profile selection (alias: prio, p)
+  quota            Check model quota and usage for profile(s) (alias: q)
+  rename           Rename an existing profile directory (alias: mv)
+  run              Execute agy command with specified profile, auto quota selection, or default profile
+  ssh              Execute agys/agy natively on a remote server over SSH
+  statusline-hook  Handle Antigravity statusLine context window hook (Internal / Automatic)
+  upgrade          Upgrade agys CLI to the latest version (alias: update)
+  use              Set or display the default active profile
+  version          Display version information for agys CLI
 
 Flags:
   -h, --help      help for agys

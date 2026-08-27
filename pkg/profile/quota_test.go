@@ -55,6 +55,44 @@ func TestFormatResetTime(t *testing.T) {
 	}
 }
 
+func TestFormatCompactResetTime(t *testing.T) {
+	// Full quota (1.0 fraction) should return ""
+	if got := FormatCompactResetTime(time.Now().Add(2*time.Hour), 1.0); got != "" {
+		t.Errorf("expected '', got %q", got)
+	}
+
+	// Zero reset time should return ""
+	if got := FormatCompactResetTime(time.Time{}, 0.5); got != "" {
+		t.Errorf("expected '', got %q", got)
+	}
+
+	// Past reset time should return "due"
+	if got := FormatCompactResetTime(time.Now().Add(-1*time.Minute), 0.5); got != "due" {
+		t.Errorf("expected 'due', got %q", got)
+	}
+
+	// Future 2 days 4 hours -> "2d4h"
+	t1 := time.Now().Add(2*24*time.Hour + 4*time.Hour + 30*time.Minute)
+	got1 := FormatCompactResetTime(t1, 0.5)
+	if !strings.HasPrefix(got1, "2d4h") {
+		t.Errorf("expected '2d4h...', got %q", got1)
+	}
+
+	// Future 1 hour 45 minutes -> "1h45m"
+	t2 := time.Now().Add(1*time.Hour + 45*time.Minute + 10*time.Second)
+	got2 := FormatCompactResetTime(t2, 0.5)
+	if !strings.HasPrefix(got2, "1h45m") && !strings.HasPrefix(got2, "1h44m") {
+		t.Errorf("expected '1h45m...', got %q", got2)
+	}
+
+	// Future 15 minutes -> "15m"
+	t3 := time.Now().Add(15 * time.Minute)
+	got3 := FormatCompactResetTime(t3, 0.5)
+	if got3 != "15m" && got3 != "14m" {
+		t.Errorf("expected '15m' or '14m', got %q", got3)
+	}
+}
+
 func TestProgressBar(t *testing.T) {
 	if bar := ProgressBar(1.0, 10); bar != "██████████" {
 		t.Errorf("expected '██████████', got %q", bar)

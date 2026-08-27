@@ -147,6 +147,13 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 		fmt.Println("{}")
 		return nil
 	}
+
+	// Auto-ensure Herdr 2-row sidebar config is applied
+	configPath := GetHerdrConfigPath()
+	if !IsHerdrConfiguredForAgys(configPath) {
+		_ = ApplyHerdr2RowConfig(configPath)
+	}
+
 	paneID := os.Getenv("HERDR_PANE_ID")
 	socketPath := os.Getenv("HERDR_SOCKET_PATH")
 
@@ -265,6 +272,12 @@ func SyncHerdrIntegration(profileDir string) error {
 		return nil
 	}
 
+	// Auto-ensure Herdr 2-row sidebar config is applied
+	configPath := GetHerdrConfigPath()
+	if !IsHerdrConfiguredForAgys(configPath) {
+		_ = ApplyHerdr2RowConfig(configPath)
+	}
+
 	hookDir := filepath.Join(profileDir, ".gemini", "config", "hooks")
 	if err := os.MkdirAll(hookDir, 0700); err != nil {
 		return fmt.Errorf("failed to create hooks directory: %w", err)
@@ -283,7 +296,12 @@ func SyncHerdrIntegration(profileDir string) error {
 
 	// Ensure hooks.json is configured with PreInvocation, PostInvocation, and Stop hooks
 	hooksJSONPath := filepath.Join(profileDir, ".gemini", "config", "hooks.json")
-	return ensureHooksJSON(hooksJSONPath, hookFile)
+	if err := ensureHooksJSON(hooksJSONPath, hookFile); err != nil {
+		return err
+	}
+
+	// Ensure statusLine hook is configured in settings.json to capture real-time context window
+	return SyncStatusLineSettings(profileDir)
 }
 
 func ensureHooksJSON(hooksJSONPath, hookScriptPath string) error {
@@ -460,7 +478,7 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 			targetModel = target.Model
 		}
 
-		displayAgent := fmt.Sprintf("agy[%s]", profileName)
+		displayAgent := profileName
 		title := fmt.Sprintf("agys: %s", profileName)
 		tokens := map[string]string{
 			"profile": profileName,
@@ -469,22 +487,46 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 			tokens["model"] = targetModel
 		}
 
+		// Check session context window usage
+		var ctxStr string
+		var ctxPct int
+		var hasCtx bool
+		if pDir, pErr := GetProfileDir(profileName); pErr == nil {
+			if ctxPct, hasCtx = GetSessionContext(pDir); hasCtx {
+				ctxStr = fmt.Sprintf("ctx %d%%", ctxPct)
+				tokens["quota_context"] = ctxStr
+			}
+		}
+
+		// Row 2: % ctx + Full Model ID (e.g. 32% ctx · claude-3-7-sonnet)
+		var modelCtxStr string
+		if targetModel != "" {
+			if hasCtx {
+				modelCtxStr = fmt.Sprintf("%d%% ctx · %s", ctxPct, targetModel)
+			} else {
+				modelCtxStr = targetModel
+			}
+		} else if hasCtx {
+			modelCtxStr = fmt.Sprintf("%d%% ctx", ctxPct)
+		}
+		if modelCtxStr != "" {
+			tokens["quota_model_context"] = modelCtxStr
+		}
+
 		details, err := GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
 		if err == nil && details != nil && details.Fraction5H >= 0 {
 			pct5h := int(details.Fraction5H*100 + 0.5)
 			pct5hStr := fmt.Sprintf("%d%%", pct5h)
-			modelAbbr := FormatModelAbbreviation(targetModel, details.GroupName)
-			if modelAbbr != "" {
-				displayAgent = fmt.Sprintf("agy[%s:%s·%s]", profileName, modelAbbr, pct5hStr)
-			} else {
-				displayAgent = fmt.Sprintf("agy[%s:%s]", profileName, pct5hStr)
-			}
 			if details.GroupName != "" {
 				tokens["group"] = details.GroupName
 			}
 			tokens["quota"] = pct5hStr
 
 			var titleParts []string
+			if hasCtx {
+				titleParts = append(titleParts, fmt.Sprintf("Ctx: %d%%", ctxPct))
+			}
+
 			if details.ResetStr5H != "" && details.ResetStr5H != "-" {
 				titleParts = append(titleParts, fmt.Sprintf("5H: %s (%s)", pct5hStr, details.ResetStr5H))
 				tokens["reset"] = details.ResetStr5H
@@ -492,6 +534,21 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 				titleParts = append(titleParts, fmt.Sprintf("5H: %s", pct5hStr))
 			}
 
+			// Format compact 5H token without "5h" prefix: "85% 2h" or "85%"
+			quota5hStr := pct5hStr
+			if details.CompactReset5H != "" {
+				quota5hStr = fmt.Sprintf("%s %s", pct5hStr, details.CompactReset5H)
+			}
+			tokens["quota_5h"] = quota5hStr
+			if pct5h >= 20 {
+				tokens["quota_5h_normal"] = quota5hStr
+			} else if pct5h > 5 {
+				tokens["quota_5h_warning"] = quota5hStr
+			} else {
+				tokens["quota_5h_danger"] = quota5hStr
+			}
+
+			var quotaWkStr string
 			if details.FractionWeekly >= 0 {
 				pctWk := int(details.FractionWeekly*100 + 0.5)
 				pctWkStr := fmt.Sprintf("%d%%", pctWk)
@@ -502,8 +559,33 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 				} else {
 					titleParts = append(titleParts, fmt.Sprintf("Wk: %s", pctWkStr))
 				}
+
+				// Format compact Weekly token without "7d" prefix: "90% 3d" or "90%"
+				quotaWkStr = pctWkStr
+				if details.CompactResetWeekly != "" {
+					quotaWkStr = fmt.Sprintf("%s %s", pctWkStr, details.CompactResetWeekly)
+				}
+				tokens["quota_week"] = quotaWkStr
+				if pctWk >= 20 {
+					tokens["quota_week_normal"] = quotaWkStr
+				} else if pctWk > 5 {
+					tokens["quota_week_warning"] = quotaWkStr
+				} else {
+					tokens["quota_week_danger"] = quotaWkStr
+				}
 			}
 
+			// Format compact summary token for row 3 (Quota only): "85% 2h · 90% 3d"
+			var summaryParts []string
+			if quota5hStr != "" {
+				summaryParts = append(summaryParts, quota5hStr)
+			}
+			if quotaWkStr != "" {
+				summaryParts = append(summaryParts, quotaWkStr)
+			}
+			tokens["quota_summary"] = strings.Join(summaryParts, " · ")
+
+			modelAbbr := FormatModelAbbreviation(targetModel, details.GroupName)
 			if modelAbbr != "" {
 				title = fmt.Sprintf("agys: %s [%s] %s", profileName, modelAbbr, strings.Join(titleParts, " • "))
 			} else {

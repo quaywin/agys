@@ -115,6 +115,10 @@ var runCmd = &cobra.Command{
 }
 
 func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) error {
+	return runWithProfileAndDir(cmd, profileName, agyArgs, "")
+}
+
+func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []string, workingDir string) error {
 	agyArgs = EnsureDefaultModelAndEffort(agyArgs)
 	agyArgs, _, _ = profile.EnsureAvailableHubPort(agyArgs)
 
@@ -209,7 +213,7 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 		defer stopWatcher()
 	}
 
-	runErr := profile.RunCmdWithSignals(cmd.Context(), profileDir, agyArgs...)
+	runErr := profile.RunCmdWithSignalsInDir(cmd.Context(), profileDir, workingDir, agyArgs...)
 
 	// Persist any token created in macOS Keychain during execution (e.g. login) to profile disk storage
 	profile.SyncKeychainTokenToDisk(profileDir, expectedRefreshToken)
@@ -257,20 +261,35 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 			extraFlags = " " + strings.Join(preservedFlags, " ")
 		}
 
-		// Clear the last two lines printed by agy:
+		// In interactive terminal (TTY), clear the raw child agy resume lines:
 		// "Resume with -c (or command below):"
 		// "agy --conversation=..."
-		// using carriage return and cursor up ANSI codes.
+		// and replace them with the agys-native command.
+		isTTY := false
+		if fi, err := os.Stdout.Stat(); err == nil && (fi.Mode()&os.ModeCharDevice) != 0 {
+			isTTY = true
+		}
+
 		sshServer := os.Getenv("AGYS_SSH_SERVER")
 		sshPath := os.Getenv("AGYS_SSH_PATH")
+
+		var resumeCmdStr string
 		if sshServer != "" {
 			pathArg := ""
 			if sshPath != "" {
 				pathArg = " " + shellQuote(sshPath)
 			}
-			fmt.Printf("agys ssh %s%s %s -- --conversation=%s%s\n", sshServer, pathArg, targetProfile, idAfter, extraFlags)
+			resumeCmdStr = fmt.Sprintf("agys ssh %s%s %s -- --conversation=%s%s", sshServer, pathArg, targetProfile, idAfter, extraFlags)
 		} else {
-			fmt.Printf("agys run %s -- --conversation=%s%s\n", targetProfile, idAfter, extraFlags)
+			resumeCmdStr = fmt.Sprintf("agys run %s -- --conversation=%s%s", targetProfile, idAfter, extraFlags)
+		}
+
+		if isTTY {
+			// Clear last 2 lines printed by agy and overwrite cleanly with agys command
+			fmt.Print("\x1b[1A\x1b[2K\r\x1b[1A\x1b[2K\r")
+			fmt.Printf("Resume with 'agys run -c' (or command below):\n%s\n", resumeCmdStr)
+		} else {
+			fmt.Println(resumeCmdStr)
 		}
 	}
 

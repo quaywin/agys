@@ -12,7 +12,18 @@ import (
 // isolated in its own process group, and propagates termination signals
 // (SIGINT, SIGTERM, SIGHUP) to prevent orphan processes.
 func RunCmdWithSignals(ctx context.Context, profileDir string, args ...string) error {
+	return RunCmdWithSignalsInDir(ctx, profileDir, "", args...)
+}
+
+// RunCmdWithSignalsInDir executes `agy` with the specified profile environment in a specific working directory,
+// isolated in its own process group, and propagates termination signals.
+func RunCmdWithSignalsInDir(ctx context.Context, profileDir, workingDir string, args ...string) error {
 	execCmd := BuildCmd(profileDir, args...)
+	if workingDir != "" {
+		if info, err := os.Stat(workingDir); err == nil && info.IsDir() {
+			execCmd.Dir = workingDir
+		}
+	}
 
 	setupProcessGroup(execCmd)
 

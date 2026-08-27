@@ -166,6 +166,7 @@ func GetLatestConversationFileInfo(profileName string) (string, time.Time, error
 	var latestID string
 	var latestTime time.Time
 
+	// 1. Scan brain directories
 	for _, brainDir := range getProfileBrainDirs(profileDir) {
 		entries, err := os.ReadDir(brainDir)
 		if err != nil {
@@ -193,6 +194,44 @@ func GetLatestConversationFileInfo(profileName string) (string, time.Time, error
 			if mTime.After(latestTime) {
 				latestTime = mTime
 				latestID = entry.Name()
+			}
+		}
+	}
+
+	// 2. Check history.jsonl for exact prompt timestamp confirmation
+	historyPaths := []string{
+		filepath.Join(profileDir, ".gemini", "antigravity-cli", "history.jsonl"),
+		filepath.Join(profileDir, ".gemini", "antigravity", "history.jsonl"),
+	}
+
+	for _, hp := range historyPaths {
+		data, err := os.ReadFile(hp)
+		if err != nil || len(data) == 0 {
+			continue
+		}
+
+		lines := strings.Split(string(data), "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line == "" || !strings.Contains(line, "conversationId") {
+				continue
+			}
+
+			var item struct {
+				ConversationID string `json:"conversationId"`
+				Timestamp      int64  `json:"timestamp"`
+			}
+			if json.Unmarshal([]byte(line), &item) == nil && item.ConversationID != "" {
+				if item.Timestamp > 0 {
+					t := time.UnixMilli(item.Timestamp)
+					if t.After(latestTime) {
+						latestTime = t
+						latestID = item.ConversationID
+					}
+				} else if latestID == "" {
+					latestID = item.ConversationID
+				}
+				break
 			}
 		}
 	}

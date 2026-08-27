@@ -30,3 +30,19 @@ func TestBuildResumeAgyArgs(t *testing.T) {
 		t.Errorf("Case 2 failed: expected %v, got %v", expected2, args2)
 	}
 }
+
+func TestResumeCommandFlags(t *testing.T) {
+	if resumeCmd.Use != "resume [index_or_project] [-- agy_flags]" {
+		t.Errorf("unexpected Use string: %s", resumeCmd.Use)
+	}
+
+	allFlag := resumeCmd.Flag("all")
+	if allFlag == nil || allFlag.Shorthand != "a" {
+		t.Errorf("missing or invalid -a/--all flag")
+	}
+
+	projFlag := resumeCmd.Flag("project")
+	if projFlag == nil || projFlag.Shorthand != "p" {
+		t.Errorf("missing or invalid -p/--project flag")
+	}
+}

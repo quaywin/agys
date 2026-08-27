@@ -70,11 +70,7 @@ func SyncTrustedWorkspaces() error {
 	trustedMap := make(map[string]bool)
 
 	// Scan global system settings.json
-	if userHome, homeErr := os.UserHomeDir(); homeErr == nil {
-		agysSep := string(filepath.Separator) + ".agys"
-		if idx := strings.Index(userHome, agysSep); idx != -1 {
-			userHome = userHome[:idx]
-		}
+	if userHome, homeErr := GetRealUserHome(); homeErr == nil {
 		globalSettingsPath := filepath.Join(userHome, ".gemini", "antigravity-cli", "settings.json")
 		readSettingsWorkspaces(globalSettingsPath, trustedMap)
 	}

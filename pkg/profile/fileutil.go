@@ -4,7 +4,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+// ExpandTilde expands a leading ~/ or ~ in a path with the real user home directory.
+func ExpandTilde(path string) string {
+	if path == "" {
+		return ""
+	}
+	if path == "~" {
+		if realHome, err := GetRealUserHome(); err == nil {
+			return realHome
+		}
+		return path
+	}
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
+		if realHome, err := GetRealUserHome(); err == nil {
+			return filepath.Join(realHome, path[2:])
+		}
+	}
+	return path
+}
 
 // WriteFileAtomic writes data to a temporary file in the same target directory
 // and then renames it atomically to the target filename.

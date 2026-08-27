@@ -437,13 +437,15 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 
 // ModelQuotaDetails contains 5H and Weekly quota metrics for a specific model group.
 type ModelQuotaDetails struct {
-	Fraction5H      float64
-	ResetStr5H      string
-	ResetTime5H     time.Time
-	FractionWeekly  float64
-	ResetStrWeekly  string
-	ResetTimeWeekly time.Time
-	GroupName       string
+	Fraction5H         float64
+	ResetStr5H         string
+	CompactReset5H     string
+	ResetTime5H        time.Time
+	FractionWeekly     float64
+	ResetStrWeekly     string
+	CompactResetWeekly string
+	ResetTimeWeekly    time.Time
+	GroupName          string
 }
 
 // GetProfileFullQuotaDetailsForModel returns both 5H and Weekly quota details matching the specified model name.
@@ -601,6 +603,9 @@ func GetProfileFullQuotaDetailsForModel(ctx context.Context, profileName, modelN
 		return nil, fmt.Errorf("no quota bucket found in summary")
 	}
 
+	details.CompactReset5H = FormatCompactResetTime(details.ResetTime5H, details.Fraction5H)
+	details.CompactResetWeekly = FormatCompactResetTime(details.ResetTimeWeekly, details.FractionWeekly)
+
 	return details, nil
 }
 
@@ -741,6 +746,39 @@ func FormatResetTime(resetTime time.Time, fraction float64) string {
 		return fmt.Sprintf("in %dm", minutes)
 	}
 	return "in <1m"
+}
+
+// FormatCompactResetTime formats a reset timestamp into a concise, compact remaining time string (e.g. "2h15m", "3d", "45m").
+func FormatCompactResetTime(resetTime time.Time, fraction float64) string {
+	if fraction >= 1.0 || resetTime.IsZero() {
+		return ""
+	}
+
+	duration := time.Until(resetTime)
+	if duration <= 0 {
+		return "due"
+	}
+
+	days := int(duration.Hours()) / 24
+	hours := int(duration.Hours()) % 24
+	minutes := int(duration.Minutes()) % 60
+
+	if days > 0 {
+		if hours > 0 {
+			return fmt.Sprintf("%dd%dh", days, hours)
+		}
+		return fmt.Sprintf("%dd", days)
+	}
+	if hours > 0 {
+		if minutes > 0 {
+			return fmt.Sprintf("%dh%02dm", hours, minutes)
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return "<1m"
 }
 
 // ProgressBar generates a text progress bar of given width representing fraction (0.0 to 1.0).

@@ -3,9 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/quaywin/agys/pkg/profile"
@@ -102,8 +99,6 @@ func execPluginCmd(action string, pluginArg string, profileName string, isAll bo
 			agyArgs = []string{"plugin", action}
 		}
 
-		agyPath := getAgyPath()
-
 		var lastErr error
 		for i, p := range profiles {
 			profileDir, err := profile.GetProfileDir(p)
@@ -113,8 +108,7 @@ func execPluginCmd(action string, pluginArg string, profileName string, isAll bo
 				continue
 			}
 
-			cmd := exec.CommandContext(context.Background(), agyPath, agyArgs...)
-			cmd.Env = getProfileEnv(profileDir)
+			cmd := profile.BuildCmd(profileDir, agyArgs...)
 
 			out, err := cmd.CombinedOutput()
 			outStr := strings.TrimSpace(string(out))
@@ -162,71 +156,6 @@ func execPluginCmd(action string, pluginArg string, profileName string, isAll bo
 	}
 
 	return profile.RunCmdWithSignals(context.Background(), profileDir, agyArgs...)
-}
-
-func getAgyPath() string {
-	agyPath, err := exec.LookPath("agy")
-	if err != nil {
-		if userHome, errHome := os.UserHomeDir(); errHome == nil {
-			agysSep := string(filepath.Separator) + ".agys"
-			if idx := strings.Index(userHome, agysSep); idx != -1 {
-				userHome = userHome[:idx]
-			}
-			candidates := []string{
-				filepath.Join(userHome, ".local", "bin", "agy"),
-				filepath.Join(userHome, "bin", "agy"),
-				filepath.Join(userHome, ".gemini", "antigravity-cli", "bin", "agy"),
-				"/usr/local/bin/agy",
-			}
-			for _, candidate := range candidates {
-				if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-					agyPath = candidate
-					err = nil
-					break
-				}
-			}
-		}
-	}
-	if err != nil {
-		agyPath = "agy"
-	}
-	return agyPath
-}
-
-func getProfileEnv(profileDir string) []string {
-	envMap := map[string]string{
-		"HOME":            profileDir,
-		"USERPROFILE":     profileDir,
-		"GEMINI_DIR":      filepath.Join(profileDir, ".gemini"),
-		"GEMINI_CLI_DIR":  filepath.Join(profileDir, ".gemini", "antigravity-cli"),
-		"ANTIGRAVITY_DIR": filepath.Join(profileDir, ".gemini", "antigravity-cli"),
-		"XDG_CONFIG_HOME": filepath.Join(profileDir, ".config"),
-		"XDG_DATA_HOME":   filepath.Join(profileDir, ".local", "share"),
-		"XDG_CACHE_HOME":  filepath.Join(profileDir, ".cache"),
-	}
-
-	env := os.Environ()
-	newEnv := make([]string, 0, len(env))
-	seen := make(map[string]bool)
-
-	for _, e := range env {
-		parts := strings.SplitN(e, "=", 2)
-		if len(parts) == 2 {
-			if newVal, ok := envMap[parts[0]]; ok {
-				newEnv = append(newEnv, parts[0]+"="+newVal)
-				seen[parts[0]] = true
-				continue
-			}
-		}
-		newEnv = append(newEnv, e)
-	}
-
-	for k, v := range envMap {
-		if !seen[k] {
-			newEnv = append(newEnv, k+"="+v)
-		}
-	}
-	return newEnv
 }
 
 func init() {

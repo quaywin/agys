@@ -35,10 +35,23 @@ type SessionFilter struct {
 }
 
 var userRequestRegex = regexp.MustCompile(`(?s)<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>`)
-var userPathRegex = regexp.MustCompile(`(?:/Users/|/home/|/root/|/private/|/var/|/tmp/|/opt/|[A-Za-z]:[/\\])[a-zA-Z0-9_\-\.\/\\]+`)
+var userPathRegex = regexp.MustCompile(`(?:/Volumes/|/Users/|/home/|/root/|/private/|/var/|/tmp/|/opt/|/mnt/|[a-zA-Z]:[/\\][a-zA-Z0-9_])[a-zA-Z0-9_\-\.\/\\]*`)
+var workspaceUriRegex = regexp.MustCompile(`(?:file://)?((?:/Volumes/|/Users/|/home/|/root/|/private/|/var/|/tmp/|/opt/|/mnt/|[a-zA-Z]:[/\\][a-zA-Z0-9_])[^\s"'\n\r>]+)\s*->`)
+
+// NormalizePath resolves symlinks and cleans a path if possible.
+func NormalizePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	p = filepath.Clean(p)
+	if resolved, err := filepath.EvalSymlinks(p); err == nil && resolved != "" {
+		return filepath.Clean(resolved)
+	}
+	return p
+}
 
 // FindProjectRoot attempts to locate the root directory of a project given a file or directory path.
-// It searches upwards for common project root indicator files (.git, go.mod, package.json, Cargo.toml, pyproject.toml, etc.).
+// It searches upwards for common project root indicator files (.git, go.mod, package.json, Cargo.toml, pyproject.toml, AGENTS.md, etc.).
 // Results are cached in-memory for instant lookups across multiple sessions.
 // Returns empty string if no project root is found.
 func FindProjectRoot(path string) string {
@@ -57,16 +70,17 @@ func FindProjectRoot(path string) string {
 }
 
 func findProjectRootUncached(path string) string {
+	path = ExpandTilde(path)
 	info, err := os.Stat(path)
 	curr := path
 	if err == nil && !info.IsDir() {
 		curr = filepath.Dir(path)
 	}
 
-	userHome, _ := os.UserHomeDir()
+	userHome, _ := GetRealUserHome()
 	agysDir, _ := GetAgysDir()
 
-	for curr != "" && curr != "/" && curr != "." {
+	for curr != "" && curr != "/" && curr != "." && curr != filepath.VolumeName(curr)+"\\" && curr != filepath.VolumeName(curr)+"/" {
 		if cached, ok := projectRootCache.Load(curr); ok {
 			return cached.(string)
 		}
@@ -77,8 +91,17 @@ func findProjectRootUncached(path string) string {
 		if agysDir != "" && strings.HasPrefix(curr, agysDir) {
 			break
 		}
+		if curr == "/Volumes" || curr == "/private" || curr == "/tmp" || curr == "/var" || curr == "/opt" || curr == "/mnt" {
+			break
+		}
 
-		markers := []string{".git", "go.mod", "package.json", "Cargo.toml", "pyproject.toml", "pom.xml", "build.gradle"}
+		markers := []string{
+			".git", "go.mod", "package.json", "Cargo.toml", "pyproject.toml",
+			"pom.xml", "build.gradle", "build.gradle.kts", "mix.exs", "Makefile",
+			"CMakeLists.txt", "Gemfile", "composer.json", "requirements.txt",
+			"setup.py", "Pipfile", "deno.json", "bun.lockb",
+			"AGENTS.md", "GEMINI.md", "CLAUDE.md", ".agent", ".agents", ".claude",
+		}
 		for _, marker := range markers {
 			markerPath := filepath.Join(curr, marker)
 			if _, err := os.Stat(markerPath); err == nil {
@@ -96,6 +119,195 @@ func findProjectRootUncached(path string) string {
 	return ""
 }
 
+func isSystemOrHomeDir(p string) bool {
+	if p == "" || p == "/" || p == "." {
+		return true
+	}
+	if strings.ContainsAny(p, "\n\r\t") || strings.Contains(p, `\n`) || strings.Contains(p, `\r`) {
+		return true
+	}
+	p = filepath.Clean(p)
+	userHome, _ := GetRealUserHome()
+	if userHome != "" && (p == userHome || p == NormalizePath(userHome)) {
+		return true
+	}
+	agysDir, _ := GetAgysDir()
+	if agysDir != "" && strings.HasPrefix(p, agysDir) {
+		return true
+	}
+	// System root paths
+	switch p {
+	case "/Users", "/home", "/root", "/Volumes", "/private", "/tmp", "/var", "/opt", "/mnt", "/etc", "/usr":
+		return true
+	}
+	// Windows volume root like C:\ or C:
+	if p == filepath.VolumeName(p) || p == filepath.VolumeName(p)+"\\" || p == filepath.VolumeName(p)+"/" {
+		return true
+	}
+	// External volume mount root (e.g. /Volumes/QUAYWIN or /mnt/drive)
+	if strings.HasPrefix(p, "/Volumes/") && len(strings.Split(filepath.ToSlash(p), "/")) <= 3 {
+		return true
+	}
+	return false
+}
+
+// ResolveProjectPathAndName attempts to derive a meaningful project path and name from a given path.
+// If FindProjectRoot succeeds, it uses the root directory.
+// Otherwise, it falls back to the cleaned directory path and base name (ignoring system root directories).
+func ResolveProjectPathAndName(rawPath string) (projectPath, projectName string) {
+	if rawPath == "" {
+		return "", ""
+	}
+	if strings.ContainsAny(rawPath, "\n\r\t") || strings.Contains(rawPath, `\n`) || strings.Contains(rawPath, `\r`) {
+		return "", ""
+	}
+	rawPath = ExpandTilde(rawPath)
+
+	// Try finding project root first
+	root := FindProjectRoot(rawPath)
+	if root != "" && !isSystemOrHomeDir(root) {
+		return root, filepath.Base(root)
+	}
+
+	// Fallback to directory path if valid
+	cleaned := filepath.Clean(rawPath)
+	if isSystemOrHomeDir(cleaned) {
+		return "", ""
+	}
+
+	info, err := os.Stat(cleaned)
+	if err == nil && !info.IsDir() {
+		cleaned = filepath.Dir(cleaned)
+	}
+
+	if isSystemOrHomeDir(cleaned) {
+		return "", ""
+	}
+
+	base := filepath.Base(cleaned)
+	if base == "" || base == "/" || base == "." || strings.ContainsAny(base, ":\n\r\t") {
+		return "", ""
+	}
+
+	return cleaned, base
+}
+
+// MatchProject returns true if the session matches the given project filter string.
+// Handles case-insensitive comparison, folder names, full paths, and symlink resolution.
+func MatchProject(filterProject string, sess ConversationSession) bool {
+	if filterProject == "" {
+		return true
+	}
+	filterProject = ExpandTilde(filterProject)
+
+	fLower := strings.ToLower(strings.TrimSpace(filterProject))
+	pNameLower := strings.ToLower(strings.TrimSpace(sess.ProjectName))
+
+	if pNameLower == "(global)" || pNameLower == "" {
+		return false
+	}
+
+	// If filter is a path (contains / or \), match by exact folder name and canonical paths
+	if strings.ContainsAny(filterProject, "/\\") {
+		fBase := strings.ToLower(filepath.Base(filterProject))
+		if fBase != "" && fBase != "." && fBase != "/" && pNameLower == fBase {
+			return true
+		}
+
+		if sess.ProjectPath != "" && !isSystemOrHomeDir(sess.ProjectPath) {
+			normFilter := strings.ToLower(NormalizePath(filterProject))
+			normSessPath := strings.ToLower(NormalizePath(sess.ProjectPath))
+
+			if normFilter != "" && normSessPath != "" {
+				if normFilter == normSessPath {
+					return true
+				}
+				if strings.HasPrefix(normSessPath, normFilter+string(filepath.Separator)) {
+					return true
+				}
+				if strings.HasPrefix(normFilter, normSessPath+string(filepath.Separator)) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// Filter is a plain name (e.g. "agys", "caudata")
+	if pNameLower == fLower || strings.Contains(pNameLower, fLower) {
+		return true
+	}
+
+	return false
+}
+
+type historyEntry struct {
+	workspace string
+	display   string
+	timestamp int64
+}
+
+// loadProfileHistory reads history.jsonl from profile directory and returns map of convID -> historyEntry.
+func loadProfileHistory(profileDir string) map[string]historyEntry {
+	res := make(map[string]historyEntry)
+	if profileDir == "" {
+		return res
+	}
+
+	historyPaths := []string{
+		filepath.Join(profileDir, ".gemini", "antigravity-cli", "history.jsonl"),
+		filepath.Join(profileDir, ".gemini", "antigravity", "history.jsonl"),
+	}
+
+	for _, hp := range historyPaths {
+		f, err := os.Open(hp)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(f)
+		buf := make([]byte, 128*1024)
+		scanner.Buffer(buf, 1024*1024)
+
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 || !bytes.Contains(line, []byte("conversationId")) {
+				continue
+			}
+
+			var item struct {
+				Display        string `json:"display"`
+				Workspace      string `json:"workspace"`
+				ConversationID string `json:"conversationId"`
+				Timestamp      int64  `json:"timestamp"`
+				Type           string `json:"type"`
+			}
+
+			if err := json.Unmarshal(line, &item); err == nil && item.ConversationID != "" {
+				existing, exists := res[item.ConversationID]
+				if !exists {
+					res[item.ConversationID] = historyEntry{
+						workspace: item.Workspace,
+						display:   item.Display,
+						timestamp: item.Timestamp,
+					}
+				} else {
+					if existing.workspace == "" && item.Workspace != "" {
+						existing.workspace = item.Workspace
+					}
+					if (existing.display == "" || strings.HasPrefix(existing.display, "/")) && item.Display != "" && !strings.HasPrefix(item.Display, "/") {
+						existing.display = item.Display
+					}
+					res[item.ConversationID] = existing
+				}
+			}
+		}
+		_ = f.Close()
+	}
+
+	return res
+}
+
 type sessionCandidate struct {
 	profile        string
 	convID         string
@@ -104,6 +316,7 @@ type sessionCandidate struct {
 	modTime        time.Time
 	fileMTime      int64
 	fileSize       int64
+	history        historyEntry
 }
 
 // ListSessions scans all profile brain directories and returns recorded conversation sessions.
@@ -131,6 +344,8 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 		if err != nil {
 			continue
 		}
+
+		histMap := loadProfileHistory(profileDir)
 
 		for _, brainDir := range getProfileBrainDirs(profileDir) {
 			entries, err := os.ReadDir(brainDir)
@@ -186,6 +401,7 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 					modTime:        mTime,
 					fileMTime:      fileMTime,
 					fileSize:       fileSize,
+					history:        histMap[convID],
 				})
 			}
 		}
@@ -198,8 +414,12 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 		key := cand.profile + ":" + cand.convID
 		if cachedItem, exists := cache[key]; exists &&
 			cachedItem.TranscriptMTime == cand.fileMTime &&
-			cachedItem.TranscriptSize == cand.fileSize {
-			// Cache hit: use cached session info
+			cachedItem.TranscriptSize == cand.fileSize &&
+			cachedItem.ProjectName != "" &&
+			cachedItem.ProjectName != "(Global)" &&
+			cachedItem.ProjectPath != "" &&
+			!isSystemOrHomeDir(cachedItem.ProjectPath) {
+			// Cache hit: use cached session info with valid project metadata
 			allSessions = append(allSessions, ConversationSession{
 				Profile:     cachedItem.Profile,
 				ConvID:      cachedItem.ConvID,
@@ -209,7 +429,7 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 				UserPrompt:  cachedItem.UserPrompt,
 			})
 		} else {
-			// Cache miss or modified file: queue for parsing
+			// Cache miss or missing/invalid project info: queue for parsing
 			toParse = append(toParse, cand)
 		}
 	}
@@ -245,7 +465,7 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 						return
 					default:
 					}
-					sess := parseSessionInfo(cand.profile, cand.convID, cand.transcriptPath, cand.modTime)
+					sess := parseSessionInfo(cand.profile, cand.convID, cand.transcriptPath, cand.modTime, cand.history)
 					resultsChan <- parseResult{cand: cand, sess: sess}
 				}
 			}()
@@ -282,16 +502,9 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 
 	// Filter sessions by project if specified
 	var filteredSessions []ConversationSession
-	var pFilter string
-	if filter.Project != "" {
-		pFilter = strings.ToLower(filter.Project)
-	}
-
 	for _, sess := range allSessions {
-		if pFilter != "" {
-			projPath := strings.ToLower(sess.ProjectPath)
-			projName := strings.ToLower(sess.ProjectName)
-			if !strings.Contains(projPath, pFilter) && !strings.Contains(projName, pFilter) {
+		if !filter.All && filter.Project != "" {
+			if !MatchProject(filter.Project, sess) {
 				continue
 			}
 		}
@@ -310,13 +523,26 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 	return filteredSessions, nil
 }
 
-func parseSessionInfo(profileName, convID, transcriptPath string, defaultTime time.Time) ConversationSession {
+func parseSessionInfo(profileName, convID, transcriptPath string, defaultTime time.Time, hist historyEntry) ConversationSession {
 	sess := ConversationSession{
 		Profile:     profileName,
 		ConvID:      convID,
 		ModTime:     defaultTime,
 		ProjectName: "(Global)",
 		UserPrompt:  "(No prompt summary)",
+	}
+
+	// 1. Check history entry workspace first
+	if hist.workspace != "" {
+		pPath, pName := ResolveProjectPathAndName(hist.workspace)
+		if pName != "" {
+			sess.ProjectPath = pPath
+			sess.ProjectName = pName
+		}
+	}
+
+	if hist.display != "" && !strings.HasPrefix(hist.display, "/") {
+		sess.UserPrompt = cleanPromptSummary(hist.display)
 	}
 
 	f, err := os.Open(transcriptPath)
@@ -341,51 +567,59 @@ func parseSessionInfo(profileName, convID, transcriptPath string, defaultTime ti
 				if json.Unmarshal(line, &data) == nil && data.Content != "" {
 					match := userRequestRegex.FindStringSubmatch(data.Content)
 					if len(match) > 1 {
-						cleanPrompt := strings.TrimSpace(match[1])
-						cleanPrompt = strings.ReplaceAll(cleanPrompt, "\r\n", " ")
-						cleanPrompt = strings.ReplaceAll(cleanPrompt, "\n", " ")
-						cleanPrompt = strings.ReplaceAll(cleanPrompt, "\r", " ")
-						cleanPrompt = strings.ReplaceAll(cleanPrompt, "\t", " ")
-						cleanPrompt = strings.ReplaceAll(cleanPrompt, "\\n", " ")
-						cleanPrompt = strings.ReplaceAll(cleanPrompt, "\\r", " ")
-						cleanPrompt = strings.ReplaceAll(cleanPrompt, "\\t", " ")
-						for strings.Contains(cleanPrompt, "  ") {
-							cleanPrompt = strings.ReplaceAll(cleanPrompt, "  ", " ")
-						}
-						cleanPrompt = strings.TrimSpace(cleanPrompt)
-						if len(cleanPrompt) > 90 {
-							cleanPrompt = cleanPrompt[:87] + "..."
-						}
-						firstPrompt = cleanPrompt
+						firstPrompt = cleanPromptSummary(match[1])
 					}
 				}
 			}
 
-			if bytes.Contains(line, []byte("/Users/")) || bytes.Contains(line, []byte("/home/")) || bytes.Contains(line, []byte("/private/")) || bytes.Contains(line, []byte("/var/")) || bytes.Contains(line, []byte("/tmp/")) || bytes.Contains(line, []byte("C:\\")) || bytes.Contains(line, []byte("D:\\")) {
+			// Check workspace URI from <user_information> block
+			if sess.ProjectPath == "" && (bytes.Contains(line, []byte("<user_information>")) || bytes.Contains(line, []byte("active workspaces")) || bytes.Contains(line, []byte("->"))) {
+				if match := workspaceUriRegex.FindSubmatch(line); len(match) > 1 {
+					wsPath := strings.TrimSpace(string(match[1]))
+					pPath, pName := ResolveProjectPathAndName(wsPath)
+					if pName != "" {
+						sess.ProjectPath = pPath
+						sess.ProjectName = pName
+					}
+				}
+			}
+
+			if bytes.Contains(line, []byte("/Volumes/")) ||
+				bytes.Contains(line, []byte("/Users/")) ||
+				bytes.Contains(line, []byte("/home/")) ||
+				bytes.Contains(line, []byte("/private/")) ||
+				bytes.Contains(line, []byte("/var/")) ||
+				bytes.Contains(line, []byte("/tmp/")) ||
+				bytes.Contains(line, []byte("/opt/")) ||
+				bytes.Contains(line, []byte("/mnt/")) ||
+				bytes.Contains(line, []byte(":\\")) ||
+				bytes.Contains(line, []byte(":/")) {
 				matches := userPathRegex.FindAll(line, 10)
 				for _, m := range matches {
 					pStr := strings.TrimRight(string(m), `"'\,);:`)
-					if !strings.Contains(pStr, "/.agys/") && !strings.Contains(pStr, "\\.agys\\") && !strings.Contains(pStr, "/builtin/") {
+					if !strings.Contains(pStr, "/.agys/") &&
+						!strings.Contains(pStr, "\\.agys\\") &&
+						!strings.Contains(pStr, "/builtin/") &&
+						!strings.Contains(pStr, "/antigravity-cli/brain") &&
+						!strings.Contains(pStr, "/antigravity/brain") {
 						rawPaths = append(rawPaths, pStr)
-						// Check if we can resolve root immediately
 						if sess.ProjectPath == "" {
-							root := FindProjectRoot(pStr)
-							if root != "" {
-								sess.ProjectPath = root
-								sess.ProjectName = filepath.Base(root)
+							pPath, pName := ResolveProjectPathAndName(pStr)
+							if pName != "" {
+								sess.ProjectPath = pPath
+								sess.ProjectName = pName
 							}
 						}
 					}
 				}
 			}
 
-			// Early exit if we found both prompt and project root
 			if firstPrompt != "" && sess.ProjectPath != "" {
 				break
 			}
 		}
 
-		if err != nil || lineCount > 50 {
+		if err != nil || lineCount > 100 {
 			break
 		}
 	}
@@ -397,16 +631,38 @@ func parseSessionInfo(profileName, convID, transcriptPath string, defaultTime ti
 	// Final fallback for project root resolution from raw paths if not yet resolved
 	if sess.ProjectPath == "" {
 		for _, p := range rawPaths {
-			root := FindProjectRoot(p)
-			if root != "" {
-				sess.ProjectPath = root
-				sess.ProjectName = filepath.Base(root)
+			pPath, pName := ResolveProjectPathAndName(p)
+			if pName != "" {
+				sess.ProjectPath = pPath
+				sess.ProjectName = pName
 				break
 			}
 		}
 	}
 
 	return sess
+}
+
+func cleanPromptSummary(raw string) string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.ReplaceAll(raw, "\r\n", " ")
+	raw = strings.ReplaceAll(raw, "\n", " ")
+	raw = strings.ReplaceAll(raw, "\r", " ")
+	raw = strings.ReplaceAll(raw, "\t", " ")
+	raw = strings.ReplaceAll(raw, "\\n", " ")
+	raw = strings.ReplaceAll(raw, "\\r", " ")
+	raw = strings.ReplaceAll(raw, "\\t", " ")
+	for strings.Contains(raw, "  ") {
+		raw = strings.ReplaceAll(raw, "  ", " ")
+	}
+	raw = strings.TrimSpace(raw)
+	if len(raw) > 90 {
+		raw = raw[:87] + "..."
+	}
+	if raw == "" {
+		return "(No prompt summary)"
+	}
+	return raw
 }
 
 // FormatRelativeTime formats a time.Time into a human-readable relative duration.
