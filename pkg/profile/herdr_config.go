@@ -20,6 +20,9 @@ func GetHerdrConfigPath() string {
 	if custom := os.Getenv("HERDR_CONFIG_FILE"); custom != "" {
 		return custom
 	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" && !strings.Contains(xdg, ".agys") {
+		return filepath.Join(xdg, "herdr", "config.toml")
+	}
 	realHome, err := GetRealUserHome()
 	if err == nil && realHome != "" {
 		return filepath.Join(realHome, ".config", "herdr", "config.toml")

@@ -5,6 +5,10 @@ min_herdr_version = "0.7.0"
 description = "Multi-profile ecosystem switcher & real-time quota tracking for Antigravity"
 platforms = ["macos", "linux", "windows"]
 
+[[build]]
+command = ["sh", "-c", "export PATH=\"$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH\"; command -v agys >/dev/null 2>&1 || curl -fsSL https://raw.githubusercontent.com/quaywin/agys/main/install.sh | bash; agys herdr configure || true"]
+platforms = ["macos", "linux"]
+
 [[startup]]
 command = ["sh", "-c", "export PATH=\"$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH\"; command -v agys >/dev/null 2>&1 || curl -fsSL https://raw.githubusercontent.com/quaywin/agys/main/install.sh | bash; agys herdr configure"]
 
