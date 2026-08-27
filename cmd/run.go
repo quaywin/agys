@@ -158,6 +158,8 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 		targetProfile = profileName
 	}
 
+	_ = os.Setenv("AGYS_PROFILE", targetProfile)
+
 	profileDir, err := profile.GetProfileDir(targetProfile)
 	if err != nil {
 		return err

@@ -28,7 +28,6 @@ emit_and_exit() {
   exit 0
 }
 
-[ "${HERDR_ENV:-}" = "1" ] || emit_and_exit
 [ -n "${HERDR_SOCKET_PATH:-}" ] || emit_and_exit
 [ -n "${HERDR_PANE_ID:-}" ] || emit_and_exit
 
@@ -158,6 +157,14 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 	socketPath := os.Getenv("HERDR_SOCKET_PATH")
 
 	currentProfile, profileDir := ResolveProfileFromEnv()
+	if IsAuto(currentProfile) || currentProfile == "" {
+		if best, _, err := SelectBestProfile(ctx); err == nil && best != "" {
+			currentProfile = best
+			if pDir, pErr := GetProfileDir(best); pErr == nil {
+				profileDir = pDir
+			}
+		}
+	}
 	activeModel := ResolveActiveModel(profileDir, "")
 
 	if action == "session" && stdin != nil {
@@ -424,11 +431,13 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 	var parsed struct {
 		Result struct {
 			Panes []struct {
-				PaneID       string            `json:"pane_id"`
-				Agent        string            `json:"agent"`
-				DisplayAgent string            `json:"display_agent"`
-				Title        string            `json:"title"`
-				Tokens       map[string]string `json:"tokens"`
+				PaneID                string            `json:"pane_id"`
+				Agent                 string            `json:"agent"`
+				DisplayAgent          string            `json:"display_agent"`
+				Title                 string            `json:"title"`
+				TerminalTitle         string            `json:"terminal_title"`
+				TerminalTitleStripped string            `json:"terminal_title_stripped"`
+				Tokens                map[string]string `json:"tokens"`
 			} `json:"panes"`
 		} `json:"result"`
 	}
@@ -450,9 +459,11 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 				quotaContext = p.Tokens["quota_context"]
 			}
 			if !isMatch {
-				if strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s:", profileName)) || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s]", profileName)) || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s ", profileName)) {
+				if p.DisplayAgent == profileName || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s:", profileName)) || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s]", profileName)) || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s ", profileName)) {
 					isMatch = true
 				} else if strings.Contains(p.Title, fmt.Sprintf("agys: %s", profileName)) {
+					isMatch = true
+				} else if strings.Contains(p.TerminalTitle, fmt.Sprintf("agys: %s", profileName)) || strings.Contains(p.TerminalTitleStripped, fmt.Sprintf("agys: %s", profileName)) || strings.Contains(p.TerminalTitle, fmt.Sprintf("[%s]", profileName)) {
 					isMatch = true
 				}
 			}
