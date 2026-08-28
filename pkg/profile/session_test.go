@@ -129,6 +129,45 @@ func TestListSessionsWithCache(t *testing.T) {
 	}
 }
 
+func TestIsInternalAutomatedSession(t *testing.T) {
+	cases := []struct {
+		prompt   string
+		expected bool
+	}{
+		{
+			prompt:   "Fix login bug in auth handler",
+			expected: false,
+		},
+		{
+			prompt:   "Please write a Conventional Commit message for these changes",
+			expected: false,
+		},
+		{
+			prompt:   "Analyze the staged changes in my project",
+			expected: false,
+		},
+		{
+			prompt:   "CHECK_SUMMARY: should not break if user mentions it",
+			expected: false,
+		},
+		{
+			prompt:   "[AGYS_INTERNAL_COMMIT_CHECK] You are an expert software developer and Git assistant.\nFormatting rules:...",
+			expected: true,
+		},
+		{
+			prompt:   "You are an expert software developer and Git assistant.\nFormatting rules:...",
+			expected: true,
+		},
+	}
+
+	for _, c := range cases {
+		got := IsInternalAutomatedSession(c.prompt)
+		if got != c.expected {
+			t.Errorf("IsInternalAutomatedSession(%q) = %v, expected %v", c.prompt, got, c.expected)
+		}
+	}
+}
+
 func TestListSessionsEmpty(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)

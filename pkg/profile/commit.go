@@ -556,7 +556,7 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 	diffFormatted := FormatCompactDiffForPrompt(stagedFiles, nameStatus, diffStat, diffContent)
 
 	var promptBuilder strings.Builder
-	promptBuilder.WriteString("You are an expert software developer and Git assistant.\n")
+	promptBuilder.WriteString("[AGYS_INTERNAL_COMMIT_CHECK] You are an expert software developer and Git assistant.\n")
 	promptBuilder.WriteString("Formatting rules:\n")
 	promptBuilder.WriteString("- Output in clean plain text suitable for terminal and git log.\n")
 	promptBuilder.WriteString("- Do NOT use LaTeX math syntax (e.g. use '->' instead of '$\\rightarrow$').\n")

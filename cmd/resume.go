@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/quaywin/agys/pkg/profile"
 	"github.com/spf13/cobra"
@@ -131,21 +130,6 @@ var resumeCmd = &cobra.Command{
 			fmt.Println()
 		}
 
-		// Display Sessions Table
-		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "NUM\tPROJECT\tPROFILE\tCONVERSATION ID\tLAST ACTIVE\tPROMPT SUMMARY")
-
-		for i, s := range sessions {
-			convShort := s.ConvID
-			if len(convShort) > 8 {
-				convShort = convShort[:8]
-			}
-			relTime := profile.FormatRelativeTime(s.ModTime)
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", i+1, s.ProjectName, s.Profile, convShort, relTime, s.UserPrompt)
-		}
-		tw.Flush()
-		fmt.Println()
-
 		// Interactive mode handling
 		isTTY := false
 		fi, err := os.Stdin.Stat()
@@ -154,26 +138,42 @@ var resumeCmd = &cobra.Command{
 		}
 
 		if resumeInteractive || isTTY {
-			fmt.Printf("Select session to resume [1-%d, or Enter to exit]: ", len(sessions))
-			reader := bufio.NewReader(os.Stdin)
-			input, err := reader.ReadString('\n')
+			chosen, err := selectSessionInteractive(sessions)
 			if err != nil {
-				return nil
-			}
-			input = strings.TrimSpace(input)
-			if input == "" {
-				return nil
+				// Fallback to static listing + standard input prompt
+				for i, s := range sessions {
+					fmt.Println(formatSessionLine(i+1, s, false, getTerminalWidth()))
+				}
+				fmt.Println()
+				fmt.Printf("Select session to resume [1-%d, or Enter to exit]: ", len(sessions))
+				reader := bufio.NewReader(os.Stdin)
+				input, readErr := reader.ReadString('\n')
+				if readErr != nil {
+					return nil
+				}
+				input = strings.TrimSpace(input)
+				if input == "" {
+					return nil
+				}
+
+				choice, parseErr := strconv.Atoi(input)
+				if parseErr != nil || choice < 1 || choice > len(sessions) {
+					return fmt.Errorf("invalid choice %q: must be between 1 and %d", input, len(sessions))
+				}
+				chosen = &sessions[choice-1]
 			}
 
-			choice, err := strconv.Atoi(input)
-			if err != nil || choice < 1 || choice > len(sessions) {
-				return fmt.Errorf("invalid choice %q: must be between 1 and %d", input, len(sessions))
+			if chosen == nil {
+				return nil
 			}
-
-			chosen := sessions[choice-1]
-			return resumeSession(chosen)
+			return resumeSession(*chosen)
 		}
 
+		// Non-interactive display (pipes / scripts)
+		for i, s := range sessions {
+			fmt.Println(formatSessionLine(i+1, s, false, getTerminalWidth()))
+		}
+		fmt.Println()
 		fmt.Println("To resume a session, run: agys resume <NUM> or agys run <PROFILE> -- --conversation=<CONVERSATION_ID>")
 		return nil
 	},
