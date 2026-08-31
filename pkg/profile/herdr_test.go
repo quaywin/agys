@@ -103,7 +103,7 @@ func TestReportHerdrMetadata_MockSocket(t *testing.T) {
 			reqStr := string(buf[:n])
 			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
 			if strings.Contains(reqStr, "pane.list") {
-				_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","tokens":{"profile":"my-test-profile"}}]}}` + "\n"))
+				_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","tokens":{"profile":"my-test-profile"}}]}}` + "\n"))
 			} else {
 				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
 				if strings.Contains(reqStr, "pane.report_metadata") {
@@ -214,7 +214,7 @@ func TestHandleHerdrHookQuotaIgnoresCodexPane(t *testing.T) {
 	}
 	defer listener.Close()
 
-	unexpected := make(chan string, 1)
+	cleared := make(chan string, 1)
 	go func() {
 		for {
 			conn, err := listener.Accept()
@@ -228,7 +228,7 @@ func TestHandleHerdrHookQuotaIgnoresCodexPane(t *testing.T) {
 			if strings.Contains(reqStr, "pane.list") {
 				_, _ = conn.Write([]byte(`{"id":"test","result":{"panes":[{"pane_id":"w1:p1","agent":"codex","title":"codex"}]}}` + "\n"))
 			} else if strings.Contains(reqStr, "pane.report_metadata") || strings.Contains(reqStr, "pane.report_agent_session") {
-				unexpected <- reqStr
+				cleared <- reqStr
 			}
 			_ = conn.Close()
 		}
@@ -246,9 +246,21 @@ func TestHandleHerdrHookQuotaIgnoresCodexPane(t *testing.T) {
 	}
 
 	select {
-	case payload := <-unexpected:
-		t.Fatalf("unexpected Herdr update for Codex pane: %s", payload)
-	case <-time.After(200 * time.Millisecond):
+	case payload := <-cleared:
+		if !strings.Contains(payload, `"pane_id":"w1:p1"`) {
+			t.Errorf("expected clear payload to target Codex pane, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"clear_display_agent":true`) {
+			t.Errorf("expected clear payload to remove display_agent, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"clear_title":true`) {
+			t.Errorf("expected clear payload to remove title, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"profile":null`) {
+			t.Errorf("expected clear payload to remove profile token, got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("stale Codex pane metadata was not cleared")
 	}
 }
 
@@ -391,7 +403,7 @@ func TestReportHerdrMetadata_Compact2RowTokens(t *testing.T) {
 			reqStr := string(buf[:n])
 			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
 			if strings.Contains(reqStr, "pane.list") {
-				_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","tokens":{"profile":"compact-profile"}}]}}` + "\n"))
+				_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","tokens":{"profile":"compact-profile"}}]}}` + "\n"))
 			} else {
 				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
 				if strings.Contains(reqStr, "pane.report_metadata") {
@@ -710,6 +722,7 @@ func TestGetMatchingHerdrPanes_IgnoresOtherAgents(t *testing.T) {
 	}
 	defer listener.Close()
 
+	cleared := make(chan string, 1)
 	go func() {
 		for {
 			conn, err := listener.Accept()
@@ -729,6 +742,9 @@ func TestGetMatchingHerdrPanes_IgnoresOtherAgents(t *testing.T) {
 				// w1:p5 is running node.js app -> MUST BE IGNORED
 				resp := `{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"claude","title":"agys: test-profile [gem]","tokens":{"profile":"test-profile"}},{"pane_id":"w1:p2","agent":"Antigravity","title":"agys: test-profile [gem]","tokens":{"profile":"test-profile"}},{"pane_id":"w1:p3","agent":"","title":"fish","tokens":{}},{"pane_id":"w1:p4","agent":"","terminal_title":"python app.py","tokens":{"profile":"test-profile"}},{"pane_id":"w1:p5","agent":"","terminal_title":"node server.js","tokens":{"profile":"test-profile"}}]}}`
 				_, _ = conn.Write([]byte(resp + "\n"))
+			} else if strings.Contains(reqStr, "pane.report_metadata") {
+				_, _ = conn.Write([]byte(`{"id":"agys:clear_meta:1","result":"ok"}` + "\n"))
+				cleared <- reqStr
 			}
 			_ = conn.Close()
 		}
@@ -740,6 +756,18 @@ func TestGetMatchingHerdrPanes_IgnoresOtherAgents(t *testing.T) {
 	}
 	if matches[0].PaneID != "w1:p2" {
 		t.Errorf("Expected matched pane to be 'w1:p2', got %q", matches[0].PaneID)
+	}
+
+	select {
+	case payload := <-cleared:
+		if !strings.Contains(payload, `"pane_id":"w1:p1"`) {
+			t.Errorf("expected stale Claude metadata clear to target w1:p1, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"clear_title":true`) {
+			t.Errorf("expected stale Claude title to be cleared, got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("stale Claude metadata was not cleared")
 	}
 }
 
@@ -822,10 +850,10 @@ func TestClearHerdrMetadata(t *testing.T) {
 
 	select {
 	case payload := <-received:
-		if !strings.Contains(payload, `"display_agent":""`) {
+		if !strings.Contains(payload, `"clear_display_agent":true`) {
 			t.Errorf("Expected display_agent to be cleared, got: %s", payload)
 		}
-		if !strings.Contains(payload, `"profile":""`) {
+		if !strings.Contains(payload, `"profile":null`) {
 			t.Errorf("Expected profile token to be cleared, got: %s", payload)
 		}
 	case <-time.After(2 * time.Second):

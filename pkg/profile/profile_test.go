@@ -11,6 +11,11 @@ import (
 func TestMain(m *testing.M) {
 	os.Setenv("AGYS_SKIP_KEYCHAIN", "1")
 	os.Unsetenv("AGYS_REAL_HOME")
+	// Keep tests hermetic when developers run them inside Herdr. Otherwise,
+	// statusline/title tests can send metadata to the real active pane.
+	os.Unsetenv("HERDR_ENV")
+	os.Unsetenv("HERDR_PANE_ID")
+	os.Unsetenv("HERDR_SOCKET_PATH")
 	tempAgys := filepath.Join(os.TempDir(), "agys-test-global")
 	_ = os.MkdirAll(tempAgys, 0700)
 	os.Setenv("AGYS_DIR", tempAgys)
@@ -543,6 +548,3 @@ func TestSyncKeychainTokenToDisk_Isolation(t *testing.T) {
 		t.Errorf("Expected access_token 'acc_profileA', got %q", afterTok.Token.AccessToken)
 	}
 }
-
-
-

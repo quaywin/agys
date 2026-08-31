@@ -188,6 +188,10 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 	// quota updates must never touch a pane that Herdr has identified as non-agys.
 	if action != "session" && paneID != "" && socketPath != "" {
 		if found, active := lookupPaneAgentState(ctx, socketPath, paneID); found && !active {
+			// Herdr may still contain metadata written by an older agys binary before
+			// pane ownership checks existed. Clear that stale telemetry once; otherwise
+			// the Codex pane can continue displaying an old agys title/sidebar forever.
+			_ = ClearHerdrMetadata(ctx)
 			fmt.Println("{}")
 			return nil
 		}
@@ -540,6 +544,9 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 		var currentPaneActive bool
 		for _, p := range parsed.Result.Panes {
 			if p.PaneID == currentPaneID {
+				if p.Agent != "" && IsNonAgysAgent(p.Agent) && hasStaleAgysTelemetry(p.Title, p.Tokens) {
+					_ = clearHerdrPaneMetadata(ctx, socketPath, p.PaneID)
+				}
 				if isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped) {
 					currentPaneActive = true
 				}
@@ -571,6 +578,14 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 
 		for _, p := range parsed.Result.Panes {
 			if p.PaneID == "" {
+				continue
+			}
+			// Older agys builds could mark panes owned by Claude/Codex. Their title
+			// and quota tokens can outlive the agys process and then look like a
+			// match on the next scan. Retire that metadata before matching so the
+			// stale row cannot keep itself alive.
+			if p.Agent != "" && IsNonAgysAgent(p.Agent) && hasStaleAgysTelemetry(p.Title, p.Tokens) {
+				_ = clearHerdrPaneMetadata(ctx, socketPath, p.PaneID)
 				continue
 			}
 			// Strictly allow ONLY panes actively executing agys/Antigravity
@@ -769,6 +784,15 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 	}
 	paneID := os.Getenv("HERDR_PANE_ID")
 	socketPath := os.Getenv("HERDR_SOCKET_PATH")
+
+	// Inline statusline and quota reports are pane-local. If another CLI owns the
+	// pane, agys must neither overwrite its sidebar row nor leave stale telemetry.
+	if paneID != "" && socketPath != "" {
+		if found, active := lookupPaneAgentState(ctx, socketPath, paneID); found && !active {
+			_ = clearHerdrPaneMetadata(ctx, socketPath, paneID)
+			return nil
+		}
+	}
 
 	if IsAuto(profileName) || profileName == "" {
 		if paneID != "" && socketPath != "" {
@@ -1015,28 +1039,59 @@ func ClearHerdrMetadata(ctx context.Context) error {
 	}
 
 	ResetTerminalTitle()
+	return clearHerdrPaneMetadata(ctx, socketPath, paneID)
+}
+
+// hasStaleAgysTelemetry reports whether a pane carries agys-owned display data.
+func hasStaleAgysTelemetry(title string, tokens map[string]string) bool {
+	if strings.HasPrefix(title, "agys") || strings.Contains(title, "agys: ") || strings.Contains(title, "agys [") {
+		return true
+	}
+	for _, key := range []string{
+		"profile", "quota_context", "quota_model_context",
+		"quota_5h_normal", "quota_5h_warning", "quota_5h_danger",
+		"quota_week_normal", "quota_week_warning", "quota_week_danger",
+	} {
+		if tokens[key] != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// clearHerdrPaneMetadata removes agys-owned display-only pane metadata. Herdr's
+// metadata API requires explicit clear flags (and null token values); empty
+// strings are treated as no-op updates by newer Herdr versions.
+func clearHerdrPaneMetadata(ctx context.Context, socketPath, paneID string) error {
+	if socketPath == "" || paneID == "" {
+		return nil
+	}
+
+	clearTokens := map[string]*string{
+		"profile":             nil,
+		"model":               nil,
+		"group":               nil,
+		"quota_context":       nil,
+		"quota_model_context": nil,
+		"quota_5h_normal":     nil,
+		"quota_5h_warning":    nil,
+		"quota_5h_danger":     nil,
+		"quota_week_normal":   nil,
+		"quota_week_warning":  nil,
+		"quota_week_danger":   nil,
+	}
 
 	payload := map[string]interface{}{
 		"id":     fmt.Sprintf("agys:clear_meta:%d", time.Now().UnixNano()),
 		"method": "pane.report_metadata",
 		"params": map[string]interface{}{
-			"pane_id":       paneID,
-			"source":        "",
-			"display_agent": "",
-			"title":         "",
-			"tokens": map[string]string{
-				"profile":             "",
-				"model":               "",
-				"group":               "",
-				"quota_context":       "",
-				"quota_model_context": "",
-				"quota_5h_normal":     "",
-				"quota_5h_warning":    "",
-				"quota_5h_danger":     "",
-				"quota_week_normal":   "",
-				"quota_week_warning":  "",
-				"quota_week_danger":   "",
-			},
+			"pane_id":             paneID,
+			"source":              "agys",
+			"applies_to_source":   "agys",
+			"clear_title":         true,
+			"clear_display_agent": true,
+			"clear_state_labels":  true,
+			"tokens":              clearTokens,
 		},
 	}
 
