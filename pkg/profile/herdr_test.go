@@ -136,7 +136,6 @@ func TestReportHerdrMetadata_MockSocket(t *testing.T) {
 	}
 }
 
-
 func TestSetTerminalTitle(t *testing.T) {
 	// Should not panic on empty or valid profile name
 	SetTerminalTitle("")
@@ -201,6 +200,55 @@ func TestHandleHerdrHook(t *testing.T) {
 	stdin := strings.NewReader(`{"conversationId":"test-conv-123","transcriptPath":"/tmp/test.jsonl"}`)
 	if err := HandleHerdrHook(context.Background(), "session", stdin); err != nil {
 		t.Errorf("HandleHerdrHook session with stdin error: %v", err)
+	}
+}
+
+func TestHandleHerdrHookQuotaIgnoresCodexPane(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_hook_codex_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	unexpected := make(chan string, 1)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				_, _ = conn.Write([]byte(`{"id":"test","result":{"panes":[{"pane_id":"w1:p1","agent":"codex","title":"codex"}]}}` + "\n"))
+			} else if strings.Contains(reqStr, "pane.report_metadata") || strings.Contains(reqStr, "pane.report_agent_session") {
+				unexpected <- reqStr
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	if err := HandleHerdrHook(context.Background(), "quota", nil); err != nil {
+		t.Fatalf("HandleHerdrHook quota error: %v", err)
+	}
+
+	select {
+	case payload := <-unexpected:
+		t.Fatalf("unexpected Herdr update for Codex pane: %s", payload)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -784,5 +832,3 @@ func TestClearHerdrMetadata(t *testing.T) {
 		t.Errorf("No payload received on mock socket within timeout")
 	}
 }
-
-

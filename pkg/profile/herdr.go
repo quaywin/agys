@@ -179,14 +179,25 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 		return nil
 	}
 
+	paneID := os.Getenv("HERDR_PANE_ID")
+	socketPath := os.Getenv("HERDR_SOCKET_PATH")
+
+	// Herdr plugin events (pane.focused and pane.agent_status_changed) are pane-global.
+	// They can fire while another CLI such as Codex, Claude, or Droid owns the pane.
+	// Only lifecycle/session hooks may run before Herdr has classified the pane; all
+	// quota updates must never touch a pane that Herdr has identified as non-agys.
+	if action != "session" && paneID != "" && socketPath != "" {
+		if found, active := lookupPaneAgentState(ctx, socketPath, paneID); found && !active {
+			fmt.Println("{}")
+			return nil
+		}
+	}
+
 	// Auto-ensure Herdr 2-row sidebar config is applied
 	configPath := GetHerdrConfigPath()
 	if !IsHerdrConfiguredForAgys(configPath) {
 		_ = ApplyHerdr2RowConfig(configPath)
 	}
-
-	paneID := os.Getenv("HERDR_PANE_ID")
-	socketPath := os.Getenv("HERDR_SOCKET_PATH")
 
 	currentProfile, profileDir := ResolveProfileFromEnv()
 	if IsAuto(currentProfile) || currentProfile == "" {
@@ -244,7 +255,6 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 	fmt.Println("{}")
 	return nil
 }
-
 
 func formatModelContext(ctxPct int, hasCtx bool, model string) string {
 	if hasCtx && model != "" {
@@ -690,6 +700,53 @@ func resolveProfileFromPane(ctx context.Context, socketPath, paneID string) stri
 	return ""
 }
 
+// lookupPaneAgentState reports whether Herdr knows the requested pane, and whether
+// that pane is actively running agys/Antigravity. An unknown pane (for example when
+// the socket is unavailable) returns found=false so callers can preserve their
+// existing fallback behavior.
+func lookupPaneAgentState(ctx context.Context, socketPath, paneID string) (found, active bool) {
+	if socketPath == "" || paneID == "" {
+		return false, false
+	}
+
+	req, _ := json.Marshal(map[string]interface{}{
+		"id":     fmt.Sprintf("agys:pane_state:%d", time.Now().UnixNano()),
+		"method": "pane.list",
+		"params": map[string]interface{}{},
+	})
+	resp := sendHerdrSocketRPC(ctx, socketPath, req)
+	if len(resp) == 0 {
+		return false, false
+	}
+
+	var parsed struct {
+		Result struct {
+			Panes []struct {
+				PaneID                string `json:"pane_id"`
+				Agent                 string `json:"agent"`
+				Title                 string `json:"title"`
+				TerminalTitle         string `json:"terminal_title"`
+				TerminalTitleStripped string `json:"terminal_title_stripped"`
+			} `json:"panes"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		return false, false
+	}
+
+	for _, pane := range parsed.Result.Panes {
+		if pane.PaneID == paneID {
+			return true, isPaneActiveAgys(
+				pane.Agent,
+				pane.Title,
+				pane.TerminalTitle,
+				pane.TerminalTitleStripped,
+			)
+		}
+	}
+	return false, false
+}
+
 // ReportHerdrMetadata communicates with Herdr via its UNIX domain socket to set display_agent, title, and quota for all matching panes.
 func ReportHerdrMetadata(ctx context.Context, profileName string) error {
 	return reportHerdrMetadataInternal(ctx, profileName, "", true)
@@ -1039,4 +1096,3 @@ func StartHerdrQuotaWatcher(ctx context.Context, profileName string, modelName .
 		cancel()
 	}
 }
-
