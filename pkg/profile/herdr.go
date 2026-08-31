@@ -443,6 +443,47 @@ func sendHerdrSocketRPC(ctx context.Context, socketPath string, data []byte) []b
 	return bytes.TrimSpace(line)
 }
 
+// IsAgysAgent returns true ONLY if the agent name strictly identifies Antigravity / agys.
+func IsAgysAgent(agent string) bool {
+	a := strings.ToLower(strings.TrimSpace(agent))
+	if a == "" {
+		return false
+	}
+	return a == "agy" || a == "antigravity" || strings.HasPrefix(a, "herdr:antigravity") || strings.HasPrefix(a, "antigravity")
+}
+
+// IsNonAgysAgent checks if the pane is actively running another known AI agent/CLI tool (e.g., claude, codex, droid).
+func IsNonAgysAgent(agent string) bool {
+	a := strings.ToLower(strings.TrimSpace(agent))
+	if a == "" {
+		return false
+	}
+	return !IsAgysAgent(a)
+}
+
+// isPaneActiveAgys verifies if a pane is genuinely and actively executing an agys session.
+// Strictly returns false for plain shells (fish/zsh/bash) and non-agys processes.
+func isPaneActiveAgys(agent, title, terminalTitle, terminalTitleStripped string) bool {
+	if IsNonAgysAgent(agent) {
+		return false
+	}
+	if IsAgysAgent(agent) {
+		return true
+	}
+	termTitle := terminalTitle
+	if termTitle == "" {
+		termTitle = terminalTitleStripped
+	}
+	// Active agys sessions always set the terminal title or reported title starting with "agys" or containing "agys [" / "agys: "
+	if strings.HasPrefix(termTitle, "agys") || strings.Contains(termTitle, "agys: ") || strings.Contains(termTitle, "agys [") {
+		return true
+	}
+	if strings.HasPrefix(title, "agys") || strings.Contains(title, "agys: ") || strings.Contains(title, "agys [") {
+		return true
+	}
+	return false
+}
+
 // HerdrPaneMatch represents a matched Herdr pane along with its specific active model and existing tokens.
 type HerdrPaneMatch struct {
 	PaneID            string
@@ -455,10 +496,7 @@ type HerdrPaneMatch struct {
 func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profileName, currentModel string) []HerdrPaneMatch {
 	targetPanes := []HerdrPaneMatch{}
 	seen := make(map[string]bool)
-	if currentPaneID != "" {
-		targetPanes = append(targetPanes, HerdrPaneMatch{PaneID: currentPaneID, Model: currentModel})
-		seen[currentPaneID] = true
-	}
+
 	req, _ := json.Marshal(map[string]interface{}{
 		"id":     fmt.Sprintf("agys:panes:%d", time.Now().UnixNano()),
 		"method": "pane.list",
@@ -467,6 +505,9 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 
 	resp := sendHerdrSocketRPC(ctx, socketPath, req)
 	if len(resp) == 0 {
+		if currentPaneID != "" {
+			targetPanes = append(targetPanes, HerdrPaneMatch{PaneID: currentPaneID, Model: currentModel})
+		}
 		return targetPanes
 	}
 
@@ -485,10 +526,53 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 	}
 
 	if err := json.Unmarshal(resp, &parsed); err == nil && len(parsed.Result.Panes) > 0 {
+		// Verify if currentPaneID is actively running agys
+		var currentPaneActive bool
+		for _, p := range parsed.Result.Panes {
+			if p.PaneID == currentPaneID {
+				if isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped) {
+					currentPaneActive = true
+				}
+				break
+			}
+		}
+
+		if currentPaneID != "" && currentPaneActive {
+			var currentModelCtx, currentCtx, currentTitle string
+			for _, p := range parsed.Result.Panes {
+				if p.PaneID == currentPaneID {
+					if p.Tokens != nil {
+						currentModelCtx = p.Tokens["quota_model_context"]
+						currentCtx = p.Tokens["quota_context"]
+					}
+					currentTitle = p.Title
+					break
+				}
+			}
+			targetPanes = append(targetPanes, HerdrPaneMatch{
+				PaneID:            currentPaneID,
+				Model:             currentModel,
+				QuotaModelContext: currentModelCtx,
+				QuotaContext:      currentCtx,
+				Title:             currentTitle,
+			})
+			seen[currentPaneID] = true
+		}
+
 		for _, p := range parsed.Result.Panes {
 			if p.PaneID == "" {
 				continue
 			}
+			// Strictly allow ONLY panes actively executing agys/Antigravity
+			if !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped) {
+				continue
+			}
+
+			termTitle := p.TerminalTitle
+			if termTitle == "" {
+				termTitle = p.TerminalTitleStripped
+			}
+
 			isMatch := false
 			paneModel := ""
 			var quotaModelContext, quotaContext string
@@ -505,7 +589,7 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 					isMatch = true
 				} else if strings.Contains(p.Title, fmt.Sprintf("agys: %s", profileName)) {
 					isMatch = true
-				} else if strings.Contains(p.TerminalTitle, fmt.Sprintf("agys: %s", profileName)) || strings.Contains(p.TerminalTitleStripped, fmt.Sprintf("agys: %s", profileName)) || strings.Contains(p.TerminalTitle, fmt.Sprintf("[%s]", profileName)) {
+				} else if strings.Contains(termTitle, fmt.Sprintf("agys: %s", profileName)) || strings.Contains(termTitle, fmt.Sprintf("[%s]", profileName)) {
 					isMatch = true
 				}
 			}
@@ -536,6 +620,8 @@ func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profi
 				}
 			}
 		}
+	} else if currentPaneID != "" && !seen[currentPaneID] {
+		targetPanes = append(targetPanes, HerdrPaneMatch{PaneID: currentPaneID, Model: currentModel})
 	}
 
 	return targetPanes
@@ -558,7 +644,9 @@ func resolveProfileFromPane(ctx context.Context, socketPath, paneID string) stri
 		Result struct {
 			Panes []struct {
 				PaneID                string            `json:"pane_id"`
+				Agent                 string            `json:"agent"`
 				DisplayAgent          string            `json:"display_agent"`
+				Title                 string            `json:"title"`
 				TerminalTitle         string            `json:"terminal_title"`
 				TerminalTitleStripped string            `json:"terminal_title_stripped"`
 				Tokens                map[string]string `json:"tokens"`
@@ -570,7 +658,10 @@ func resolveProfileFromPane(ctx context.Context, socketPath, paneID string) stri
 	}
 	for _, p := range parsed.Result.Panes {
 		if p.PaneID == paneID {
-			// 1. Terminal title is set directly by the active process inside the pane (most reliable)
+			// Strictly allow ONLY panes actively executing agys/Antigravity
+			if !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped) {
+				return ""
+			}
 			title := p.TerminalTitle
 			if title == "" {
 				title = p.TerminalTitleStripped
@@ -583,13 +674,11 @@ func resolveProfileFromPane(ctx context.Context, socketPath, paneID string) stri
 					}
 				}
 			}
-			// 2. Tokens profile
 			if p.Tokens != nil && p.Tokens["profile"] != "" && !IsAuto(p.Tokens["profile"]) {
 				if _, err := GetProfileDir(p.Tokens["profile"]); err == nil {
 					return p.Tokens["profile"]
 				}
 			}
-			// 3. Display agent
 			if p.DisplayAgent != "" && !IsAuto(p.DisplayAgent) {
 				if _, err := GetProfileDir(p.DisplayAgent); err == nil {
 					return p.DisplayAgent
@@ -847,6 +936,60 @@ func SetTerminalTitle(titleOrProfile string) {
 		title = fmt.Sprintf("agys [%s]", titleOrProfile)
 	}
 	fmt.Fprintf(os.Stderr, "\033]0;%s\007", title)
+}
+
+// ResetTerminalTitle resets the terminal/window/tab title back to default shell title.
+func ResetTerminalTitle() {
+	if !IsInHerdrEnvironment() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "\033]0;\007")
+}
+
+// ClearHerdrMetadata clears agys tokens and resets terminal title for the current pane upon session exit.
+func ClearHerdrMetadata(ctx context.Context) error {
+	if !IsInHerdrEnvironment() {
+		return nil
+	}
+	paneID := os.Getenv("HERDR_PANE_ID")
+	socketPath := os.Getenv("HERDR_SOCKET_PATH")
+	if paneID == "" || socketPath == "" {
+		return nil
+	}
+
+	ResetTerminalTitle()
+
+	payload := map[string]interface{}{
+		"id":     fmt.Sprintf("agys:clear_meta:%d", time.Now().UnixNano()),
+		"method": "pane.report_metadata",
+		"params": map[string]interface{}{
+			"pane_id":       paneID,
+			"source":        "",
+			"display_agent": "",
+			"title":         "",
+			"tokens": map[string]string{
+				"profile":             "",
+				"model":               "",
+				"group":               "",
+				"quota_context":       "",
+				"quota_model_context": "",
+				"quota_5h_normal":     "",
+				"quota_5h_warning":    "",
+				"quota_5h_danger":     "",
+				"quota_week_normal":   "",
+				"quota_week_warning":  "",
+				"quota_week_danger":   "",
+			},
+		},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	sendHerdrSocketRPC(ctx, socketPath, data)
+	return nil
 }
 
 // StartHerdrQuotaWatcher starts a background goroutine that periodically updates quota every 60 seconds.

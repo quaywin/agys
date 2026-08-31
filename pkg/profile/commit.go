@@ -524,6 +524,10 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 
 	execCmd := BuildCmdContext(ctx, profileDir, args...)
 
+	// Keep the OAuth token refreshed in the background so future agy launches reuse
+	// the existing authorization instead of re-authorizing at startup.
+	ArmTokenKeepAlive(filepath.Base(profileDir))
+
 	var stdoutBuf, stderrBuf bytes.Buffer
 	execCmd.Stdout = &stdoutBuf
 	execCmd.Stderr = &stderrBuf

@@ -300,6 +300,9 @@ Examples:
 		if profile.IsInHerdrEnvironment() {
 			profile.SetTerminalTitle(fmt.Sprintf("%s (%s)", targetProfile, server))
 			_ = profile.ReportHerdrMetadata(cmd.Context(), targetProfile)
+			defer func() {
+				_ = profile.ClearHerdrMetadata(context.Background())
+			}()
 		}
 
 		sshExecCmd := exec.CommandContext(cmd.Context(), "ssh", "-R", fmt.Sprintf("%d:127.0.0.1:%d", remotePort, proxyPort), "-t", server, remoteCmd)

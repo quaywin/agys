@@ -578,11 +578,210 @@ func TestResolveProfileFromPane(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
-	_, _ = Create("my-active-profile")
-
 	got := resolveProfileFromPane(context.Background(), sockPath, "w8:p1")
 	if got != "my-active-profile" {
 		t.Errorf("Expected 'my-active-profile', got %q", got)
+	}
+}
+
+func TestIsAgysAgent(t *testing.T) {
+	tests := []struct {
+		agent string
+		want  bool
+	}{
+		{"agy", true},
+		{"Agy", true},
+		{"antigravity", true},
+		{"Antigravity", true},
+		{"herdr:antigravity_cli", true},
+		{"antigravity-cli", true},
+		{"claude", false},
+		{"codex", false},
+		{"droid", false},
+		{"opencode", false},
+		{"python", false},
+		{"node", false},
+		{"fish", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := IsAgysAgent(tt.agent)
+		if got != tt.want {
+			t.Errorf("IsAgysAgent(%q) = %v, want %v", tt.agent, got, tt.want)
+		}
+	}
+}
+
+func TestIsPaneActiveAgys(t *testing.T) {
+	tests := []struct {
+		agent    string
+		title    string
+		term     string
+		stripped string
+		want     bool
+	}{
+		// Active agys agents
+		{"Antigravity", "", "fish", "", true},
+		{"agy", "", "", "", true},
+		{"herdr:antigravity_cli", "", "zsh", "", true},
+		{"", "agys: khoinguyen [gem]", "", "", true},
+		{"", "", "agys [khoinguyen] 5H: 100%", "", true},
+		{"", "", "agys: khoinguyen [gem]", "", true},
+		{"", "", "", "agys [prod]", true},
+		// Non-agys agents & normal processes
+		{"claude", "agys: khoinguyen", "agys [khoinguyen]", "", false}, // foreign agent running in dirty pane
+		{"codex", "", "", "", false},
+		{"droid", "", "fish", "", false},
+		{"", "", "python main.py", "", false},
+		{"", "", "node server.js", "", false},
+		{"", "", "git status", "", false},
+		{"", "", "vim README.md", "", false},
+		{"", "fish", "fish", "", false},
+		{"", "zsh", "zsh", "", false},
+		{"", "bash", "bash", "", false},
+		{"", "", "", "", false},
+	}
+
+	for _, tt := range tests {
+		got := isPaneActiveAgys(tt.agent, tt.title, tt.term, tt.stripped)
+		if got != tt.want {
+			t.Errorf("isPaneActiveAgys(%q, %q, %q, %q) = %v, want %v", tt.agent, tt.title, tt.term, tt.stripped, got, tt.want)
+		}
+	}
+}
+
+func TestGetMatchingHerdrPanes_IgnoresOtherAgents(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_match_ignore_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				// Panes:
+				// w1:p1 is running Claude (has stale agys token/title from prior session) -> MUST BE IGNORED
+				// w1:p2 is running Antigravity -> MUST BE MATCHED
+				// w1:p3 is clean shell with no agent and no tokens -> MUST BE IGNORED
+				// w1:p4 is running python server (has stale agys token) -> MUST BE IGNORED
+				// w1:p5 is running node.js app -> MUST BE IGNORED
+				resp := `{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"claude","title":"agys: test-profile [gem]","tokens":{"profile":"test-profile"}},{"pane_id":"w1:p2","agent":"Antigravity","title":"agys: test-profile [gem]","tokens":{"profile":"test-profile"}},{"pane_id":"w1:p3","agent":"","title":"fish","tokens":{}},{"pane_id":"w1:p4","agent":"","terminal_title":"python app.py","tokens":{"profile":"test-profile"}},{"pane_id":"w1:p5","agent":"","terminal_title":"node server.js","tokens":{"profile":"test-profile"}}]}}`
+				_, _ = conn.Write([]byte(resp + "\n"))
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	matches := getMatchingHerdrPanes(context.Background(), sockPath, "", "test-profile", "gemini-2.5-pro")
+	if len(matches) != 1 {
+		t.Fatalf("Expected exactly 1 matched pane (Antigravity), got %d: %+v", len(matches), matches)
+	}
+	if matches[0].PaneID != "w1:p2" {
+		t.Errorf("Expected matched pane to be 'w1:p2', got %q", matches[0].PaneID)
+	}
+}
+
+func TestResolveProfileFromPane_IgnoresOtherAgents(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_prof_ignore_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				// Pane w1:p1 has stale title & tokens, but agent is "claude"
+				resp := `{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"claude","terminal_title":"agys: my-active-profile","tokens":{"profile":"my-active-profile"}}]}}`
+				_, _ = conn.Write([]byte(resp + "\n"))
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	got := resolveProfileFromPane(context.Background(), sockPath, "w1:p1")
+	if got != "" {
+		t.Errorf("Expected empty profile for pane running claude, got %q", got)
+	}
+}
+
+func TestClearHerdrMetadata(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_clear_test_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan string, 1)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			_, _ = conn.Write([]byte(`{"id":"agys:clear_meta:1","result":"ok"}` + "\n"))
+			if strings.Contains(reqStr, "pane.report_metadata") {
+				received <- reqStr
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	ResetTerminalTitle()
+
+	err = ClearHerdrMetadata(context.Background())
+	if err != nil {
+		t.Fatalf("ClearHerdrMetadata error: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		if !strings.Contains(payload, `"display_agent":""`) {
+			t.Errorf("Expected display_agent to be cleared, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"profile":""`) {
+			t.Errorf("Expected profile token to be cleared, got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("No payload received on mock socket within timeout")
 	}
 }
 

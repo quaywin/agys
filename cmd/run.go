@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -174,6 +175,10 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 		expectedRefreshToken = initTok.Token.RefreshToken
 	}
 
+	// Keep the OAuth token refreshed in the background so future launches reuse the
+	// existing authorization instead of re-authorizing inside agy at startup.
+	profile.ArmTokenKeepAlive(targetProfile)
+
 	// Merge trusted workspaces across all profiles prior to execution
 	_ = profile.SyncTrustedWorkspaces()
 
@@ -209,7 +214,10 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 
 		// Start background watcher for reset timer / periodic refresh if running in Herdr
 		stopWatcher := profile.StartHerdrQuotaWatcher(cmd.Context(), targetProfile, activeModel)
-		defer stopWatcher()
+		defer func() {
+			stopWatcher()
+			_ = profile.ClearHerdrMetadata(context.Background())
+		}()
 	}
 
 	runErr := profile.RunCmdWithSignalsInDir(cmd.Context(), profileDir, workingDir, agyArgs...)
