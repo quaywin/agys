@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"testing"
+	"time"
+
+	"github.com/quaywin/agys/pkg/profile"
 )
 
 func TestRunCommandFlags(t *testing.T) {
@@ -15,10 +18,19 @@ func TestRunCommandFlags(t *testing.T) {
 }
 
 func TestEnsureDefaultModelAndEffort(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("AGYS_DIR", tempDir)
+	_ = profile.SaveCachedDiscoveredModels(&profile.DiscoveredModels{
+		FetchedAt:   time.Now(),
+		LatestFlash: profile.DefaultGeminiModel,
+		LatestPro:   "gemini-3.1-pro",
+		AllModels:   []string{profile.DefaultGeminiModel, "gemini-3.1-pro"},
+	})
+
 	t.Run("Default behavior when no model or effort specified", func(t *testing.T) {
 		args := []string{"-p", "hello"}
 		res := EnsureDefaultModelAndEffort(args)
-		expected := []string{"-p", "hello", "--model", "gemini-3.7-flash", "--effort", "high"}
+		expected := []string{"-p", "hello", "--model", "gemini-3.8-flash", "--effort", "high"}
 		if len(res) != len(expected) {
 			t.Fatalf("expected len %d, got %d: %v", len(expected), len(res), res)
 		}
@@ -37,10 +49,33 @@ func TestEnsureDefaultModelAndEffort(t *testing.T) {
 		}
 	})
 
+	t.Run("Appends effort high for gemini flash models when effort not specified", func(t *testing.T) {
+		args := []string{"--model", "gemini-3.8-flash"}
+		res := EnsureDefaultModelAndEffort(args)
+		expected := []string{"--model", "gemini-3.8-flash", "--effort", "high"}
+		if len(res) != len(expected) {
+			t.Fatalf("expected %v, got %v", expected, res)
+		}
+	})
+
+	t.Run("Resolves latest and auto to latest Gemini model", func(t *testing.T) {
+		argsLatest := []string{"--model", "latest"}
+		resLatest := EnsureDefaultModelAndEffort(argsLatest)
+		if len(resLatest) != 4 || resLatest[1] != "gemini-3.8-flash" || resLatest[3] != "high" {
+			t.Errorf("expected latest to resolve to gemini-3.8-flash with high effort, got %v", resLatest)
+		}
+
+		argsAuto := []string{"--model=auto"}
+		resAuto := EnsureDefaultModelAndEffort(argsAuto)
+		if len(resAuto) != 3 || resAuto[0] != "--model=gemini-3.8-flash" || resAuto[2] != "high" {
+			t.Errorf("expected auto to resolve to gemini-3.8-flash with high effort, got %v", resAuto)
+		}
+	})
+
 	t.Run("Preserves custom effort when provided", func(t *testing.T) {
 		args := []string{"--effort", "low"}
 		res := EnsureDefaultModelAndEffort(args)
-		expected := []string{"--effort", "low", "--model", "gemini-3.7-flash"}
+		expected := []string{"--effort", "low", "--model", "gemini-3.8-flash"}
 		if len(res) != len(expected) {
 			t.Fatalf("expected len %d, got %d: %v", len(expected), len(res), res)
 		}

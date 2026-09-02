@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -71,17 +72,53 @@ func CompleteAgyArgs(args []string, toComplete string) ([]string, cobra.ShellCom
 	if len(args) > 0 {
 		prev := args[len(args)-1]
 		if prev == "-m" || prev == "--model" || strings.HasPrefix(toComplete, "--model=") {
-			models := []string{
-				"gemini-3.7-flash\tGemini 3.7 Flash (Fast & Capable Reasoning)",
-				"gemini-3.5-flash\tGemini 3.5 Flash (Fast & Lightweight)",
-				"gemini-3.5-pro\tGemini 3.5 Pro (High Reasoning)",
-				"gemini-2.5-pro\tGemini 2.5 Pro (Legacy High Reasoning)",
-				"gemini-2.5-flash\tGemini 2.5 Flash (Fast & Capable)",
-				"gemini-2.5-flash-lite\tGemini 2.5 Flash Lite (Lightweight)",
-				"claude-3-5-sonnet\tClaude 3.5 Sonnet",
-				"gpt-4o\tGPT-4o",
-				"auto\tAuto model selection",
+			var models []string
+			seen := make(map[string]bool)
+
+			// 1. Dynamic discovered models from cache if available
+			if dm := profile.ReadCachedDiscoveredModels(); dm != nil && len(dm.AllModels) > 0 {
+				for _, m := range dm.AllModels {
+					desc := "AI Model"
+					if m == dm.LatestFlash {
+						desc = "Gemini Flash (Highest / Default)"
+					} else if m == dm.LatestPro {
+						desc = "Gemini Pro (Highest)"
+					}
+					models = append(models, fmt.Sprintf("%s\t%s", m, desc))
+					seen[m] = true
+				}
 			}
+
+			// 2. Add aliases
+			for _, a := range []string{
+				"latest\tLatest Gemini Flash model (auto-detected)",
+				"auto\tAuto model selection",
+			} {
+				name := strings.Split(a, "\t")[0]
+				if !seen[name] {
+					models = append(models, a)
+					seen[name] = true
+				}
+			}
+
+			// 3. Fallback known models if cache was empty
+			knownDefaults := []string{
+				"gemini-3.8-flash\tGemini 3.8 Flash (Latest Fast & Capable Reasoning)",
+				"gemini-3.7-flash\tGemini 3.7 Flash (Fast & Capable Reasoning)",
+				"gemini-3.6-flash\tGemini 3.6 Flash (Fast & Capable)",
+				"gemini-3.1-pro\tGemini 3.1 Pro (High Reasoning)",
+				"claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)",
+				"claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)",
+				"gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
+			}
+			for _, kd := range knownDefaults {
+				name := strings.Split(kd, "\t")[0]
+				if !seen[name] {
+					models = append(models, kd)
+					seen[name] = true
+				}
+			}
+
 			return models, cobra.ShellCompDirectiveNoFileComp
 		}
 	}

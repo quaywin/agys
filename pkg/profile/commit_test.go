@@ -62,8 +62,8 @@ func TestFormatDiffForPrompt(t *testing.T) {
 }
 
 func TestDefaultCommitConstants(t *testing.T) {
-	if DefaultCommitModel != "gemini-3.7-flash" {
-		t.Errorf("expected DefaultCommitModel to be 'gemini-3.7-flash', got %q", DefaultCommitModel)
+	if DefaultCommitModel != "gemini-3.8-flash" {
+		t.Errorf("expected DefaultCommitModel to be 'gemini-3.8-flash', got %q", DefaultCommitModel)
 	}
 	if DefaultCommitEffort != "low" {
 		t.Errorf("expected DefaultCommitEffort to be 'low', got %q", DefaultCommitEffort)

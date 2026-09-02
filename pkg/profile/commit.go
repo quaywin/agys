@@ -14,7 +14,7 @@ import (
 const (
 	MaxDiffBytesForPrompt = 16000 // 16 KB total limit for compact prompt context
 	MaxPerFileDiffBytes   = 3000  // 3 KB limit per file
-	DefaultCommitModel    = "gemini-3.7-flash"
+	DefaultCommitModel    = DefaultGeminiModel
 	DefaultCommitEffort   = "low"
 )
 
@@ -601,8 +601,8 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 		promptBuilder.WriteString("COMMIT_MESSAGE:\n<conventional commit title>\n\n- <bullet point 1>\n- <bullet point 2>\n")
 	}
 
-	if model == "" {
-		model = DefaultCommitModel
+	if model == "" || model == "latest" || model == "auto" {
+		model = GetLatestGeminiModel()
 	}
 	if effort == "" {
 		effort = DefaultCommitEffort

@@ -158,16 +158,22 @@ func NormalizeModelName(displayName string) string {
 
 // ResolveActiveModel returns the active model for a profile: explicit arg > .active_model > settings.json > default "gemini".
 func ResolveActiveModel(profileDir, modelName string) string {
+	if modelName == "latest" {
+		return GetLatestGeminiModel()
+	}
 	if modelName != "" && modelName != "auto" {
 		return NormalizeModelName(modelName)
 	}
 	if data, err := os.ReadFile(filepath.Join(profileDir, ".active_model")); err == nil {
-		if m := strings.TrimSpace(string(data)); m != "" && m != "auto" {
+		if m := strings.TrimSpace(string(data)); m != "" && m != "auto" && m != "latest" {
 			return NormalizeModelName(m)
 		}
 	}
-	if sModel := ReadSettingsModel(profileDir); sModel != "" && sModel != "auto" {
+	if sModel := ReadSettingsModel(profileDir); sModel != "" && sModel != "auto" && sModel != "latest" {
 		return NormalizeModelName(sModel)
+	}
+	if modelName == "auto" {
+		return GetLatestGeminiModel()
 	}
 	return "gemini"
 }

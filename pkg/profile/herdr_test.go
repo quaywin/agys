@@ -302,6 +302,8 @@ func TestNormalizeModelName(t *testing.T) {
 		{"Gemini 2.5 Pro", "gemini-2.5-pro"},
 		{"Gemini 2.5 Flash", "gemini-2.5-flash"},
 		{"Gemini 3.7 Flash", "gemini-3.7-flash"},
+		{"Gemini 3.8 Flash", "gemini-3.8-flash"},
+		{"Gemini 3.8 Flash (High)", "gemini-3.8-flash"},
 		{"GPT 4o", "gpt-4o"},
 		// Already API-style IDs
 		{"claude-opus-4", "claude-opus-4"},
@@ -345,6 +347,16 @@ func TestReadSettingsModel(t *testing.T) {
 func TestResolveActiveModel(t *testing.T) {
 	tmpDir := t.TempDir()
 
+	// Ensure in-memory cache is populated to avoid network query during test
+	modelCacheLock.Lock()
+	cachedModels = &DiscoveredModels{
+		FetchedAt:   time.Now(),
+		LatestFlash: DefaultGeminiModel,
+		LatestPro:   "gemini-3.1-pro",
+		AllModels:   []string{DefaultGeminiModel, "gemini-3.1-pro"},
+	}
+	modelCacheLock.Unlock()
+
 	// 1. Explicit model takes highest priority
 	if got := ResolveActiveModel(tmpDir, "claude-opus-4"); got != "claude-opus-4" {
 		t.Errorf("Expected explicit model to take priority, got %q", got)
@@ -377,6 +389,22 @@ func TestResolveActiveModel(t *testing.T) {
 	got = ResolveActiveModel(tmpDir3, "")
 	if got != "gemini" {
 		t.Errorf("Expected default 'gemini', got %q", got)
+	}
+
+	// 5. "latest" and "auto" resolve to latest Gemini model
+	got = ResolveActiveModel(tmpDir3, "latest")
+	if got != DefaultGeminiModel {
+		t.Errorf("Expected %q for 'latest', got %q", DefaultGeminiModel, got)
+	}
+	got = ResolveActiveModel(tmpDir3, "auto")
+	if got != DefaultGeminiModel {
+		t.Errorf("Expected %q for 'auto', got %q", DefaultGeminiModel, got)
+	}
+
+	// 6. Explicit "latest" overrides existing .active_model
+	got = ResolveActiveModel(tmpDir, "latest")
+	if got != DefaultGeminiModel {
+		t.Errorf("Expected 'latest' to override .active_model %q, got %q", "gemini-2.5-pro", got)
 	}
 }
 

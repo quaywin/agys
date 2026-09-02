@@ -25,7 +25,7 @@
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │ ● agys · davidnguyen                                        │ ◄── Workspace & Active Profile
-│   5% ctx · gemini-3.7-flash                                 │ ◄── Context Window % & Active Model
+│   5% ctx · gemini-3.8-flash                                 │ ◄── Context Window % & Active Model
 │   95% 1h26m · 79% 6h35m                                     │ ◄── High-Contrast 5H & Weekly Quotas
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -197,7 +197,7 @@ agys run --all -- status
 agys run -a -- status
 ```
 
-> **Smart Model & Effort Defaults**: `agys run` automatically defaults to `--model gemini-3.7-flash --effort high` if no model or reasoning effort is explicitly passed in your arguments. You can override at any time with `-m / --model` or `--effort`.
+> **Smart Model & Effort Defaults**: `agys run` automatically defaults to `--model gemini-3.8-flash --effort high` if no model or reasoning effort is explicitly passed in your arguments. You can override at any time with `-m / --model` or `--effort` (supports `--model latest` or `--model auto` to automatically resolve to the highest model).
 
 ### 6. Search & Resume Conversation Sessions (`agys resume`)
 List and resume previous conversation sessions by project and profile with preserved CLI flags and interactive TTY selection:
@@ -389,6 +389,18 @@ agys upgrade
 
 # Check if an update is available without installing
 agys upgrade --check
+```
+
+### 16. AI Model Discovery & Auto-Detection (`agys models`)
+
+`agys` automatically discovers and selects the highest version in the Gemini Flash model series from `agy` without requiring code updates when Google releases new versions:
+
+```bash
+# Display detected highest Flash & Pro models and cached models
+agys models
+
+# Force an immediate refresh from agy CLI
+agys models --refresh # or -r
 ```
 
 ---

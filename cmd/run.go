@@ -113,7 +113,24 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 }
 
 func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []string, workingDir string) error {
-	agyArgs = EnsureDefaultModelAndEffort(agyArgs)
+	// Extract explicit model if specified in agyArgs before defaults
+	var explicitModel string
+	hasExplicitModel := false
+	for i := 0; i < len(agyArgs); i++ {
+		if agyArgs[i] == "--model" || agyArgs[i] == "-m" {
+			hasExplicitModel = true
+			if i+1 < len(agyArgs) {
+				explicitModel = agyArgs[i+1]
+			}
+			break
+		}
+		if strings.HasPrefix(agyArgs[i], "--model=") {
+			hasExplicitModel = true
+			explicitModel = strings.TrimPrefix(agyArgs[i], "--model=")
+			break
+		}
+	}
+
 	agyArgs, _, _ = profile.EnsureAvailableHubPort(agyArgs)
 
 	// Detect if the user is resuming a conversation and auto-switch to the owning profile
@@ -182,26 +199,20 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 	// Merge trusted workspaces across all profiles prior to execution
 	_ = profile.SyncTrustedWorkspaces()
 
-	// Extract active model if specified in agyArgs
-	var activeModel string
-	for i := 0; i < len(agyArgs); i++ {
-		if agyArgs[i] == "--model" || agyArgs[i] == "-m" {
-			if i+1 < len(agyArgs) {
-				activeModel = agyArgs[i+1]
-			}
-			break
-		}
-		if strings.HasPrefix(agyArgs[i], "--model=") {
-			activeModel = strings.TrimPrefix(agyArgs[i], "--model=")
-			break
-		}
+	// Resolve active model following priority: explicit CLI flag > .active_model cache > settings.json > default Gemini (gemini-3.8-flash)
+	activeModel := profile.ResolveActiveModel(profileDir, explicitModel)
+	if activeModel == "" || activeModel == "gemini" {
+		activeModel = profile.GetLatestGeminiModel()
 	}
-	// Resolve model using full fallback chain: CLI flag > .active_model cache > settings.json
-	activeModel = profile.ResolveActiveModel(profileDir, activeModel)
-	if activeModel != "" {
+
+	// If explicit model was provided on CLI, persist it to .active_model and sync to settings.json
+	if hasExplicitModel {
 		_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(activeModel), 0600)
 		profile.SyncModelToSettings(profileDir, activeModel)
 	}
+
+	// Apply default model and effort to agyArgs using resolved activeModel
+	agyArgs = EnsureDefaultModelAndEffortWithModel(agyArgs, activeModel)
 
 	// Ensure statusLine hook is configured in settings.json to capture real-time context window and render footer telemetry
 	_ = profile.SyncStatusLineSettings(profileDir)
@@ -327,9 +338,19 @@ func isAgySubcommand(arg string) bool {
 	return agySubcommands[arg]
 }
 
-// EnsureDefaultModelAndEffort ensures agyArgs has a default model (gemini-3.7-flash)
+// EnsureDefaultModelAndEffort ensures agyArgs has a default model (gemini-3.8-flash)
 // and reasoning effort (high) if not explicitly provided by the user or subcommand.
 func EnsureDefaultModelAndEffort(args []string) []string {
+	return EnsureDefaultModelAndEffortWithModel(args, profile.GetLatestGeminiModel())
+}
+
+// EnsureDefaultModelAndEffortWithModel ensures agyArgs has the specified model
+// and reasoning effort (high) if not explicitly provided by the user or subcommand.
+func EnsureDefaultModelAndEffortWithModel(args []string, defaultModel string) []string {
+	if defaultModel == "" {
+		defaultModel = profile.GetLatestGeminiModel()
+	}
+
 	// Check if first non-flag argument is an agy subcommand
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") {
@@ -364,14 +385,33 @@ func EnsureDefaultModelAndEffort(args []string) []string {
 	copy(finalArgs, args)
 
 	if !hasModel {
-		finalArgs = append(finalArgs, "--model", "gemini-3.7-flash")
-		modelValue = "gemini-3.7-flash"
+		finalArgs = append(finalArgs, "--model", defaultModel)
+		modelValue = defaultModel
+	} else if modelValue == "auto" || modelValue == "latest" {
+		targetModel := profile.GetLatestGeminiModel()
+		for i := 0; i < len(finalArgs); i++ {
+			if (finalArgs[i] == "-m" || finalArgs[i] == "--model") && i+1 < len(finalArgs) {
+				finalArgs[i+1] = targetModel
+				modelValue = targetModel
+				break
+			} else if strings.HasPrefix(finalArgs[i], "--model=") {
+				finalArgs[i] = "--model=" + targetModel
+				modelValue = targetModel
+				break
+			}
+		}
 	}
 
 	if !hasEffort {
-		// Only append --effort high if model supports effort (e.g. gemini-3.7-flash, flash, etc.)
-		if modelValue == "" || modelValue == "gemini-3.7-flash" || modelValue == "gemini-3.6-flash" || modelValue == "gemini-2.5-flash" || modelValue == "flash" || modelValue == "gemini-2.5-flash-lite" {
+		if profile.ModelSupportsEffort(modelValue) {
 			finalArgs = append(finalArgs, "--effort", "high")
+		}
+	}
+
+	// Normalize shorthand -m to canonical --model since agy only recognizes --model
+	for i := 0; i < len(finalArgs); i++ {
+		if finalArgs[i] == "-m" && i+1 < len(finalArgs) {
+			finalArgs[i] = "--model"
 		}
 	}
 

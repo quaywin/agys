@@ -8,6 +8,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
+
+	"github.com/quaywin/agys/pkg/profile"
 )
 
 func TestStartLocalHTTPProxy_Connect(t *testing.T) {
@@ -52,10 +55,19 @@ func TestStartLocalHTTPProxy_Connect(t *testing.T) {
 }
 
 func TestSSHCommandModelDefaults(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("AGYS_DIR", tempDir)
+	_ = profile.SaveCachedDiscoveredModels(&profile.DiscoveredModels{
+		FetchedAt:   time.Now(),
+		LatestFlash: profile.DefaultGeminiModel,
+		LatestPro:   "gemini-3.1-pro",
+		AllModels:   []string{profile.DefaultGeminiModel, "gemini-3.1-pro"},
+	})
+
 	t.Run("Default model and effort appended when agyArgs empty", func(t *testing.T) {
 		var agyArgs []string
 		res := EnsureDefaultModelAndEffort(agyArgs)
-		expected := []string{"--model", "gemini-3.7-flash", "--effort", "high"}
+		expected := []string{"--model", "gemini-3.8-flash", "--effort", "high"}
 		if len(res) != len(expected) {
 			t.Fatalf("expected %v, got %v", expected, res)
 		}
