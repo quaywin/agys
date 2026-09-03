@@ -243,7 +243,7 @@ func TestTokenFingerprintedEmailCache(t *testing.T) {
 	}
 }
 
-func TestGetProfile5HQuotaDetailsForModel(t *testing.T) {
+func TestGetProfileFullQuotaDetailsForModel(t *testing.T) {
 	// Test matching Gemini vs Claude vs Default
 	tmpDir := t.TempDir()
 	t.Setenv("AGYS_DIR", tmpDir)
@@ -254,7 +254,7 @@ func TestGetProfile5HQuotaDetailsForModel(t *testing.T) {
 	}
 
 	// Without token, should return error
-	_, _, _, _, err = GetProfile5HQuotaDetailsForModel(context.Background(), pName, "claude-3-7-sonnet")
+	_, err = GetProfileFullQuotaDetailsForModel(context.Background(), pName, "claude-3-7-sonnet")
 	if err == nil {
 		t.Errorf("expected error without token, got nil")
 	}

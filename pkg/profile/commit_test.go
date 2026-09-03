@@ -33,7 +33,7 @@ func TestIsIgnoredOrLockFile(t *testing.T) {
 	}
 }
 
-func TestFormatDiffForPrompt(t *testing.T) {
+func TestFormatCompactDiffForPrompt(t *testing.T) {
 	stagedFiles := []string{"main.go", "go.sum", "pkg/profile/commit.go"}
 	nameStatus := map[string]string{
 		"main.go":               "Modified",

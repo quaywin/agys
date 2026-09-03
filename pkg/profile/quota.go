@@ -683,28 +683,6 @@ func GetProfileFullQuotaDetailsForModel(ctx context.Context, profileName, modelN
 	return details, nil
 }
 
-// GetProfile5HQuotaDetailsForModel returns the remaining 5-hour quota fraction, formatted reset time, raw reset time, and group display name
-// matching the specified model name (e.g. "gemini-2.5-pro", "claude-3-7-sonnet", "gpt-4o", or empty for default).
-func GetProfile5HQuotaDetailsForModel(ctx context.Context, profileName, modelName string) (float64, string, time.Time, string, error) {
-	details, err := GetProfileFullQuotaDetailsForModel(ctx, profileName, modelName)
-	if err != nil {
-		return -1, "", time.Time{}, "", err
-	}
-	return details.Fraction5H, details.ResetStr5H, details.ResetTime5H, details.GroupName, nil
-}
-
-// GetProfile5HQuotaDetails returns the remaining 5-hour quota fraction, formatted reset time, and raw reset time.Time (defaulting to Gemini).
-func GetProfile5HQuotaDetails(ctx context.Context, profileName string) (float64, string, time.Time, error) {
-	frac, resetStr, resetTime, _, err := GetProfile5HQuotaDetailsForModel(ctx, profileName, "")
-	return frac, resetStr, resetTime, err
-}
-
-// GetProfile5HQuotaInfo returns the remaining 5-hour quota fraction (0.0 - 1.0) and formatted reset time for a given profile.
-func GetProfile5HQuotaInfo(ctx context.Context, profileName string) (float64, string, error) {
-	fraction, resetStr, _, err := GetProfile5HQuotaDetails(ctx, profileName)
-	return fraction, resetStr, err
-}
-
 func loadCodeAssist(ctx context.Context, accessToken string) (string, error) {
 	url := "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
 

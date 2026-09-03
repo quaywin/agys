@@ -41,9 +41,7 @@ esac
 
 # Directly invoke agys binary in pure compiled Go (zero Python dependency)
 AGYS_BIN="agys"
-if command -v agys >/dev/null 2>&1; then
-  AGYS_BIN="$(command -v agys)"
-elif [ -x "$REAL_HOME/.local/bin/agys" ]; then
+if [ -x "$REAL_HOME/.local/bin/agys" ]; then
   AGYS_BIN="$REAL_HOME/.local/bin/agys"
 elif [ -x "$REAL_HOME/go/bin/agys" ]; then
   AGYS_BIN="$REAL_HOME/go/bin/agys"
@@ -51,6 +49,8 @@ elif [ -x "/opt/homebrew/bin/agys" ]; then
   AGYS_BIN="/opt/homebrew/bin/agys"
 elif [ -x "/usr/local/bin/agys" ]; then
   AGYS_BIN="/usr/local/bin/agys"
+elif command -v agys >/dev/null 2>&1; then
+  AGYS_BIN="$(command -v agys)"
 fi
 
 exec "$AGYS_BIN" herdr-hook "${1:-session}"

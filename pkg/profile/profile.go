@@ -133,18 +133,6 @@ func ValidateName(name string) error {
 	return nil
 }
 
-// EnsureBaseDirExists creates the base profiles directory if it does not exist.
-func EnsureBaseDirExists() (string, error) {
-	baseDir, err := GetBaseDir()
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(baseDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to create base profile directory %s: %w", baseDir, err)
-	}
-	return baseDir, nil
-}
-
 // Exists checks if a profile directory exists.
 func Exists(name string) (bool, string, error) {
 	profileDir, err := GetProfileDir(name)
@@ -403,27 +391,11 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 		"HERDR_CONFIG_PATH": GetHerdrConfigPath(),
 	}
 
-	// Ensure PATH retains real user binary locations so child hook processes can locate agys, herdr, git, etc.
-	if realUserHome != "" {
-		candidates := []string{
-			filepath.Join(realUserHome, ".local", "bin"),
-			filepath.Join(realUserHome, "go", "bin"),
-			"/opt/homebrew/bin",
-			"/usr/local/bin",
-		}
-		pathEnv := os.Getenv("PATH")
-		var missing []string
-		for _, c := range candidates {
-			if info, err := os.Stat(c); err == nil && info.IsDir() {
-				if !strings.Contains(pathEnv, c) {
-					missing = append(missing, c)
-				}
-			}
-		}
-		if len(missing) > 0 {
-			envMap["PATH"] = strings.Join(missing, string(os.PathListSeparator)) + string(os.PathListSeparator) + pathEnv
-		}
-	}
+	CleanStaleProfileBinaries(profileDir)
+
+	// Ensure PATH retains real user binary locations and prevents stale profile binaries from shadowing agys
+	envMap["PATH"] = SanitizeProfilePath(os.Getenv("PATH"), realUserHome, profileDir)
+
 
 	env := os.Environ()
 	newEnv := make([]string, 0, len(env))
@@ -449,6 +421,94 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 
 	cmd.Env = newEnv
 	return cmd
+}
+
+// CleanStaleProfileBinaries removes any orphaned or accidentally created agys binaries inside a profile directory.
+func CleanStaleProfileBinaries(profileDir string) {
+	if profileDir == "" {
+		return
+	}
+	staleTargets := []string{
+		filepath.Join(profileDir, ".local", "bin", "agys"),
+		filepath.Join(profileDir, "go", "bin", "agys"),
+	}
+	for _, target := range staleTargets {
+		if info, err := os.Stat(target); err == nil && !info.IsDir() {
+			_ = os.Remove(target)
+		}
+	}
+}
+
+// SanitizeProfilePath cleans and prioritizes PATH for executing child processes under profileDir:
+// 1. Places real user binary locations (.local/bin, go/bin, Homebrew, /usr/local/bin) at the front of PATH.
+// 2. Removes any stale or shadowed .local/bin, go/bin, or binary paths inside .agys/profiles.
+// 3. Removes directories from other profiles to prevent cross-profile leakage.
+// 4. Preserves system paths and user tools while eliminating duplicate entries.
+func SanitizeProfilePath(pathEnv string, realUserHome string, profileDir string) string {
+	var candidates []string
+	if realUserHome != "" {
+		candidates = []string{
+			filepath.Join(realUserHome, ".local", "bin"),
+			filepath.Join(realUserHome, "go", "bin"),
+			"/opt/homebrew/bin",
+			"/opt/homebrew/sbin",
+			"/usr/local/bin",
+		}
+	}
+
+	baseDir, _ := GetBaseDir()
+	var cleanBaseDir string
+	if baseDir != "" {
+		cleanBaseDir = filepath.Clean(baseDir)
+	}
+	var cleanCurrentProfile string
+	if profileDir != "" {
+		cleanCurrentProfile = filepath.Clean(profileDir)
+	}
+
+	var result []string
+	seen := make(map[string]bool)
+
+	// 1. Prepend valid real user binary candidate directories first
+	for _, c := range candidates {
+		cleanC := filepath.Clean(c)
+		if info, err := os.Stat(cleanC); err == nil && info.IsDir() {
+			if !seen[cleanC] {
+				seen[cleanC] = true
+				result = append(result, cleanC)
+			}
+		}
+	}
+
+	// 2. Filter and deduplicate entries from existing pathEnv
+	for _, p := range filepath.SplitList(pathEnv) {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		cleanP := filepath.Clean(p)
+
+		// Filter out any directory inside ~/.agys/profiles
+		if (cleanBaseDir != "" && strings.HasPrefix(cleanP, cleanBaseDir+string(filepath.Separator))) ||
+			strings.Contains(cleanP, ".agys"+string(filepath.Separator)+"profiles") {
+			// Never allow .local/bin or go/bin directories from within any profile
+			sep := string(filepath.Separator)
+			if strings.Contains(cleanP, sep+".local"+sep) || strings.HasSuffix(cleanP, sep+".local") ||
+				strings.Contains(cleanP, sep+"go"+sep+"bin") || strings.HasSuffix(cleanP, sep+"go"+sep+"bin") {
+				continue
+			}
+			// Never allow directories from other profiles
+			if cleanCurrentProfile != "" && !strings.HasPrefix(cleanP, cleanCurrentProfile+string(filepath.Separator)) {
+				continue
+			}
+		}
+
+		if !seen[cleanP] {
+			seen[cleanP] = true
+			result = append(result, cleanP)
+		}
+	}
+
+	return strings.Join(result, string(os.PathListSeparator))
 }
 
 // GetTokenFilePaths returns all candidate token file paths for a profile directory in priority order.

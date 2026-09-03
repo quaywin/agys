@@ -377,16 +377,6 @@ func FormatCompactDiffForPrompt(stagedFiles []string, nameStatus map[string]stri
 	return sb.String()
 }
 
-// FormatDiffForPrompt formats staged file list and diff content for prompt (backward compatible).
-func FormatDiffForPrompt(stagedFiles []string, diffContent string) string {
-	return FormatDiffForPromptWithStat(stagedFiles, diffContent, "")
-}
-
-// FormatDiffForPromptWithStat formats staged files, git diff stat, and smart per-file diffs for the AI prompt context.
-func FormatDiffForPromptWithStat(stagedFiles []string, diffContent string, diffStat string) string {
-	return FormatCompactDiffForPrompt(stagedFiles, nil, diffStat, diffContent)
-}
-
 // CleanTerminalMarkdown strips markdown symbols, LaTeX math expressions, and formatting artifacts for clean CLI and Git log display.
 func CleanTerminalMarkdown(text string) string {
 	if text == "" {

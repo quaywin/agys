@@ -370,8 +370,9 @@ func chainPreviousStatusLine(ctx context.Context, profileDir string, input []byt
 // SyncStatusLineSettings configures the "statusLine" entry in settings.json to call agys statusline-hook,
 // preserving any pre-existing custom statusLine command in statusline.original.json.
 func SyncStatusLineSettings(profileDir string) error {
+	cliPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "settings.json")
 	candidatePaths := []string{
-		filepath.Join(profileDir, ".gemini", "antigravity-cli", "settings.json"),
+		cliPath,
 		filepath.Join(profileDir, ".gemini", "antigravity", "settings.json"),
 		filepath.Join(profileDir, ".gemini", "antigravity-ide", "settings.json"),
 	}
@@ -379,8 +380,15 @@ func SyncStatusLineSettings(profileDir string) error {
 	hookCommand := "agys statusline-hook"
 
 	for _, sPath := range candidatePaths {
-		if err := os.MkdirAll(filepath.Dir(sPath), 0700); err != nil {
-			continue
+		// Only auto-create directory for CLI settings; for GUI/IDE only update if already initialized
+		if sPath != cliPath {
+			if _, err := os.Stat(sPath); os.IsNotExist(err) {
+				continue
+			}
+		} else {
+			if err := os.MkdirAll(filepath.Dir(sPath), 0700); err != nil {
+				continue
+			}
 		}
 
 		var settings map[string]interface{}

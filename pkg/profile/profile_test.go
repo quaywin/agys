@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -548,3 +549,127 @@ func TestSyncKeychainTokenToDisk_Isolation(t *testing.T) {
 		t.Errorf("Expected access_token 'acc_profileA', got %q", afterTok.Token.AccessToken)
 	}
 }
+
+func TestSanitizeProfilePath(t *testing.T) {
+	tempHome := t.TempDir()
+	realLocalBin := filepath.Join(tempHome, ".local", "bin")
+	realGoBin := filepath.Join(tempHome, "go", "bin")
+	_ = os.MkdirAll(realLocalBin, 0755)
+	_ = os.MkdirAll(realGoBin, 0755)
+
+	agysDir := filepath.Join(tempHome, ".agys")
+	profilesBaseDir := filepath.Join(agysDir, "profiles")
+	t.Setenv("AGYS_DIR", agysDir)
+
+	currentProfileDir := filepath.Join(profilesBaseDir, "golang_dev")
+	otherProfileDir := filepath.Join(profilesBaseDir, "quaywin_thang")
+
+	_ = os.MkdirAll(filepath.Join(currentProfileDir, ".local", "bin"), 0755)
+	_ = os.MkdirAll(filepath.Join(currentProfileDir, ".gemini", "antigravity-cli", "bin"), 0755)
+	_ = os.MkdirAll(filepath.Join(otherProfileDir, ".local", "bin"), 0755)
+	_ = os.MkdirAll(filepath.Join(otherProfileDir, ".gemini", "antigravity-cli", "bin"), 0755)
+
+	currentCliBin := filepath.Join(currentProfileDir, ".gemini", "antigravity-cli", "bin")
+	otherLocalBin := filepath.Join(otherProfileDir, ".local", "bin")
+	otherCliBin := filepath.Join(otherProfileDir, ".gemini", "antigravity-cli", "bin")
+	currentLocalBin := filepath.Join(currentProfileDir, ".local", "bin")
+
+	// Construct contaminated PATH where stale profile binaries precede real binary locations
+	contaminatedPath := strings.Join([]string{
+		otherLocalBin,
+		otherCliBin,
+		currentLocalBin,
+		currentCliBin,
+		"/usr/bin",
+		realLocalBin,
+		"/bin",
+	}, string(os.PathListSeparator))
+
+	cleanedPath := SanitizeProfilePath(contaminatedPath, tempHome, currentProfileDir)
+	entries := filepath.SplitList(cleanedPath)
+
+	if len(entries) == 0 {
+		t.Fatalf("Expected non-empty cleaned path")
+	}
+
+	// 1. First entry must be real user .local/bin
+	if entries[0] != realLocalBin {
+		t.Errorf("Expected first entry to be %s, got %s", realLocalBin, entries[0])
+	}
+
+	// 2. Second entry must be real user go/bin
+	if len(entries) > 1 && entries[1] != realGoBin {
+		t.Errorf("Expected second entry to be %s, got %s", realGoBin, entries[1])
+	}
+
+	// 3. Stale .local/bin from any profile must NOT be present
+	for _, entry := range entries {
+		if entry == otherLocalBin {
+			t.Errorf("Contaminated other profile .local/bin %s should have been removed", otherLocalBin)
+		}
+		if entry == otherCliBin {
+			t.Errorf("Contaminated other profile .gemini cli bin %s should have been removed", otherCliBin)
+		}
+		if entry == currentLocalBin {
+			t.Errorf("Contaminated current profile .local/bin %s should have been removed", currentLocalBin)
+		}
+	}
+
+	// 4. System paths and current profile's cli bin should remain preserved
+	foundCurrentCliBin := false
+	foundUsrBin := false
+	foundBin := false
+	for _, entry := range entries {
+		if entry == currentCliBin {
+			foundCurrentCliBin = true
+		}
+		if entry == "/usr/bin" {
+			foundUsrBin = true
+		}
+		if entry == "/bin" {
+			foundBin = true
+		}
+	}
+
+	if !foundCurrentCliBin {
+		t.Errorf("Expected current profile cli bin %s to be preserved", currentCliBin)
+	}
+	if !foundUsrBin {
+		t.Errorf("Expected /usr/bin to be preserved")
+	}
+	if !foundBin {
+		t.Errorf("Expected /bin to be preserved")
+	}
+}
+
+func TestCleanStaleProfileBinaries(t *testing.T) {
+	tempHome := t.TempDir()
+	profileDir := filepath.Join(tempHome, "test-profile")
+
+	localBin := filepath.Join(profileDir, ".local", "bin")
+	goBin := filepath.Join(profileDir, "go", "bin")
+	_ = os.MkdirAll(localBin, 0755)
+	_ = os.MkdirAll(goBin, 0755)
+
+	stale1 := filepath.Join(localBin, "agys")
+	stale2 := filepath.Join(goBin, "agys")
+	_ = os.WriteFile(stale1, []byte("#!/bin/sh\necho old"), 0755)
+	_ = os.WriteFile(stale2, []byte("#!/bin/sh\necho old"), 0755)
+
+	if _, err := os.Stat(stale1); err != nil {
+		t.Fatalf("Failed to create mock binary %s", stale1)
+	}
+	if _, err := os.Stat(stale2); err != nil {
+		t.Fatalf("Failed to create mock binary %s", stale2)
+	}
+
+	CleanStaleProfileBinaries(profileDir)
+
+	if _, err := os.Stat(stale1); !os.IsNotExist(err) {
+		t.Errorf("Expected %s to be deleted, but still exists", stale1)
+	}
+	if _, err := os.Stat(stale2); !os.IsNotExist(err) {
+		t.Errorf("Expected %s to be deleted, but still exists", stale2)
+	}
+}
+
