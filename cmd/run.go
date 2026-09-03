@@ -129,6 +129,11 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 			explicitModel = strings.TrimPrefix(agyArgs[i], "--model=")
 			break
 		}
+		if strings.HasPrefix(agyArgs[i], "-m=") {
+			hasExplicitModel = true
+			explicitModel = strings.TrimPrefix(agyArgs[i], "-m=")
+			break
+		}
 	}
 
 	agyArgs, _, _ = profile.EnsureAvailableHubPort(agyArgs)
@@ -376,6 +381,9 @@ func EnsureDefaultModelAndEffortWithModel(args []string, defaultModel string) []
 		} else if strings.HasPrefix(arg, "--model=") {
 			hasModel = true
 			modelValue = strings.TrimPrefix(arg, "--model=")
+		} else if strings.HasPrefix(arg, "-m=") {
+			hasModel = true
+			modelValue = strings.TrimPrefix(arg, "-m=")
 		} else if arg == "--effort" || strings.HasPrefix(arg, "--effort=") {
 			hasEffort = true
 		}
@@ -391,10 +399,15 @@ func EnsureDefaultModelAndEffortWithModel(args []string, defaultModel string) []
 		targetModel := profile.GetLatestGeminiModel()
 		for i := 0; i < len(finalArgs); i++ {
 			if (finalArgs[i] == "-m" || finalArgs[i] == "--model") && i+1 < len(finalArgs) {
+				finalArgs[i] = "--model"
 				finalArgs[i+1] = targetModel
 				modelValue = targetModel
 				break
 			} else if strings.HasPrefix(finalArgs[i], "--model=") {
+				finalArgs[i] = "--model=" + targetModel
+				modelValue = targetModel
+				break
+			} else if strings.HasPrefix(finalArgs[i], "-m=") {
 				finalArgs[i] = "--model=" + targetModel
 				modelValue = targetModel
 				break
@@ -408,10 +421,12 @@ func EnsureDefaultModelAndEffortWithModel(args []string, defaultModel string) []
 		}
 	}
 
-	// Normalize shorthand -m to canonical --model since agy only recognizes --model
+	// Normalize shorthand -m and -m= to canonical --model since agy only recognizes --model
 	for i := 0; i < len(finalArgs); i++ {
 		if finalArgs[i] == "-m" && i+1 < len(finalArgs) {
 			finalArgs[i] = "--model"
+		} else if strings.HasPrefix(finalArgs[i], "-m=") {
+			finalArgs[i] = "--model=" + strings.TrimPrefix(finalArgs[i], "-m=")
 		}
 	}
 

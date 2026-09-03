@@ -70,6 +70,30 @@ func TestEnsureDefaultModelAndEffort(t *testing.T) {
 		if len(resAuto) != 3 || resAuto[0] != "--model=gemini-3.8-flash" || resAuto[2] != "high" {
 			t.Errorf("expected auto to resolve to gemini-3.8-flash with high effort, got %v", resAuto)
 		}
+
+		argsMLatest := []string{"-m", "latest"}
+		resMLatest := EnsureDefaultModelAndEffort(argsMLatest)
+		if len(resMLatest) != 4 || resMLatest[0] != "--model" || resMLatest[1] != "gemini-3.8-flash" || resMLatest[3] != "high" {
+			t.Errorf("expected -m latest to normalize to --model gemini-3.8-flash with high effort, got %v", resMLatest)
+		}
+
+		argsMAuto := []string{"-m=auto"}
+		resMAuto := EnsureDefaultModelAndEffort(argsMAuto)
+		if len(resMAuto) != 3 || resMAuto[0] != "--model=gemini-3.8-flash" || resMAuto[2] != "high" {
+			t.Errorf("expected -m=auto to normalize to --model=gemini-3.8-flash with high effort, got %v", resMAuto)
+		}
+
+		argsMExplicit := []string{"-m=gemini-3.7-flash"}
+		resMExplicit := EnsureDefaultModelAndEffort(argsMExplicit)
+		if len(resMExplicit) != 3 || resMExplicit[0] != "--model=gemini-3.7-flash" || resMExplicit[2] != "high" {
+			t.Errorf("expected -m=gemini-3.7-flash to normalize to --model=gemini-3.7-flash, got %v", resMExplicit)
+		}
+
+		argsMClaude := []string{"-m", "claude-sonnet-4-6"}
+		resMClaude := EnsureDefaultModelAndEffort(argsMClaude)
+		if len(resMClaude) != 2 || resMClaude[0] != "--model" || resMClaude[1] != "claude-sonnet-4-6" {
+			t.Errorf("expected -m claude-sonnet-4-6 to normalize without effort, got %v", resMClaude)
+		}
 	})
 
 	t.Run("Preserves custom effort when provided", func(t *testing.T) {

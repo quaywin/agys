@@ -156,26 +156,47 @@ func NormalizeModelName(displayName string) string {
 	return result
 }
 
-// ResolveActiveModel returns the active model for a profile: explicit arg > .active_model > settings.json > default "gemini".
+// ResolveActiveModel returns the active model for a profile: explicit arg > .active_model > settings.json > default latest Gemini.
 func ResolveActiveModel(profileDir, modelName string) string {
-	if modelName == "latest" {
+	if modelName == "latest" || modelName == "auto" {
 		return GetLatestGeminiModel()
 	}
-	if modelName != "" && modelName != "auto" {
+	if modelName != "" && modelName != "gemini" {
 		return NormalizeModelName(modelName)
 	}
+
+	var cachedModel string
 	if data, err := os.ReadFile(filepath.Join(profileDir, ".active_model")); err == nil {
-		if m := strings.TrimSpace(string(data)); m != "" && m != "auto" && m != "latest" {
-			return NormalizeModelName(m)
+		if m := strings.TrimSpace(string(data)); m != "" && m != "auto" && m != "latest" && m != "gemini" {
+			cachedModel = NormalizeModelName(m)
 		}
 	}
-	if sModel := ReadSettingsModel(profileDir); sModel != "" && sModel != "auto" && sModel != "latest" {
-		return NormalizeModelName(sModel)
+	if cachedModel == "" {
+		if sModel := ReadSettingsModel(profileDir); sModel != "" && sModel != "auto" && sModel != "latest" && sModel != "gemini" {
+			cachedModel = NormalizeModelName(sModel)
+		}
 	}
-	if modelName == "auto" {
-		return GetLatestGeminiModel()
+
+	latestFlash := GetLatestGeminiModel()
+	if cachedModel != "" && cachedModel != "gemini" {
+		// If cached model is a Gemini Flash model (e.g. gemini-3.7-flash, gemini-3.6-flash),
+		// check if it is older than the discovered latest Flash model.
+		// If it is older, automatically upgrade it so profiles don't stay stuck on superseded models.
+		if vCached, ok := ExtractGeminiVersion(cachedModel); ok && strings.Contains(cachedModel, "flash") {
+			if vLatest, okLatest := ExtractGeminiVersion(latestFlash); okLatest {
+				if vLatest.GreaterThan(vCached) {
+					if profileDir != "" {
+						_ = WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(latestFlash), 0600)
+						SyncModelToSettings(profileDir, latestFlash)
+					}
+					return latestFlash
+				}
+			}
+		}
+		return cachedModel
 	}
-	return "gemini"
+
+	return latestFlash
 }
 
 // HandleHerdrHook executes the Herdr lifecycle hook directly in pure Go without any Python dependency.
@@ -841,8 +862,8 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		if targetModel == "" || targetModel == "auto" {
 			targetModel = target.Model
 		}
-		if targetModel == "" || targetModel == "auto" {
-			targetModel = "gemini"
+		if targetModel == "" || targetModel == "auto" || targetModel == "gemini" {
+			targetModel = GetLatestGeminiModel()
 		}
 
 		displayAgent := profileName

@@ -106,8 +106,11 @@ func TestReportHerdrMetadata_MockSocket(t *testing.T) {
 				_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","tokens":{"profile":"my-test-profile"}}]}}` + "\n"))
 			} else {
 				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
-				if strings.Contains(reqStr, "pane.report_metadata") {
-					received <- reqStr
+				if strings.Contains(reqStr, "pane.report_metadata") && strings.Contains(reqStr, "my-test-profile") {
+					select {
+					case received <- reqStr:
+					default:
+					}
 				}
 			}
 			_ = conn.Close()
@@ -384,11 +387,16 @@ func TestResolveActiveModel(t *testing.T) {
 		t.Errorf("Expected settings.json model, got %q", got)
 	}
 
-	// 4. Fallback to default "gemini"
+	// 4. Fallback to default latest Gemini model when empty or literal "gemini"
 	tmpDir3 := t.TempDir()
 	got = ResolveActiveModel(tmpDir3, "")
-	if got != "gemini" {
-		t.Errorf("Expected default 'gemini', got %q", got)
+	if got != DefaultGeminiModel {
+		t.Errorf("Expected default latest Gemini model %q, got %q", DefaultGeminiModel, got)
+	}
+	_ = os.WriteFile(filepath.Join(tmpDir3, ".active_model"), []byte("gemini"), 0600)
+	got = ResolveActiveModel(tmpDir3, "")
+	if got != DefaultGeminiModel {
+		t.Errorf("Expected literal 'gemini' cache to resolve to %q, got %q", DefaultGeminiModel, got)
 	}
 
 	// 5. "latest" and "auto" resolve to latest Gemini model
@@ -405,6 +413,18 @@ func TestResolveActiveModel(t *testing.T) {
 	got = ResolveActiveModel(tmpDir, "latest")
 	if got != DefaultGeminiModel {
 		t.Errorf("Expected 'latest' to override .active_model %q, got %q", "gemini-2.5-pro", got)
+	}
+
+	// 7. Auto-upgrades older Gemini Flash model (e.g. gemini-3.7-flash) to latest Flash model
+	tmpDir4 := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmpDir4, ".active_model"), []byte("Gemini 3.7 Flash (High)"), 0600)
+	got = ResolveActiveModel(tmpDir4, "")
+	if got != DefaultGeminiModel {
+		t.Errorf("Expected older Flash model to auto-upgrade to %q, got %q", DefaultGeminiModel, got)
+	}
+	upgradedData, _ := os.ReadFile(filepath.Join(tmpDir4, ".active_model"))
+	if string(upgradedData) != DefaultGeminiModel {
+		t.Errorf("Expected .active_model on disk to be upgraded to %q, got %q", DefaultGeminiModel, string(upgradedData))
 	}
 }
 
