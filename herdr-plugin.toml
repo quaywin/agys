@@ -55,7 +55,3 @@ id = "agys-pane-focused"
 on = "pane.focused"
 command = ["agys", "herdr-hook", "quota"]
 
-[[events]]
-id = "agys-pane-status-changed"
-on = "pane.agent_status_changed"
-command = ["agys", "herdr-hook", "quota"]

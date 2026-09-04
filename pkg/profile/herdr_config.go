@@ -63,7 +63,7 @@ func IsHerdrConfiguredForAgys(configPath string) bool {
 		return false
 	}
 	content := string(data)
-	return strings.Contains(content, "$quota_5h") || strings.Contains(content, "$quota_summary") || strings.Contains(content, "herdr-agys-managed")
+	return strings.Contains(content, "$quota_5h") || strings.Contains(content, HerdrAgysRowMarker)
 }
 
 // ApplyHerdr2RowConfig updates Herdr's config.toml with the compact 2-row sidebar layout.

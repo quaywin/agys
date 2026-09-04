@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -908,3 +909,209 @@ func TestClearHerdrMetadata(t *testing.T) {
 		t.Errorf("No payload received on mock socket within timeout")
 	}
 }
+
+func TestReportHerdrMetadata_DeduplicatesUnchangedRPC(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_dedup_test_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	var rpcCount int
+	var mu sync.Mutex
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				mu.Lock()
+				count := rpcCount
+				mu.Unlock()
+				if count == 0 {
+					// First call: initial state without full tokens
+					_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","tokens":{"profile":"dedup-profile"}}]}}` + "\n"))
+				} else {
+					// Second call: pane already has the tokens that were reported in the first call
+					_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","display_agent":"dedup-profile","title":"agys: dedup-profile","tokens":{"profile":"dedup-profile","model":"gemini-2.5-flash","quota_model_context":"gemini-2.5-flash","quota_5h_normal":"","quota_5h_warning":"","quota_5h_danger":"","quota_week_normal":"","quota_week_warning":"","quota_week_danger":""}}]}}` + "\n"))
+				}
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					mu.Lock()
+					rpcCount++
+					mu.Unlock()
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	_, err = Create("dedup-profile")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	// First call: should send RPC
+	err = ReportHerdrMetadataWithModel(context.Background(), "dedup-profile", "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("ReportHerdrMetadataWithModel error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Second call with same data: must be deduplicated (no second RPC)
+	err = ReportHerdrMetadataWithModel(context.Background(), "dedup-profile", "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("ReportHerdrMetadataWithModel 2 error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	finalCount := rpcCount
+	mu.Unlock()
+
+	if finalCount != 1 {
+		t.Errorf("Expected exactly 1 RPC sent due to deduplication, got %d", finalCount)
+	}
+}
+
+func TestReportHerdrMetadata_PreservesExistingQuotaWhenDetailsUnavailable(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_preserve_test_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan string, 1)
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				// Pane already has existing quota 85% 2h
+				_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","display_agent":"pres-profile","title":"agys: pres-profile","tokens":{"profile":"pres-profile","quota_5h_normal":"85% 2h","quota_week_normal":"92% 3d"}}]}}` + "\n"))
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					received <- reqStr
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	pDir, err := Create("pres-profile")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	// Seed session context (40%) so context window changes and triggers an update
+	_ = SaveSessionContext(pDir, &SessionContextState{
+		UsedPercentage: 40.0,
+		ModelID:        "gemini-2.5-flash",
+	})
+
+	// Call without preloaded quota details (simulating statusline update before quota API returns)
+	err = ReportHerdrMetadataWithModel(context.Background(), "pres-profile", "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("ReportHerdrMetadataWithModel error: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		// Verify that existing quota 85% 2h was NOT erased to ""
+		if !strings.Contains(payload, `"quota_5h_normal":"85% 2h"`) {
+			t.Errorf("Expected payload to preserve '85%% 2h', got: %s", payload)
+		}
+		if !strings.Contains(payload, `"quota_week_normal":"92% 3d"`) {
+			t.Errorf("Expected payload to preserve '92%% 3d', got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("No payload received on mock socket within timeout")
+	}
+}
+
+func TestSetTerminalTitle_Deduplicates(t *testing.T) {
+	t.Setenv("HERDR_ENV", "1")
+
+	// Redirect stderr to buffer
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Failed to create pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() {
+		os.Stderr = oldStderr
+	}()
+
+	ResetTerminalTitle()
+
+	// Call twice with identical title
+	SetTerminalTitle("agys: my-title")
+	SetTerminalTitle("agys: my-title")
+
+	w.Close()
+	buf := make([]byte, 1024)
+	n, _ := r.Read(buf)
+	out := string(buf[:n])
+
+	// Should contain escape sequence exactly once
+	count := strings.Count(out, "\033]0;agys: my-title\007")
+	if count != 1 {
+		t.Errorf("Expected escape sequence exactly 1 time, got %d. Output: %q", count, out)
+	}
+}
+
+func TestGetMatchingHerdrPanes_DoesNotReAddInactiveCurrentPane(t *testing.T) {
+	panes := []HerdrRawPane{
+		{
+			PaneID: "w1:p1",
+			Agent:  "codex",
+			Title:  "codex",
+		},
+	}
+
+	matches := getMatchingHerdrPanesFromList(context.Background(), panes, "", "w1:p1", "my-profile", "gemini-2.5-flash")
+	if len(matches) != 0 {
+		t.Errorf("Expected 0 matches for inactive current pane running codex, got %d: %+v", len(matches), matches)
+	}
+}
+
