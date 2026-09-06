@@ -475,10 +475,12 @@ func TestReportHerdrMetadata_Compact2RowTokens(t *testing.T) {
 		t.Fatalf("Create profile error: %v", err)
 	}
 
-	// Seed session context (35%)
+	// Seed session context (35%, title, cost)
 	_ = SaveSessionContext(pDir, &SessionContextState{
-		UsedPercentage: 35.0,
-		ModelID:        "claude-3-7-sonnet",
+		UsedPercentage:    35.0,
+		ModelID:           "claude-3-7-sonnet",
+		ConversationTitle: "Optimize DB queries",
+		Cost:              0.0042,
 	})
 
 	err = ReportHerdrMetadataWithModel(context.Background(), "compact-profile", "claude-3-7-sonnet")
@@ -492,12 +494,22 @@ func TestReportHerdrMetadata_Compact2RowTokens(t *testing.T) {
 		if !strings.Contains(payload, `"display_agent":"compact-profile"`) {
 			t.Errorf("Expected display_agent to be 'compact-profile', got: %s", payload)
 		}
-		// Line 2: % ctx + Full Model ID
-		if !strings.Contains(payload, "35% ctx · claude-3-7-sonnet") {
-			t.Errorf("Expected payload to contain '35%% ctx · claude-3-7-sonnet', got: %s", payload)
+		// Line 2: % ctx + Cost (model replaced by cost)
+		if !strings.Contains(payload, "35% ctx · $0.0042") {
+			t.Errorf("Expected payload to contain '35%% ctx · $0.0042', got: %s", payload)
 		}
 		if !strings.Contains(payload, "quota_model_context") {
 			t.Errorf("Expected payload to contain quota_model_context token, got: %s", payload)
+		}
+		// Title prioritizes conversation title first
+		if !strings.Contains(payload, "agys: Optimize DB queries · compact-profile") {
+			t.Errorf("Expected title to prioritize conversation title, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"conversation_title":"Optimize DB queries"`) {
+			t.Errorf("Expected tokens to contain conversation_title, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"cost":"$0.0042"`) {
+			t.Errorf("Expected tokens to contain cost, got: %s", payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Errorf("No payload received on mock socket within timeout")
@@ -904,6 +916,12 @@ func TestClearHerdrMetadata(t *testing.T) {
 		}
 		if !strings.Contains(payload, `"profile":null`) {
 			t.Errorf("Expected profile token to be cleared, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"conversation_title":null`) {
+			t.Errorf("Expected conversation_title token to be cleared, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"cost":null`) {
+			t.Errorf("Expected cost token to be cleared, got: %s", payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Errorf("No payload received on mock socket within timeout")

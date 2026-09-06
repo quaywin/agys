@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -26,12 +27,22 @@ type SessionContextState struct {
 	CacheCreationTokens int64     `json:"cache_creation_tokens,omitempty"`
 	ModelID             string    `json:"model_id,omitempty"`
 	ModelDisplayName    string    `json:"model_display_name,omitempty"`
+	ConversationTitle   string    `json:"conversation_title,omitempty"`
+	ConversationID      string    `json:"conversation_id,omitempty"`
+	Cost                float64   `json:"cost,omitempty"`
+	Effort              string    `json:"effort,omitempty"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 // StatusLinePayload represents the JSON payload streamed to stdin by Antigravity CLI statusLine command.
 type StatusLinePayload struct {
-	Model struct {
+	ConversationID    string  `json:"conversation_id,omitempty"`
+	SessionID         string  `json:"session_id,omitempty"`
+	ConversationTitle string  `json:"conversation_title"`
+	Cost              float64 `json:"cost"`
+	Effort            string  `json:"effort,omitempty"`
+	ReasoningEffort   string  `json:"reasoning_effort,omitempty"`
+	Model             struct {
 		ID          string `json:"id"`
 		DisplayName string `json:"display_name"`
 	} `json:"model"`
@@ -70,27 +81,48 @@ func SaveSessionContext(profileDir string, state *SessionContextState) error {
 	return WriteFileAtomic(targetPath, data, 0600)
 }
 
-// GetSessionContext returns the cached context window percentage (0-100) if valid and not expired (TTL 2 hours).
-func GetSessionContext(profileDir string) (int, bool) {
+// ResetSessionContext removes the cached session context file for a profile.
+func ResetSessionContext(profileDir string) error {
 	if profileDir == "" {
-		return 0, false
+		return nil
+	}
+	targetPath := filepath.Join(profileDir, sessionContextFilename)
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// GetSessionContextState returns the cached session context state if valid and not expired (TTL 2 hours).
+func GetSessionContextState(profileDir string) (*SessionContextState, bool) {
+	if profileDir == "" {
+		return nil, false
 	}
 	targetPath := filepath.Join(profileDir, sessionContextFilename)
 	data, err := os.ReadFile(targetPath)
 	if err != nil {
-		return 0, false
+		return nil, false
 	}
 
 	var state SessionContextState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return 0, false
+		return nil, false
 	}
 
 	// Invalidate if older than 2 hours
 	if time.Since(state.UpdatedAt) > 2*time.Hour {
-		return 0, false
+		return nil, false
 	}
 
+	return &state, true
+}
+
+// GetSessionContext returns the cached context window percentage (0-100) if valid and not expired (TTL 2 hours).
+func GetSessionContext(profileDir string) (int, bool) {
+	state, ok := GetSessionContextState(profileDir)
+	if !ok || state == nil {
+		return 0, false
+	}
 	pct := int(state.UsedPercentage + 0.5)
 	if pct < 0 {
 		pct = 0
@@ -98,6 +130,61 @@ func GetSessionContext(profileDir string) (int, bool) {
 		pct = 100
 	}
 	return pct, true
+}
+
+// FormatCost formats a dollar cost amount with 2 to 4 decimal places (e.g. $0.00, $0.0042, $1.25).
+func FormatCost(cost float64) string {
+	if cost <= 0 {
+		return "$0.00"
+	}
+	s := fmt.Sprintf("%.4f", cost)
+	s = strings.TrimRight(s, "0")
+	if strings.HasSuffix(s, ".") {
+		s += "00"
+	} else {
+		parts := strings.Split(s, ".")
+		if len(parts) == 2 && len(parts[1]) < 2 {
+			s += strings.Repeat("0", 2-len(parts[1]))
+		}
+	}
+	if strings.HasPrefix(s, ".") {
+		s = "0" + s
+	}
+	return "$" + s
+}
+
+// ResolveActiveEffort determines the active reasoning effort for a profile and model.
+func ResolveActiveEffort(profileDir, modelName, explicitEffort string) string {
+	if explicitEffort != "" {
+		return explicitEffort
+	}
+	if profileDir != "" {
+		// 1. Check .active_effort cache
+		data, err := os.ReadFile(filepath.Join(profileDir, ".active_effort"))
+		if err == nil && len(strings.TrimSpace(string(data))) > 0 {
+			return strings.TrimSpace(string(data))
+		}
+		// 2. Check settings.json
+		for _, subDir := range []string{"antigravity-cli", "antigravity", "antigravity-ide"} {
+			sPath := filepath.Join(profileDir, ".gemini", subDir, "settings.json")
+			if sData, err := os.ReadFile(sPath); err == nil {
+				var settings map[string]interface{}
+				if json.Unmarshal(sData, &settings) == nil {
+					if eff, ok := settings["effort"].(string); ok && eff != "" {
+						return eff
+					}
+					if eff, ok := settings["reasoning_effort"].(string); ok && eff != "" {
+						return eff
+					}
+				}
+			}
+		}
+	}
+	// 3. Default to "high" for models supporting effort
+	if ModelSupportsEffort(modelName) {
+		return "high"
+	}
+	return ""
 }
 
 // HandleStatusLine processes the statusLine input from Antigravity CLI, updates local session cache,
@@ -132,23 +219,75 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		hasCtx = true
 	}
 
-	if hasCtx && profileDir != "" {
-		_ = SaveSessionContext(profileDir, &SessionContextState{
-			UsedPercentage:      ctxUsedPct,
-			InputTokens:         inputTokens,
-			CacheReadTokens:     cacheReadTokens,
-			CacheCreationTokens: cacheCreationTokens,
-			ModelID:             payload.Model.ID,
-			ModelDisplayName:    payload.Model.DisplayName,
-		})
-	}
-
 	activeModel := payload.Model.ID
 	if activeModel == "" {
 		activeModel = payload.Model.DisplayName
 	}
 	if profileDir != "" {
 		activeModel = ResolveActiveModel(profileDir, activeModel)
+	}
+
+	costVal := payload.Cost
+	effortVal := payload.Effort
+	if effortVal == "" {
+		effortVal = payload.ReasoningEffort
+	}
+	if effortVal == "" && profileDir != "" {
+		effortVal = ResolveActiveEffort(profileDir, activeModel, "")
+	}
+	convID := payload.ConversationID
+	if convID == "" {
+		convID = payload.SessionID
+	}
+
+	if profileDir != "" && (hasCtx || payload.ConversationTitle != "" || payload.Cost > 0 || convID != "") {
+		state := &SessionContextState{
+			UsedPercentage:      ctxUsedPct,
+			InputTokens:         inputTokens,
+			CacheReadTokens:     cacheReadTokens,
+			CacheCreationTokens: cacheCreationTokens,
+			ModelID:             payload.Model.ID,
+			ModelDisplayName:    payload.Model.DisplayName,
+			ConversationTitle:   payload.ConversationTitle,
+			ConversationID:      convID,
+			Cost:                payload.Cost,
+			Effort:              effortVal,
+		}
+		if existingState, ok := GetSessionContextState(profileDir); ok && existingState != nil {
+			if !hasCtx {
+				state.UsedPercentage = existingState.UsedPercentage
+				state.InputTokens = existingState.InputTokens
+				state.CacheReadTokens = existingState.CacheReadTokens
+				state.CacheCreationTokens = existingState.CacheCreationTokens
+			} else if state.InputTokens == 0 && existingState.InputTokens > 0 {
+				state.InputTokens = existingState.InputTokens
+				state.CacheReadTokens = existingState.CacheReadTokens
+				state.CacheCreationTokens = existingState.CacheCreationTokens
+			}
+			if state.ModelID == "" {
+				state.ModelID = existingState.ModelID
+			}
+			if state.ModelDisplayName == "" {
+				state.ModelDisplayName = existingState.ModelDisplayName
+			}
+			if state.ConversationTitle == "" {
+				state.ConversationTitle = existingState.ConversationTitle
+			}
+			if state.ConversationID == "" {
+				state.ConversationID = existingState.ConversationID
+			}
+			if state.Cost == 0 {
+				state.Cost = existingState.Cost
+			}
+			if state.Effort == "" {
+				state.Effort = existingState.Effort
+			}
+		}
+		_ = SaveSessionContext(profileDir, state)
+		costVal = state.Cost
+		if state.Effort != "" {
+			effortVal = state.Effort
+		}
 	}
 
 	// If active model is provided in payload, update .active_model cache and settings.json only if changed
@@ -185,7 +324,7 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	// Format high-contrast real-time telemetry string for Antigravity CLI footer
 	useColor := os.Getenv("NO_COLOR") == ""
 	ctxPct := int(ctxUsedPct + 0.5)
-	statusLineStr := FormatStatusLineText(currentProfile, activeModel, ctxPct, hasCtx, quotaDetails, useColor)
+	statusLineStr := FormatStatusLineText(currentProfile, activeModel, effortVal, costVal, ctxPct, hasCtx, quotaDetails, useColor)
 
 	if stdout != nil && statusLineStr != "" {
 		fmt.Fprintln(stdout, statusLineStr)
@@ -224,6 +363,10 @@ func parsePayloadQuota(quotaMap map[string]struct {
 		if rTime == "" {
 			rTime = q.ResetTimeAlt
 		}
+		resetSec := q.ResetInSeconds
+		if resetSec == 0 && q.ResetInSecondsAlt > 0 {
+			resetSec = q.ResetInSecondsAlt
+		}
 		var parsedReset time.Time
 		if rTime != "" {
 			if tVal, tErr := time.Parse(time.RFC3339, rTime); tErr == nil {
@@ -231,15 +374,20 @@ func parsePayloadQuota(quotaMap map[string]struct {
 			} else if tVal, tErr := time.Parse("2006-01-02T15:04:05Z", rTime); tErr == nil {
 				parsedReset = tVal
 			}
+		} else if resetSec > 0 {
+			parsedReset = time.Now().Add(time.Duration(resetSec) * time.Second)
 		}
-		if strings.Contains(k, "5h") || strings.Contains(k, "gemini") {
-			details.Fraction5H = frac
-			details.ResetTime5H = parsedReset
-			details.CompactReset5H = FormatCompactResetTime(parsedReset, frac)
-		} else if strings.Contains(k, "week") || strings.Contains(k, "7d") {
+		isWeekly := strings.Contains(k, "week") || strings.Contains(k, "7d")
+		is5H := strings.Contains(k, "5h") || (strings.Contains(k, "gemini") && !isWeekly)
+
+		if isWeekly {
 			details.FractionWeekly = frac
 			details.ResetTimeWeekly = parsedReset
 			details.CompactResetWeekly = FormatCompactResetTime(parsedReset, frac)
+		} else if is5H {
+			details.Fraction5H = frac
+			details.ResetTime5H = parsedReset
+			details.CompactReset5H = FormatCompactResetTime(parsedReset, frac)
 		}
 	}
 	if details.Fraction5H >= 0 || details.FractionWeekly >= 0 {
@@ -249,9 +397,9 @@ func parsePayloadQuota(quotaMap map[string]struct {
 }
 
 // FormatStatusLineText formats the real-time statusline text rendered in Antigravity CLI's footer bar.
-// Layout: [profile] · % ctx · model · 5H: % (reset) · Wk: % (reset)
-// Example: [davidnguyen] · 5% ctx · gemini-3.7-flash · 5H: 95% (1h26m) · Wk: 79% (6h35m)
-func FormatStatusLineText(profileName, modelName string, ctxPct int, hasCtx bool, quotaDetails *ModelQuotaDetails, useColor bool) string {
+// Layout: [profile] · % ctx · model (effort) · cost · 5H: % (reset) · Wk: % (reset)
+// Example: [davidnguyen] · 5% ctx · gemini-3.7-flash (high) · $0.0042 · 5H: 95% (1h26m) · Wk: 79% (6h35m)
+func FormatStatusLineText(profileName, modelName, effort string, cost float64, ctxPct int, hasCtx bool, quotaDetails *ModelQuotaDetails, useColor bool) string {
 	var parts []string
 
 	sep := " · "
@@ -283,16 +431,33 @@ func FormatStatusLineText(profileName, modelName string, ctxPct int, hasCtx bool
 		parts = append(parts, ctxStr)
 	}
 
-	// 3. Active Model
+	// 3. Active Model & Effort
 	if modelName != "" {
 		mStr := modelName
-		if useColor {
-			mStr = fmt.Sprintf("\033[94m%s\033[0m", modelName)
+		if effort != "" {
+			if useColor {
+				mStr = fmt.Sprintf("\033[94m%s\033[0m \033[36m(%s)\033[0m", modelName, effort)
+			} else {
+				mStr = fmt.Sprintf("%s (%s)", modelName, effort)
+			}
+		} else {
+			if useColor {
+				mStr = fmt.Sprintf("\033[94m%s\033[0m", modelName)
+			}
 		}
 		parts = append(parts, mStr)
 	}
 
-	// 4. 5H Quota
+	// 4. Cumulative Cost
+	if cost > 0 || hasCtx {
+		costStr := FormatCost(cost)
+		if useColor {
+			costStr = fmt.Sprintf("\033[32m%s\033[0m", costStr)
+		}
+		parts = append(parts, costStr)
+	}
+
+	// 5. 5H Quota
 	if quotaDetails != nil && quotaDetails.Fraction5H >= 0 {
 		pct5h := int(quotaDetails.Fraction5H*100 + 0.5)
 		q5hStr := fmt.Sprintf("%d%%", pct5h)
@@ -311,7 +476,7 @@ func FormatStatusLineText(profileName, modelName string, ctxPct int, hasCtx bool
 		parts = append(parts, q5hStr)
 	}
 
-	// 5. Weekly Quota
+	// 6. Weekly Quota
 	if quotaDetails != nil && quotaDetails.FractionWeekly >= 0 {
 		pctWk := int(quotaDetails.FractionWeekly*100 + 0.5)
 		qWkStr := fmt.Sprintf("%d%%", pctWk)
@@ -360,7 +525,12 @@ func chainPreviousStatusLine(ctx context.Context, profileDir string, input []byt
 	cmdCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "sh", "-c", original.Command)
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(cmdCtx, "cmd.exe", "/c", original.Command)
+	} else {
+		cmd = exec.CommandContext(cmdCtx, "sh", "-c", original.Command)
+	}
 	cmd.Stdin = bytes.NewReader(input)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

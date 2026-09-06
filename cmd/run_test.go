@@ -105,8 +105,8 @@ func TestEnsureDefaultModelAndEffort(t *testing.T) {
 		}
 	})
 
-	t.Run("Ignores subcommands like models, agents, help", func(t *testing.T) {
-		subcmds := []string{"models", "agents", "help", "version"}
+	t.Run("Ignores subcommands like models, agents, help, mcp, mic-serve, remote-control", func(t *testing.T) {
+		subcmds := []string{"models", "agents", "help", "version", "mcp", "mic-serve", "remote-control"}
 		for _, sc := range subcmds {
 			args := []string{sc}
 			res := EnsureDefaultModelAndEffort(args)
@@ -136,4 +136,64 @@ func TestRemoteControlArgHandling(t *testing.T) {
 			t.Errorf("expected both --model and --remote-control in result, got %v", res)
 		}
 	})
+}
+
+func TestIsInteractiveSession(t *testing.T) {
+	// Interactive cases
+	interactiveCases := [][]string{
+		{},
+		{"-c"},
+		{"--continue"},
+		{"--conversation", "conv-12345"},
+		{"--conversation=conv-12345"},
+		{"--model", "gemini-3.8-flash"},
+		{"--prompt-interactive", "hello world"},
+		{"-i", "hello world"},
+		{"-i", "update the database"},
+		{"--model", "agent"},
+		{"--system-prompt", "models"},
+		{"update", "the", "login", "button"},
+		{"help", "me", "refactor", "this"},
+		{"models", "of", "computation"},
+		{"--", "update", "the", "login", "button"},
+		{"--", "models"},
+		{"--model", "gemini-3.8-flash", "--", "update", "docs"},
+	}
+	for _, tc := range interactiveCases {
+		if !isInteractiveSession(tc) {
+			t.Errorf("expected %v to be detected as interactive, got false", tc)
+		}
+	}
+
+	// Non-interactive cases
+	nonInteractiveCases := [][]string{
+		{"-p", "run task"},
+		{"-p=run task"},
+		{"--print", "run task"},
+		{"--prompt", "run task"},
+		{"--prompt=run task"},
+		{"--print=run task"},
+		{"--input-format", "stream-json"},
+		{"--input-format=stream-json"},
+		{"--output-format", "json"},
+		{"--output-format=json"},
+		{"-h"},
+		{"--help"},
+		{"-v"},
+		{"--version"},
+		{"auth", "status"},
+		{"config", "get"},
+		{"mcp", "list"},
+		{"mic-serve"},
+		{"remote-control", "status"},
+		{"models"},
+		{"agents"},
+		{"version"},
+		{"update"},
+	}
+	for _, tc := range nonInteractiveCases {
+		if isInteractiveSession(tc) {
+			t.Errorf("expected %v to be detected as non-interactive, got true", tc)
+		}
+	}
 }

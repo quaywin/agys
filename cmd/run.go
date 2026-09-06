@@ -216,8 +216,58 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 		profile.SyncModelToSettings(profileDir, activeModel)
 	}
 
+	// Keep copy of original user args before model/effort injection for flag preservation and session detection
+	originalUserArgs := append([]string(nil), agyArgs...)
+
 	// Apply default model and effort to agyArgs using resolved activeModel
 	agyArgs = EnsureDefaultModelAndEffortWithModel(agyArgs, activeModel)
+
+	// Persist active reasoning effort to profile cache
+	activeEffort := ""
+	for i := 0; i < len(agyArgs); i++ {
+		if agyArgs[i] == "--effort" && i+1 < len(agyArgs) {
+			activeEffort = agyArgs[i+1]
+			break
+		} else if strings.HasPrefix(agyArgs[i], "--effort=") {
+			activeEffort = strings.TrimPrefix(agyArgs[i], "--effort=")
+			break
+		}
+	}
+	if activeEffort != "" {
+		_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_effort"), []byte(activeEffort+"\n"), 0600)
+	} else {
+		_ = os.Remove(filepath.Join(profileDir, ".active_effort"))
+	}
+
+	// Clean up stale session context on fresh new interactive session start (not a resume)
+	isResume := false
+	resumeConvID := ""
+	for i := 0; i < len(originalUserArgs); i++ {
+		a := originalUserArgs[i]
+		if a == "-c" || a == "--continue" {
+			isResume = true
+			break
+		}
+		if strings.HasPrefix(a, "--conversation=") {
+			isResume = true
+			resumeConvID = strings.TrimPrefix(a, "--conversation=")
+			break
+		}
+		if a == "--conversation" && i+1 < len(originalUserArgs) {
+			isResume = true
+			resumeConvID = originalUserArgs[i+1]
+			break
+		}
+	}
+	if !isResume && isInteractiveSession(originalUserArgs) {
+		_ = profile.ResetSessionContext(profileDir)
+	} else if isResume && resumeConvID != "" {
+		if existingState, ok := profile.GetSessionContextState(profileDir); ok && existingState != nil {
+			if existingState.ConversationID != "" && existingState.ConversationID != resumeConvID {
+				_ = profile.ResetSessionContext(profileDir)
+			}
+		}
+	}
 
 	// Ensure statusLine hook is configured in settings.json to capture real-time context window and render footer telemetry
 	_ = profile.SyncStatusLineSettings(profileDir)
@@ -244,17 +294,7 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 	// Capture latest conversation info after execution
 	idAfter, _, _ := profile.GetLatestConversationFileInfo(targetProfile)
 
-	isInteractive := true
-	for _, arg := range agyArgs {
-		if isAgySubcommand(arg) {
-			isInteractive = false
-			break
-		}
-		if arg == "-p" || arg == "--print" || arg == "--prompt" {
-			isInteractive = false
-			break
-		}
-	}
+	isInteractive := isInteractiveSession(originalUserArgs)
 
 	if idAfter != "" && isInteractive {
 		// Save to cache for O(1) next-time startup
@@ -262,8 +302,8 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 
 		// Filter out conversation-triggering arguments from original args to preserve other flags
 		var preservedFlags []string
-		for i := 0; i < len(agyArgs); i++ {
-			arg := agyArgs[i]
+		for i := 0; i < len(originalUserArgs); i++ {
+			arg := originalUserArgs[i]
 			if arg == "--conversation" {
 				i++ // Skip the value
 				continue
@@ -281,7 +321,11 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 		var extraFlags string
 		if len(preservedFlags) > 0 {
 			_ = profile.SaveSessionFlags(idAfter, preservedFlags)
-			extraFlags = " " + strings.Join(preservedFlags, " ")
+			var quotedFlags []string
+			for _, f := range preservedFlags {
+				quotedFlags = append(quotedFlags, shellQuote(f))
+			}
+			extraFlags = " " + strings.Join(quotedFlags, " ")
 		}
 
 		// In interactive terminal (TTY), clear the raw child agy resume lines:
@@ -327,20 +371,111 @@ func init() {
 }
 
 var agySubcommands = map[string]bool{
-	"agent":     true,
-	"agents":    true,
-	"changelog": true,
-	"help":      true,
-	"install":   true,
-	"models":    true,
-	"plugin":    true,
-	"plugins":   true,
-	"update":    true,
-	"version":   true,
+	"agent":          true,
+	"agents":         true,
+	"auth":           true,
+	"changelog":      true,
+	"config":         true,
+	"help":           true,
+	"install":        true,
+	"mcp":            true,
+	"mic-serve":      true,
+	"models":         true,
+	"plugin":         true,
+	"plugins":        true,
+	"remote-control": true,
+	"update":         true,
+	"version":        true,
+}
+
+var agyBoolFlags = map[string]bool{
+	"-c":                             true,
+	"--continue":                     true,
+	"--dangerously-skip-permissions": true,
+	"--disable-slash-commands":       true,
+	"--new-project":                  true,
+	"--sandbox":                      true,
+	"-h":                             true,
+	"--help":                         true,
+	"-v":                             true,
+	"--version":                      true,
+}
+
+var agySubcommandVerbs = map[string]map[string]bool{
+	"auth":           {"login": true, "logout": true, "status": true, "token": true, "refresh": true},
+	"config":         {"get": true, "set": true, "list": true, "path": true},
+	"mcp":            {"list": true, "add": true, "remove": true, "enable": true, "disable": true, "status": true},
+	"plugin":         {"list": true, "install": true, "uninstall": true, "enable": true, "disable": true},
+	"plugins":        {"list": true, "install": true, "uninstall": true, "enable": true, "disable": true},
+	"agent":          {"list": true, "create": true, "delete": true, "show": true},
+	"agents":         {"list": true},
+	"remote-control": {"status": true, "start": true, "stop": true},
 }
 
 func isAgySubcommand(arg string) bool {
 	return agySubcommands[arg]
+}
+
+func isAgySubcommandInvocation(args []string, idx int) bool {
+	cmd := args[idx]
+	if !isAgySubcommand(cmd) {
+		return false
+	}
+	// Subcommand alone with no trailing arguments (e.g. "models", "version", "update")
+	if idx == len(args)-1 {
+		return true
+	}
+	// Followed by a flag (e.g. "models -h", "update --check")
+	next := args[idx+1]
+	if strings.HasPrefix(next, "-") {
+		return true
+	}
+	// Followed by a known subcommand verb (e.g. "auth status", "mcp list")
+	if verbs, ok := agySubcommandVerbs[cmd]; ok && verbs[next] {
+		return true
+	}
+	return false
+}
+
+func findFirstPositionalIndex(args []string) int {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			// POSIX delimiter: anything after this is user prompt/arguments, not flags or subcommands
+			return -1
+		}
+		if strings.HasPrefix(arg, "-") {
+			if strings.Contains(arg, "=") || agyBoolFlags[arg] {
+				continue
+			}
+			i++ // skip flag argument
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+func isAgySubcommandCall(args []string) bool {
+	idx := findFirstPositionalIndex(args)
+	if idx < 0 {
+		return false
+	}
+	return isAgySubcommandInvocation(args, idx)
+}
+
+func isInteractiveSession(agyArgs []string) bool {
+	// First check explicit non-interactive flags
+	for _, arg := range agyArgs {
+		if arg == "-p" || arg == "--print" || arg == "--prompt" ||
+			strings.HasPrefix(arg, "-p=") || strings.HasPrefix(arg, "--prompt=") || strings.HasPrefix(arg, "--print=") ||
+			strings.HasPrefix(arg, "--input-format") || strings.HasPrefix(arg, "--output-format") ||
+			arg == "-h" || arg == "--help" || arg == "-v" || arg == "--version" {
+			return false
+		}
+	}
+
+	return !isAgySubcommandCall(agyArgs)
 }
 
 // EnsureDefaultModelAndEffort ensures agyArgs has a default model (gemini-3.8-flash)
@@ -356,15 +491,9 @@ func EnsureDefaultModelAndEffortWithModel(args []string, defaultModel string) []
 		defaultModel = profile.GetLatestGeminiModel()
 	}
 
-	// Check if first non-flag argument is an agy subcommand
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			continue
-		}
-		if isAgySubcommand(arg) {
-			return args
-		}
-		break
+	// Subcommands do not accept model/effort flags
+	if isAgySubcommandCall(args) {
+		return args
 	}
 
 	hasModel := false

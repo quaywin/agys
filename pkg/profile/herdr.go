@@ -293,15 +293,12 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 	return nil
 }
 
-func formatModelContext(ctxPct int, hasCtx bool, model string) string {
-	if hasCtx && model != "" {
-		return fmt.Sprintf("%d%% ctx · %s", ctxPct, model)
-	} else if model != "" {
-		return model
-	} else if hasCtx {
-		return fmt.Sprintf("%d%% ctx", ctxPct)
+func formatContextCost(ctxPct int, hasCtx bool, cost float64) string {
+	costStr := FormatCost(cost)
+	if hasCtx {
+		return fmt.Sprintf("%d%% ctx · %s", ctxPct, costStr)
 	}
-	return ""
+	return costStr
 }
 
 // FormatModelAbbreviation converts a full model name or group name into a clean, compact 3-letter abbreviation.
@@ -867,8 +864,35 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		}
 
 		displayAgent := profileName
+
+		// Load session context state (contains context %, conversation title, and cumulative cost)
+		var sessionState *SessionContextState
+		var ctxPct int
+		var hasCtx bool
+		if pDir, pErr := GetProfileDir(profileName); pErr == nil {
+			sessionState, _ = GetSessionContextState(pDir)
+			if sessionState != nil {
+				ctxPct = int(sessionState.UsedPercentage + 0.5)
+				hasCtx = true
+			}
+		}
+
+		convTitle := ""
+		costVal := 0.0
+		if sessionState != nil {
+			convTitle = sessionState.ConversationTitle
+			costVal = sessionState.Cost
+		}
+
+		truncatedConvTitle := convTitle
+		if len(truncatedConvTitle) > 36 {
+			truncatedConvTitle = strings.TrimSpace(truncatedConvTitle[:33]) + "..."
+		}
+
 		title := fmt.Sprintf("agys: %s", profileName)
-		if target.Title != "" {
+		if truncatedConvTitle != "" {
+			title = fmt.Sprintf("agys: %s · %s", truncatedConvTitle, profileName)
+		} else if target.Title != "" && !strings.Contains(target.Title, " · ") {
 			title = target.Title
 		}
 		tokens := map[string]string{
@@ -878,37 +902,18 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			tokens["model"] = targetModel
 		}
 
-		// Handle Row 2: Context window + Model
-		var ctxPct int
-		var hasCtx bool
-		if pDir, pErr := GetProfileDir(profileName); pErr == nil {
-			ctxPct, hasCtx = GetSessionContext(pDir)
-		}
-
-		modelCtxStr := formatModelContext(ctxPct, hasCtx, targetModel)
-		if updateContext {
-			if hasCtx {
-				tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
-				if modelCtxStr != "" {
-					tokens["quota_model_context"] = modelCtxStr
-				}
-			} else {
-				// If session context not found on disk yet, preserve existing context tokens from pane
-				if target.QuotaModelContext != "" {
-					tokens["quota_model_context"] = target.QuotaModelContext
-				} else if modelCtxStr != "" {
-					tokens["quota_model_context"] = modelCtxStr
-				}
-				if target.QuotaContext != "" {
-					tokens["quota_context"] = target.QuotaContext
-				}
-			}
+		// Handle Row 2: Context window + Cost (replaces Model with Cost on sidebar)
+		contextCostStr := formatContextCost(ctxPct, hasCtx, costVal)
+		if updateContext && (hasCtx || costVal > 0) {
+			tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
+			tokens["quota_model_context"] = contextCostStr
+			tokens["cost"] = FormatCost(costVal)
 		} else {
-			// Watcher polling: strictly preserve existing context tokens on the pane, or fallback to session context
+			// Preserve existing context tokens from pane if available, otherwise fallback to session context
 			if target.QuotaModelContext != "" {
 				tokens["quota_model_context"] = target.QuotaModelContext
-			} else if modelCtxStr != "" {
-				tokens["quota_model_context"] = modelCtxStr
+			} else if contextCostStr != "" {
+				tokens["quota_model_context"] = contextCostStr
 			}
 
 			if target.QuotaContext != "" {
@@ -916,6 +921,20 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			} else if hasCtx {
 				tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
 			}
+
+			if costVal > 0 {
+				tokens["cost"] = FormatCost(costVal)
+			} else if target.Tokens != nil && target.Tokens["cost"] != "" {
+				tokens["cost"] = target.Tokens["cost"]
+			} else {
+				tokens["cost"] = ""
+			}
+		}
+
+		if convTitle != "" {
+			tokens["conversation_title"] = convTitle
+		} else {
+			tokens["conversation_title"] = ""
 		}
 
 		var details *ModelQuotaDetails
@@ -960,7 +979,9 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 				}
 			}
 
-			if details.ResetStr5H != "" && details.ResetStr5H != "-" {
+			if convTitle != "" {
+				titleParts = append(titleParts, fmt.Sprintf("5H: %s", pct5hStr))
+			} else if details.ResetStr5H != "" && details.ResetStr5H != "-" {
 				titleParts = append(titleParts, fmt.Sprintf("5H: %s (%s)", pct5hStr, details.ResetStr5H))
 			} else {
 				titleParts = append(titleParts, fmt.Sprintf("5H: %s", pct5hStr))
@@ -983,7 +1004,9 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			if details.FractionWeekly >= 0 {
 				pctWk := int(details.FractionWeekly*100 + 0.5)
 				pctWkStr := fmt.Sprintf("%d%%", pctWk)
-				if details.ResetStrWeekly != "" && details.ResetStrWeekly != "-" {
+				if convTitle != "" {
+					titleParts = append(titleParts, fmt.Sprintf("Wk: %s", pctWkStr))
+				} else if details.ResetStrWeekly != "" && details.ResetStrWeekly != "-" {
 					titleParts = append(titleParts, fmt.Sprintf("Wk: %s (%s)", pctWkStr, details.ResetStrWeekly))
 				} else {
 					titleParts = append(titleParts, fmt.Sprintf("Wk: %s", pctWkStr))
@@ -1004,15 +1027,21 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			}
 
 			modelAbbr := FormatModelAbbreviation(targetModel, details.GroupName)
-			if modelAbbr != "" {
-				title = fmt.Sprintf("agys: %s [%s] %s", profileName, modelAbbr, strings.Join(titleParts, " • "))
+			var titlePrefix string
+			if truncatedConvTitle != "" {
+				titlePrefix = fmt.Sprintf("agys: %s · %s", truncatedConvTitle, profileName)
 			} else {
-				title = fmt.Sprintf("agys: %s %s", profileName, strings.Join(titleParts, " • "))
+				titlePrefix = fmt.Sprintf("agys: %s", profileName)
 			}
-
-			if target.PaneID == paneID {
-				SetTerminalTitle(title)
+			var modelTag string
+			if modelAbbr != "" {
+				modelTag = fmt.Sprintf(" [%s]", modelAbbr)
 			}
+			var partsStr string
+			if len(titleParts) > 0 {
+				partsStr = " " + strings.Join(titleParts, " • ")
+			}
+			title = titlePrefix + modelTag + partsStr
 		} else {
 			// Details unavailable: preserve existing quota tokens from pane if available so Row 3 does not vanish and flicker
 			hasExistingQuota := false
@@ -1039,6 +1068,10 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 				tokens["quota_week_warning"] = ""
 				tokens["quota_week_danger"] = ""
 			}
+		}
+
+		if target.PaneID == paneID {
+			SetTerminalTitle(title)
 		}
 
 		if isPaneMetadataUnchanged(target, displayAgent, title, tokens) {
@@ -1084,7 +1117,7 @@ func isPaneMetadataUnchanged(target HerdrPaneMatch, newDisplayAgent, newTitle st
 		}
 	}
 	for k, oldVal := range target.Tokens {
-		if (strings.HasPrefix(k, "quota_") || k == "profile" || k == "model" || k == "group") && oldVal != "" {
+		if (strings.HasPrefix(k, "quota_") || k == "profile" || k == "model" || k == "group" || k == "conversation_title" || k == "cost") && oldVal != "" {
 			if newTokens[k] != oldVal {
 				return false
 			}
@@ -1151,7 +1184,8 @@ func hasStaleAgysTelemetry(title string, tokens map[string]string) bool {
 		return true
 	}
 	for _, key := range []string{
-		"profile", "quota_context", "quota_model_context",
+		"profile", "model", "conversation_title", "cost",
+		"quota_context", "quota_model_context",
 		"quota_5h_normal", "quota_5h_warning", "quota_5h_danger",
 		"quota_week_normal", "quota_week_warning", "quota_week_danger",
 	} {
@@ -1174,6 +1208,8 @@ func clearHerdrPaneMetadata(ctx context.Context, socketPath, paneID string) erro
 		"profile":             nil,
 		"model":               nil,
 		"group":               nil,
+		"conversation_title":  nil,
+		"cost":                nil,
 		"quota_context":       nil,
 		"quota_model_context": nil,
 		"quota_5h_normal":     nil,
