@@ -1342,4 +1342,52 @@ func TestReportHerdrMetadata_NeverOverwritesOtherAgentsOrPanes(t *testing.T) {
 	}
 }
 
+func TestHandleHerdrSummarize_Validation(t *testing.T) {
+	ctx := context.Background()
+	// Should return nil on empty inputs
+	if err := HandleHerdrSummarize(ctx, "", "p1", "c1", ""); err != nil {
+		t.Errorf("expected nil error on empty profile, got: %v", err)
+	}
+	if err := HandleHerdrSummarize(ctx, "prof", "", "c1", ""); err != nil {
+		t.Errorf("expected nil error on empty pane, got: %v", err)
+	}
+	if err := HandleHerdrSummarize(ctx, "prof", "p1", "", ""); err != nil {
+		t.Errorf("expected nil error on empty conv, got: %v", err)
+	}
+	if err := HandleHerdrSummarize(ctx, "nonexistent-profile-xyz", "p1", "c1", ""); err != nil {
+		t.Errorf("expected nil error on nonexistent profile, got: %v", err)
+	}
+}
+
+func TestHandleHerdrSummarize_PaneSwitched(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+
+	pDir, err := Create("test-sum-prof")
+	if err != nil {
+		t.Fatalf("failed to create profile: %v", err)
+	}
+
+	// Session is now on "conv-2"
+	_ = SaveSessionContext(pDir, &SessionContextState{
+		ConversationID:    "conv-2",
+		ConversationTitle: "New topic",
+	})
+
+	// Try summarizing for "conv-1" which was previous conversation
+	// HandleHerdrSummarize should abort and NOT overwrite the new conversation's title
+	err = HandleHerdrSummarize(context.Background(), "test-sum-prof", "w1:p1", "conv-1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	state, ok := GetSessionContextState(pDir)
+	if !ok || state.ConversationTitle != "New topic" {
+		t.Errorf("expected ConversationTitle to remain 'New topic', got: %v", state.ConversationTitle)
+	}
+}
+
 

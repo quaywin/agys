@@ -305,3 +305,46 @@ func TestListSessionsVolumesPath(t *testing.T) {
 		t.Errorf("expected ProjectName 'agys', got %q", sessions[0].ProjectName)
 	}
 }
+
+func TestCleanPromptSummary(t *testing.T) {
+	tests := []struct {
+		input    string
+		contains string
+	}{
+		{
+			input:    "về phần thông tin herdr ở sidebar tôi thấy dòng thứ 2 thể hiện model",
+			contains: "Dòng thứ 2 thể hiện model",
+		},
+		{
+			input:    "tôi thấy cost hiện tại sao lúc nào cũng show 0",
+			contains: "Cost hiện tại sao lúc nào cũng show 0",
+		},
+		{
+			input:    "sao chưa thấy phần summary cho title hoạt động vậy?",
+			contains: "Phần summary cho title hoạt động",
+		},
+		{
+			input:    "can you please help me fix the login authentication bug?",
+			contains: "Fix the login authentication bug",
+		},
+		{
+			input:    "/ask How do I configure Herdr sockets?",
+			contains: "Configure Herdr sockets",
+		},
+		{
+			input:    "<USER_REQUEST>\nFix nil pointer dereference\n</USER_REQUEST>",
+			contains: "Fix nil pointer dereference",
+		},
+		{
+			input:    "về phần thông tin herdr ở sidebar tôi thấy dòng thứ 2 thể hiện model nhưng không có tiêu đề tóm tắt cho phiên trò chuyện này",
+			contains: "Dòng thứ 2 thể hiện model nhưng không có tiêu đề...",
+		},
+	}
+
+	for _, tt := range tests {
+		got := cleanPromptSummary(tt.input)
+		if got != tt.contains {
+			t.Errorf("cleanPromptSummary(%q) = %q, expected %q", tt.input, got, tt.contains)
+		}
+	}
+}

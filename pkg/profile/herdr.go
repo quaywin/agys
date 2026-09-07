@@ -9,10 +9,13 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/gofrs/flock"
 )
@@ -200,6 +203,25 @@ func ResolveActiveModel(profileDir, modelName string) string {
 	return latestFlash
 }
 
+// resolveHerdrProfile resolves the active profile and its directory with pane and auto fallbacks.
+func resolveHerdrProfile(ctx context.Context, profileName, paneID string, panes []HerdrRawPane) (string, string) {
+	if !IsAuto(profileName) && profileName != "" {
+		pDir, _ := GetProfileDir(profileName)
+		return profileName, pDir
+	}
+	if paneID != "" && len(panes) > 0 {
+		if paneProf := resolveProfileFromPaneList(panes, paneID); paneProf != "" {
+			pDir, _ := GetProfileDir(paneProf)
+			return paneProf, pDir
+		}
+	}
+	if best, _, err := SelectBestProfile(ctx); err == nil && best != "" {
+		pDir, _ := GetProfileDir(best)
+		return best, pDir
+	}
+	return profileName, ""
+}
+
 // HandleHerdrHook executes the Herdr lifecycle hook directly in pure Go without any Python dependency.
 func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error {
 	if !IsInHerdrEnvironment() {
@@ -236,25 +258,8 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 		_ = ApplyHerdr2RowConfig(configPath)
 	}
 
-	currentProfile, profileDir := ResolveProfileFromEnv()
-	if IsAuto(currentProfile) || currentProfile == "" {
-		if paneID != "" && len(panes) > 0 {
-			if paneProf := resolveProfileFromPaneList(panes, paneID); paneProf != "" {
-				currentProfile = paneProf
-				if pDir, pErr := GetProfileDir(paneProf); pErr == nil {
-					profileDir = pDir
-				}
-			}
-		}
-		if IsAuto(currentProfile) || currentProfile == "" {
-			if best, _, err := SelectBestProfile(ctx); err == nil && best != "" {
-				currentProfile = best
-				if pDir, pErr := GetProfileDir(best); pErr == nil {
-					profileDir = pDir
-				}
-			}
-		}
-	}
+	currentProfile, _ := ResolveProfileFromEnv()
+	currentProfile, profileDir := resolveHerdrProfile(ctx, currentProfile, paneID, panes)
 	activeModel := ResolveActiveModel(profileDir, "")
 
 	if action == "session" && stdin != nil {
@@ -296,7 +301,7 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 						state.InputTokens = 0
 						state.CacheReadTokens = 0
 						state.CacheCreationTokens = 0
-					} else if resolvedTitle != "" {
+					} else if state.ConversationTitle == "" && resolvedTitle != "" {
 						state.ConversationTitle = resolvedTitle
 					}
 					_ = SaveSessionContext(profileDir, state)
@@ -309,6 +314,11 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 				reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 				_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel)
 				cancel()
+
+				// Asynchronously trigger AI title summarization in background
+				if resolvedTitle != "" && resolvedTitle != "(No prompt summary)" && paneID != "" {
+					SpawnAsyncTitleSummarizer(currentProfile, paneID, payload.ConversationID, payload.TranscriptPath)
+				}
 			}
 		}
 	} else if action == "quota" || action == "stop" {
@@ -587,6 +597,20 @@ func listHerdrPanes(ctx context.Context, socketPath string) []HerdrRawPane {
 	return parsed.Result.Panes
 }
 
+var (
+	quotaTierKeys = []string{
+		"quota_5h_normal", "quota_5h_warning", "quota_5h_danger",
+		"quota_week_normal", "quota_week_warning", "quota_week_danger",
+	}
+
+	agysHerdrTokenKeys = []string{
+		"profile", "model", "group", "conversation_title", "cost",
+		"quota_context", "quota_model_context",
+		"quota_5h_normal", "quota_5h_warning", "quota_5h_danger",
+		"quota_week_normal", "quota_week_warning", "quota_week_danger",
+	}
+)
+
 // HerdrPaneMatch represents a matched Herdr pane along with its specific active model and existing tokens.
 type HerdrPaneMatch struct {
 	PaneID            string
@@ -598,31 +622,42 @@ type HerdrPaneMatch struct {
 	Tokens            map[string]string
 }
 
+func createPaneMatch(p HerdrRawPane, profileName, currentModel string) HerdrPaneMatch {
+	disp := p.DisplayAgent
+	if disp == "" {
+		disp = profileName
+	}
+	model := currentModel
+	var quotaModelContext, quotaContext string
+	if p.Tokens != nil {
+		if p.Tokens["model"] != "" && (currentModel == "" || currentModel == "auto") {
+			model = p.Tokens["model"]
+		}
+		quotaModelContext = p.Tokens["quota_model_context"]
+		quotaContext = p.Tokens["quota_context"]
+	}
+	return HerdrPaneMatch{
+		PaneID:            p.PaneID,
+		Model:             model,
+		DisplayAgent:      disp,
+		QuotaModelContext: quotaModelContext,
+		QuotaContext:      quotaContext,
+		Title:             p.Title,
+		Tokens:            p.Tokens,
+	}
+}
+
 func getHerdrCurrentPaneFromList(panes []HerdrRawPane, paneID, profileName, currentModel string) HerdrPaneMatch {
-	match := HerdrPaneMatch{
+	for _, p := range panes {
+		if p.PaneID == paneID {
+			return createPaneMatch(p, profileName, currentModel)
+		}
+	}
+	return HerdrPaneMatch{
 		PaneID:       paneID,
 		Model:        currentModel,
 		DisplayAgent: profileName,
 	}
-	for _, p := range panes {
-		if p.PaneID == paneID {
-			match.DisplayAgent = p.DisplayAgent
-			if match.DisplayAgent == "" {
-				match.DisplayAgent = profileName
-			}
-			match.Title = p.Title
-			match.Tokens = p.Tokens
-			if p.Tokens != nil {
-				if p.Tokens["model"] != "" && (currentModel == "" || currentModel == "auto") {
-					match.Model = p.Tokens["model"]
-				}
-				match.QuotaModelContext = p.Tokens["quota_model_context"]
-				match.QuotaContext = p.Tokens["quota_context"]
-			}
-			break
-		}
-	}
-	return match
 }
 
 func getMatchingHerdrPanesFromList(ctx context.Context, panes []HerdrRawPane, socketPath, currentPaneID, profileName, currentModel string) []HerdrPaneMatch {
@@ -662,33 +697,28 @@ func getMatchingHerdrPanesFromList(ctx context.Context, panes []HerdrRawPane, so
 		}
 
 		if isMatch && !seen[p.PaneID] {
-			paneModel := currentModel
-			var quotaModelContext, quotaContext string
-			if p.Tokens != nil {
-				if p.Tokens["model"] != "" && (currentModel == "" || currentModel == "auto") {
-					paneModel = p.Tokens["model"]
-				}
-				quotaModelContext = p.Tokens["quota_model_context"]
-				quotaContext = p.Tokens["quota_context"]
-			}
-			disp := p.DisplayAgent
-			if disp == "" {
-				disp = profileName
-			}
-			targetPanes = append(targetPanes, HerdrPaneMatch{
-				PaneID:            p.PaneID,
-				Model:             paneModel,
-				DisplayAgent:      disp,
-				QuotaModelContext: quotaModelContext,
-				QuotaContext:      quotaContext,
-				Title:             p.Title,
-				Tokens:            p.Tokens,
-			})
+			targetPanes = append(targetPanes, createPaneMatch(p, profileName, currentModel))
 			seen[p.PaneID] = true
 		}
 	}
 
 	return targetPanes
+}
+
+func setQuotaTierTokens(tokens map[string]string, prefix, quotaStr string, pct int) {
+	tokens[prefix+"_normal"] = ""
+	tokens[prefix+"_warning"] = ""
+	tokens[prefix+"_danger"] = ""
+	if quotaStr == "" {
+		return
+	}
+	if pct >= 20 {
+		tokens[prefix+"_normal"] = quotaStr
+	} else if pct > 5 {
+		tokens[prefix+"_warning"] = quotaStr
+	} else {
+		tokens[prefix+"_danger"] = quotaStr
+	}
 }
 
 func getMatchingHerdrPanes(ctx context.Context, socketPath, currentPaneID, profileName, currentModel string) []HerdrPaneMatch {
@@ -792,23 +822,12 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		}
 	}
 
-	if IsAuto(profileName) || profileName == "" {
-		if paneID != "" && len(panes) > 0 {
-			if paneProf := resolveProfileFromPaneList(panes, paneID); paneProf != "" {
-				profileName = paneProf
-			}
-		}
-		if IsAuto(profileName) || profileName == "" {
-			if best, _, err := SelectBestProfile(ctx); err == nil && best != "" {
-				profileName = best
-			}
-		}
-	}
+	profileName, pDir := resolveHerdrProfile(quotaCtx, profileName, paneID, panes)
 
 	// Resolve explicit active model if provided; otherwise let each target pane
 	// preserve its own active model token before falling back to profile default.
 	if modelName != "" {
-		if pDir, err := GetProfileDir(profileName); err == nil {
+		if pDir != "" {
 			modelName = ResolveActiveModel(pDir, modelName)
 		} else {
 			modelName = NormalizeModelName(modelName)
@@ -835,19 +854,19 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			targetModel = target.Model
 		}
 		if targetModel == "" || targetModel == "auto" || targetModel == "gemini" {
-			if pDir, err := GetProfileDir(profileName); err == nil {
+			if pDir != "" {
 				targetModel = ResolveActiveModel(pDir, "")
 			} else {
 				targetModel = GetLatestGeminiModel()
 			}
 		}
 
-		// Load session context state (contains context %, conversation title, and cumulative cost)
+		// Load session context state for this pane (context %, conversation title, and cost)
 		var sessionState *SessionContextState
 		var ctxPct int
 		var hasCtx bool
-		if pDir, pErr := GetProfileDir(profileName); pErr == nil {
-			sessionState, _ = GetSessionContextState(pDir)
+		if pDir != "" {
+			sessionState, _ = GetSessionContextStateForPane(pDir, target.PaneID)
 			if sessionState != nil {
 				ctxPct = int(sessionState.UsedPercentage + 0.5)
 				hasCtx = true
@@ -891,13 +910,8 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 
 		// Handle Row 2: Conversation Title (replaces context window & cost on sidebar)
 		if isCurrentPane {
-			if convTitle != "" {
-				tokens["conversation_title"] = convTitle
-				tokens["quota_model_context"] = convTitle
-			} else {
-				tokens["conversation_title"] = ""
-				tokens["quota_model_context"] = ""
-			}
+			tokens["conversation_title"] = convTitle
+			tokens["quota_model_context"] = convTitle
 
 			// Context window and cost metrics remain available in tokens
 			if hasCtx {
@@ -929,57 +943,31 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			details, err = GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
 		}
 		if err == nil && details != nil && details.Fraction5H >= 0 {
-			// Clear all tier keys first so Herdr only renders the newly active tier
-			tokens["quota_5h_normal"] = ""
-			tokens["quota_5h_warning"] = ""
-			tokens["quota_5h_danger"] = ""
-			tokens["quota_week_normal"] = ""
-			tokens["quota_week_warning"] = ""
-			tokens["quota_week_danger"] = ""
-
 			pct5h := int(details.Fraction5H*100 + 0.5)
-			pct5hStr := fmt.Sprintf("%d%%", pct5h)
+			quota5hStr := fmt.Sprintf("%d%%", pct5h)
+			if details.CompactReset5H != "" {
+				quota5hStr = fmt.Sprintf("%s %s", quota5hStr, details.CompactReset5H)
+			}
 			if details.GroupName != "" {
 				tokens["group"] = details.GroupName
 			}
-			// Format compact 5H token without "5h" prefix: "85% 2h" or "85%"
-			quota5hStr := pct5hStr
-			if details.CompactReset5H != "" {
-				quota5hStr = fmt.Sprintf("%s %s", pct5hStr, details.CompactReset5H)
-			}
-			if pct5h >= 20 {
-				tokens["quota_5h_normal"] = quota5hStr
-			} else if pct5h > 5 {
-				tokens["quota_5h_warning"] = quota5hStr
-			} else {
-				tokens["quota_5h_danger"] = quota5hStr
-			}
+			setQuotaTierTokens(tokens, "quota_5h", quota5hStr, pct5h)
 
 			if details.FractionWeekly >= 0 {
 				pctWk := int(details.FractionWeekly*100 + 0.5)
-				pctWkStr := fmt.Sprintf("%d%%", pctWk)
-
-				// Format compact Weekly token without "7d" prefix: "90% 3d" or "90%"
-				quotaWkStr := pctWkStr
+				quotaWkStr := fmt.Sprintf("%d%%", pctWk)
 				if details.CompactResetWeekly != "" {
-					quotaWkStr = fmt.Sprintf("%s %s", pctWkStr, details.CompactResetWeekly)
+					quotaWkStr = fmt.Sprintf("%s %s", quotaWkStr, details.CompactResetWeekly)
 				}
-				if pctWk >= 20 {
-					tokens["quota_week_normal"] = quotaWkStr
-				} else if pctWk > 5 {
-					tokens["quota_week_warning"] = quotaWkStr
-				} else {
-					tokens["quota_week_danger"] = quotaWkStr
-				}
+				setQuotaTierTokens(tokens, "quota_week", quotaWkStr, pctWk)
+			} else {
+				setQuotaTierTokens(tokens, "quota_week", "", 0)
 			}
 		} else {
 			// Details unavailable: preserve existing quota tokens from pane if available so Row 3 does not vanish and flicker
 			hasExistingQuota := false
 			if target.Tokens != nil {
-				for _, k := range []string{
-					"quota_5h_normal", "quota_5h_warning", "quota_5h_danger",
-					"quota_week_normal", "quota_week_warning", "quota_week_danger",
-				} {
+				for _, k := range quotaTierKeys {
 					if target.Tokens[k] != "" {
 						hasExistingQuota = true
 						tokens[k] = target.Tokens[k]
@@ -990,13 +978,8 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 				}
 			}
 			if !hasExistingQuota {
-				// No prior quota on pane: initialize tier keys to empty strings so Herdr clears any stale tokens
-				tokens["quota_5h_normal"] = ""
-				tokens["quota_5h_warning"] = ""
-				tokens["quota_5h_danger"] = ""
-				tokens["quota_week_normal"] = ""
-				tokens["quota_week_warning"] = ""
-				tokens["quota_week_danger"] = ""
+				setQuotaTierTokens(tokens, "quota_5h", "", 0)
+				setQuotaTierTokens(tokens, "quota_week", "", 0)
 			}
 		}
 
@@ -1140,12 +1123,7 @@ func hasStaleAgysTelemetry(title string, tokens map[string]string) bool {
 	if strings.HasPrefix(title, "agys") || strings.Contains(title, "agys: ") || strings.Contains(title, "agys [") {
 		return true
 	}
-	for _, key := range []string{
-		"profile", "model", "conversation_title", "cost",
-		"quota_context", "quota_model_context",
-		"quota_5h_normal", "quota_5h_warning", "quota_5h_danger",
-		"quota_week_normal", "quota_week_warning", "quota_week_danger",
-	} {
+	for _, key := range agysHerdrTokenKeys {
 		if tokens[key] != "" {
 			return true
 		}
@@ -1161,20 +1139,9 @@ func clearHerdrPaneMetadata(ctx context.Context, socketPath, paneID string) erro
 		return nil
 	}
 
-	clearTokens := map[string]*string{
-		"profile":             nil,
-		"model":               nil,
-		"group":               nil,
-		"conversation_title":  nil,
-		"cost":                nil,
-		"quota_context":       nil,
-		"quota_model_context": nil,
-		"quota_5h_normal":     nil,
-		"quota_5h_warning":    nil,
-		"quota_5h_danger":     nil,
-		"quota_week_normal":   nil,
-		"quota_week_warning":  nil,
-		"quota_week_danger":   nil,
+	clearTokens := make(map[string]*string, len(agysHerdrTokenKeys))
+	for _, key := range agysHerdrTokenKeys {
+		clearTokens[key] = nil
 	}
 
 	payload := map[string]interface{}{
@@ -1246,4 +1213,105 @@ func StartHerdrQuotaWatcher(ctx context.Context, profileName string, modelName .
 	return func() {
 		cancel()
 	}
+}
+
+// SpawnAsyncTitleSummarizer launches a detached background worker to generate an AI title via LLM.
+func SpawnAsyncTitleSummarizer(profileName, paneID, convID, transcriptPath string) {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		return
+	}
+
+	args := []string{
+		"herdr-hook", "summarize",
+		"--profile", profileName,
+		"--pane", paneID,
+		"--conv", convID,
+		"--transcript", transcriptPath,
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid: true,
+	}
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	_ = cmd.Start()
+}
+
+// HandleHerdrSummarize generates an AI title using the latest Gemini Flash model and updates Herdr metadata.
+func HandleHerdrSummarize(ctx context.Context, profileName, paneID, convID, transcriptPath string) error {
+	if profileName == "" || paneID == "" || convID == "" {
+		return nil
+	}
+
+	pDir, err := GetProfileDir(profileName)
+	if err != nil || pDir == "" {
+		return nil
+	}
+
+	origPaneID := os.Getenv("HERDR_PANE_ID")
+	defer func() {
+		if origPaneID == "" {
+			_ = os.Unsetenv("HERDR_PANE_ID")
+		} else {
+			_ = os.Setenv("HERDR_PANE_ID", origPaneID)
+		}
+	}()
+	os.Setenv("HERDR_PANE_ID", paneID)
+
+	prompt := ResolveConversationTitleFromTranscript(transcriptPath)
+	if prompt == "" {
+		prompt = ResolveConversationTitle(pDir, convID)
+	}
+	if prompt == "" || prompt == "(No prompt summary)" {
+		return nil
+	}
+
+	sumCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	flashModel := GetLatestGeminiModel()
+	extraArgs := []string{"--model", flashModel}
+	if ModelSupportsEffort(flashModel) {
+		extraArgs = append(extraArgs, "--effort", "low")
+	}
+
+	llmPrompt := fmt.Sprintf("[AGYS_INTERNAL_TITLE_GEN] Summarize into 3 to 5 words in the same language, no quotes, no markdown, no punctuation: %s", prompt)
+	outStr, err := ExecAgyPrompt(sumCtx, pDir, llmPrompt, extraArgs...)
+	if err != nil || strings.TrimSpace(outStr) == "" {
+		return nil
+	}
+
+	llmTitle := strings.TrimSpace(outStr)
+	llmTitle = strings.Trim(llmTitle, "\"`'*“”‘’")
+	llmTitle = strings.TrimRight(llmTitle, ".!?")
+	llmTitle = strings.Join(strings.Fields(llmTitle), " ")
+	runes := []rune(llmTitle)
+	if len(runes) > 0 {
+		runes[0] = unicode.ToUpper(runes[0])
+		llmTitle = string(runes)
+	}
+	llmTitle = TruncateTitle(llmTitle, 45)
+
+	// Verify pane context is still on the same conversation
+	state, ok := GetSessionContextStateForPane(pDir, paneID)
+	if !ok || state == nil {
+		return nil
+	}
+	if state.ConversationID != "" && state.ConversationID != convID {
+		return nil
+	}
+
+	if state.ConversationTitle == llmTitle {
+		return nil
+	}
+
+	state.ConversationTitle = llmTitle
+	_ = SaveSessionContextForPane(pDir, paneID, state)
+
+	activeModel := ResolveActiveModel(pDir, "")
+	reportCtx, reportCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer reportCancel()
+	return ReportHerdrMetadataWithModel(reportCtx, profileName, activeModel)
 }

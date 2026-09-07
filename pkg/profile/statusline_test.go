@@ -12,6 +12,7 @@ import (
 )
 
 func TestSessionContextSaveAndGet(t *testing.T) {
+	t.Setenv("HERDR_PANE_ID", "")
 	tempDir := t.TempDir()
 
 	// Initial check on empty

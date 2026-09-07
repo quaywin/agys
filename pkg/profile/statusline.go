@@ -70,8 +70,8 @@ type StatusLinePayload struct {
 	} `json:"quota"`
 }
 
-func getSessionContextPath(profileDir string) string {
-	if paneID := os.Getenv("HERDR_PANE_ID"); paneID != "" {
+func getSessionContextPathForPane(profileDir, paneID string) string {
+	if paneID != "" {
 		sanitized := strings.ReplaceAll(paneID, ":", "_")
 		sanitized = strings.ReplaceAll(sanitized, "/", "_")
 		return filepath.Join(profileDir, fmt.Sprintf(".session_context_%s.json", sanitized))
@@ -79,8 +79,12 @@ func getSessionContextPath(profileDir string) string {
 	return filepath.Join(profileDir, sessionContextFilename)
 }
 
-// SaveSessionContext saves the context window percentage and metrics to the profile directory.
-func SaveSessionContext(profileDir string, state *SessionContextState) error {
+func getSessionContextPath(profileDir string) string {
+	return getSessionContextPathForPane(profileDir, os.Getenv("HERDR_PANE_ID"))
+}
+
+// SaveSessionContextForPane saves session context for a specific pane.
+func SaveSessionContextForPane(profileDir, paneID string, state *SessionContextState) error {
 	if profileDir == "" || state == nil {
 		return nil
 	}
@@ -89,8 +93,13 @@ func SaveSessionContext(profileDir string, state *SessionContextState) error {
 	if err != nil {
 		return err
 	}
-	targetPath := getSessionContextPath(profileDir)
+	targetPath := getSessionContextPathForPane(profileDir, paneID)
 	return WriteFileAtomic(targetPath, data, 0600)
+}
+
+// SaveSessionContext saves the context window percentage and metrics to the profile directory.
+func SaveSessionContext(profileDir string, state *SessionContextState) error {
+	return SaveSessionContextForPane(profileDir, os.Getenv("HERDR_PANE_ID"), state)
 }
 
 // ResetSessionContext removes the cached session context file for a profile.
@@ -105,12 +114,12 @@ func ResetSessionContext(profileDir string) error {
 	return nil
 }
 
-// GetSessionContextState returns the cached session context state if valid and not expired (TTL 2 hours).
-func GetSessionContextState(profileDir string) (*SessionContextState, bool) {
+// GetSessionContextStateForPane returns the cached session context state for a specific pane.
+func GetSessionContextStateForPane(profileDir, paneID string) (*SessionContextState, bool) {
 	if profileDir == "" {
 		return nil, false
 	}
-	targetPath := getSessionContextPath(profileDir)
+	targetPath := getSessionContextPathForPane(profileDir, paneID)
 	data, err := os.ReadFile(targetPath)
 	if err != nil {
 		return nil, false
@@ -127,6 +136,11 @@ func GetSessionContextState(profileDir string) (*SessionContextState, bool) {
 	}
 
 	return &state, true
+}
+
+// GetSessionContextState returns the cached session context state if valid and not expired (TTL 2 hours).
+func GetSessionContextState(profileDir string) (*SessionContextState, bool) {
+	return GetSessionContextStateForPane(profileDir, os.Getenv("HERDR_PANE_ID"))
 }
 
 // GetSessionContext returns the cached context window percentage (0-100) if valid and not expired (TTL 2 hours).
@@ -239,6 +253,11 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		activeModel = ResolveActiveModel(profileDir, activeModel)
 	}
 
+	var existingState *SessionContextState
+	if profileDir != "" {
+		existingState, _ = GetSessionContextState(profileDir)
+	}
+
 	costVal := payload.Cost
 	effortVal := payload.Effort
 	if effortVal == "" {
@@ -254,6 +273,11 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	convTitle := payload.ConversationTitle
 	if convTitle == "" {
 		convTitle = payload.ConversationTitleAlt
+	}
+	if convTitle == "" && existingState != nil && existingState.ConversationTitle != "" {
+		if convID == "" || existingState.ConversationID == "" || existingState.ConversationID == convID {
+			convTitle = existingState.ConversationTitle
+		}
 	}
 	if convTitle == "" && profileDir != "" && convID != "" {
 		convTitle = ResolveConversationTitle(profileDir, convID)
@@ -278,7 +302,7 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 			Cost:                payload.Cost,
 			Effort:              effortVal,
 		}
-		if existingState, ok := GetSessionContextState(profileDir); ok && existingState != nil {
+		if existingState != nil {
 			isSameConv := false
 			if convID != "" && existingState.ConversationID != "" {
 				isSameConv = (convID == existingState.ConversationID)
@@ -296,7 +320,7 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 					state.CacheReadTokens = existingState.CacheReadTokens
 					state.CacheCreationTokens = existingState.CacheCreationTokens
 				}
-				if state.ConversationTitle == "" {
+				if existingState.ConversationTitle != "" {
 					state.ConversationTitle = existingState.ConversationTitle
 				}
 				if state.ConversationID == "" {
@@ -669,15 +693,13 @@ func ResolveConversationTitle(profileDir, convID string) string {
 				Display        string `json:"display"`
 				ConversationID string `json:"conversationId"`
 			}
-			if err := json.Unmarshal(line, &item); err == nil && item.Display != "" {
+			if err := json.Unmarshal(line, &item); err == nil && item.ConversationID == convID && item.Display != "" {
 				disp := strings.TrimSpace(item.Display)
 				if !strings.HasPrefix(disp, "/") {
 					cleaned := cleanPromptSummary(disp)
 					if cleaned != "" && cleaned != "(No prompt summary)" {
-						if item.ConversationID == convID {
-							_ = f.Close()
-							return cleaned
-						}
+						_ = f.Close()
+						return cleaned
 					}
 				}
 			}
@@ -712,12 +734,14 @@ func ResolveConversationTitleFromTranscript(transcriptPath string) string {
 				Content string `json:"content"`
 			}
 			if json.Unmarshal(line, &data) == nil && data.Content != "" {
+				prompt := data.Content
 				match := userRequestRegex.FindStringSubmatch(data.Content)
 				if len(match) > 1 {
-					cleaned := cleanPromptSummary(match[1])
-					if cleaned != "" && cleaned != "(No prompt summary)" {
-						return cleaned
-					}
+					prompt = match[1]
+				}
+				cleaned := cleanPromptSummary(prompt)
+				if cleaned != "" && cleaned != "(No prompt summary)" {
+					return cleaned
 				}
 			}
 		}

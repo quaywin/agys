@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // ConversationSession represents a recorded conversation session across profiles.
@@ -651,32 +652,94 @@ func parseSessionInfo(profileName, convID, transcriptPath string, defaultTime ti
 func IsInternalAutomatedSession(userPrompt string) bool {
 	p := strings.TrimSpace(userPrompt)
 	if strings.HasPrefix(p, "[AGYS_INTERNAL_COMMIT_CHECK]") ||
+		strings.HasPrefix(p, "[AGYS_INTERNAL_TITLE_GEN]") ||
 		strings.HasPrefix(p, "You are an expert software developer and Git assistant") {
 		return true
 	}
 	return false
 }
 
+var (
+	conversationalLeadInRegexes = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)^(?:về\s+(?:phần\s+)?(?:thông\s+tin\s+)?(?:vấn\s+đề\s+)?(?:herdr\s+ở\s+sidebar\s+)?(?:tôi\s+thấy\s+)?)`),
+		regexp.MustCompile(`(?i)^(?:tôi\s+(?:thấy|nghĩ|muốn|cần)(?:\s+là|\s+rằng|\s+nên)?\s+)`),
+		regexp.MustCompile(`(?i)^(?:hãy\s+)?(?:giúp\s+tôi|cho\s+tôi|cho\s+hỏi|nhờ\s+bạn)\s+`),
+		regexp.MustCompile(`(?i)^(?:làm\s+thế\s+nào\s+để|làm\s+sao\s+để|cách\s+để)\s+`),
+		regexp.MustCompile(`(?i)^(?:kiểm\s+tra|check|xem)\s+(?:giúp|thử|lại)\s+`),
+		regexp.MustCompile(`(?i)^(?:sao\s+chưa\s+thấy|tại\s+sao\s+chưa\s+thấy|tại\s+sao\s+không|sao\s+lại)\s+`),
+		regexp.MustCompile(`(?i)^(?:review\s+lại(?:\s+lần\s+nữa)?|review\s+giúp)\s*,?\s*`),
+		regexp.MustCompile(`(?i)^(?:can\s+you\s+(?:please\s+)?(?:help\s+me\s+)?(?:to\s+)?|could\s+you\s+(?:please\s+)?(?:help\s+me\s+)?(?:to\s+)?)`),
+		regexp.MustCompile(`(?i)^please\s+(?:help\s+me\s+)?(?:to\s+)?`),
+		regexp.MustCompile(`(?i)^i\s+(?:want|need|would\s+like)\s+to\s+`),
+		regexp.MustCompile(`(?i)^how\s+(?:do\s+i|can\s+i|to)\s+`),
+	}
+	trailingParticlesRegex = regexp.MustCompile(`(?i)[\s,]+(?:vậy|không|nhé|nhỉ|được\s+không|đi|giúp|ạ)\s*\??$`)
+	xmlTagRegex            = regexp.MustCompile(`<[^>]+>`)
+)
+
+// TruncateTitle trims text to maxRunes with ellipsis at word boundary if possible.
+func TruncateTitle(s string, maxRunes int) string {
+	runes := []rune(strings.TrimSpace(s))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	cut := maxRunes - 3
+	rCut := runes[:cut]
+	lastSpace := -1
+	for i := len(rCut) - 1; i >= 0; i-- {
+		if unicode.IsSpace(rCut[i]) {
+			lastSpace = i
+			break
+		}
+	}
+	if lastSpace > maxRunes/2 {
+		return string(rCut[:lastSpace]) + "..."
+	}
+	return string(rCut) + "..."
+}
+
 func cleanPromptSummary(raw string) string {
-	raw = strings.TrimSpace(raw)
-	raw = strings.ReplaceAll(raw, "\r\n", " ")
-	raw = strings.ReplaceAll(raw, "\n", " ")
-	raw = strings.ReplaceAll(raw, "\r", " ")
-	raw = strings.ReplaceAll(raw, "\t", " ")
-	raw = strings.ReplaceAll(raw, "\\n", " ")
-	raw = strings.ReplaceAll(raw, "\\r", " ")
-	raw = strings.ReplaceAll(raw, "\\t", " ")
-	for strings.Contains(raw, "  ") {
-		raw = strings.ReplaceAll(raw, "  ", " ")
+	for _, old := range []string{"\r\n", "\n", "\r", "\t", "\\n", "\\r", "\\t"} {
+		raw = strings.ReplaceAll(raw, old, " ")
 	}
-	raw = strings.TrimSpace(raw)
-	if len(raw) > 90 {
-		raw = raw[:87] + "..."
-	}
+	raw = strings.Join(strings.Fields(raw), " ")
 	if raw == "" {
 		return "(No prompt summary)"
 	}
-	return raw
+
+	// Remove leading slash commands (/ask, /goal, etc.)
+	if strings.HasPrefix(raw, "/") {
+		parts := strings.SplitN(raw, " ", 2)
+		if len(parts) > 1 {
+			raw = strings.TrimSpace(parts[1])
+		}
+	}
+
+	// Remove XML tags like <USER_REQUEST>
+	raw = xmlTagRegex.ReplaceAllString(raw, "")
+	raw = strings.TrimSpace(raw)
+
+	cleaned := raw
+	for _, re := range conversationalLeadInRegexes {
+		cleaned = re.ReplaceAllString(cleaned, "")
+		cleaned = strings.TrimSpace(cleaned)
+	}
+
+	cleaned = trailingParticlesRegex.ReplaceAllString(cleaned, "")
+	cleaned = strings.TrimSpace(cleaned)
+	cleaned = strings.TrimRight(cleaned, ".!?")
+
+	if cleaned == "" {
+		cleaned = raw
+	}
+
+	runes := []rune(cleaned)
+	if len(runes) > 0 {
+		runes[0] = unicode.ToUpper(runes[0])
+		cleaned = string(runes)
+	}
+
+	return TruncateTitle(cleaned, 55)
 }
 
 // FormatRelativeTime formats a time.Time into a human-readable relative duration.
