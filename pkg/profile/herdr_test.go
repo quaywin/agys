@@ -586,10 +586,17 @@ func TestReportHerdrQuotaOnly_PreservesExistingContext(t *testing.T) {
 	t.Setenv("HERDR_PANE_ID", "w1:p1")
 	t.Setenv("HERDR_SOCKET_PATH", sockPath)
 
-	_, err = Create("quota-profile")
+	pDir, err := Create("quota-profile")
 	if err != nil {
 		t.Fatalf("Create profile error: %v", err)
 	}
+
+	// Seed active session context (42% context and conversation title)
+	_ = SaveSessionContext(pDir, &SessionContextState{
+		UsedPercentage:    42.0,
+		ConversationTitle: "Refactor auth middleware",
+		ModelID:           "claude-3-7-sonnet",
+	})
 
 	// Call ReportHerdrQuotaOnly (simulating 60s background watcher)
 	err = ReportHerdrQuotaOnly(context.Background(), "quota-profile", "claude-3-7-sonnet")
@@ -599,15 +606,18 @@ func TestReportHerdrQuotaOnly_PreservesExistingContext(t *testing.T) {
 
 	select {
 	case payload := <-received:
-		// Verify that existing 42% context window tokens were strictly preserved
-		if !strings.Contains(payload, "42% ctx · claude-3-7-sonnet") {
-			t.Errorf("Expected ReportHerdrQuotaOnly to preserve '42%% ctx · claude-3-7-sonnet', got: %s", payload)
+		// Verify that active session conversation title and 42% context window tokens were strictly preserved
+		if !strings.Contains(payload, `"conversation_title":"Refactor auth middleware"`) {
+			t.Errorf("Expected ReportHerdrQuotaOnly to preserve conversation_title, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"quota_model_context":"Refactor auth middleware"`) {
+			t.Errorf("Expected ReportHerdrQuotaOnly to preserve quota_model_context, got: %s", payload)
 		}
 		if !strings.Contains(payload, `"quota_context":"ctx 42%"`) {
 			t.Errorf("Expected payload to preserve 'ctx 42%%' token, got: %s", payload)
 		}
-		if !strings.Contains(payload, `"title":"agys: quota-profile"`) {
-			t.Errorf("Expected title in payload to be 'agys: quota-profile', got: %s", payload)
+		if !strings.Contains(payload, `"title":"agys: Refactor auth middleware"`) {
+			t.Errorf("Expected title in payload to be 'agys: Refactor auth middleware', got: %s", payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Errorf("No payload received on mock socket within timeout")
@@ -1161,6 +1171,87 @@ func TestGetMatchingHerdrPanes_DoesNotReAddInactiveCurrentPane(t *testing.T) {
 	matches := getMatchingHerdrPanesFromList(context.Background(), panes, "", "w1:p1", "my-profile", "gemini-2.5-flash")
 	if len(matches) != 0 {
 		t.Errorf("Expected 0 matches for inactive current pane running codex, got %d: %+v", len(matches), matches)
+	}
+}
+
+func TestReportHerdrMetadata_InitialSession_NoStaleTitleLeak(t *testing.T) {
+	// macOS limits UNIX domain socket paths to 104 chars, use short path
+	sockPath := fmt.Sprintf("/tmp/herdr_test_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan string, 1)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 4096)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				// Herdr pane still has stale title and tokens from a previous session
+				paneJSON := `{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","title":"agys: Stale Old Prompt","tokens":{"profile":"fresh-profile","model":"claude-3-7-sonnet","conversation_title":"Stale Old Prompt","quota_model_context":"Stale Old Prompt","quota_context":"ctx 80%","cost":"$1.50"}}]}}` + "\n"
+				_, _ = conn.Write([]byte(paneJSON))
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					received <- reqStr
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	_, err = Create("fresh-profile")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	// No session context is created (fresh initial session before user enters prompt)
+	err = ReportHerdrMetadataWithModel(context.Background(), "fresh-profile", "claude-3-7-sonnet")
+	if err != nil {
+		t.Fatalf("ReportHerdrMetadataWithModel error: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		// Stale title must NOT leak into the window title
+		if strings.Contains(payload, "Stale Old Prompt") {
+			t.Errorf("Stale title leaked into metadata payload: %s", payload)
+		}
+		if !strings.Contains(payload, `"title":"agys: fresh-profile"`) {
+			t.Errorf("Expected window title to reset to 'agys: fresh-profile', got: %s", payload)
+		}
+		if !strings.Contains(payload, `"conversation_title":""`) {
+			t.Errorf("Expected conversation_title token to be empty, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"quota_model_context":""`) {
+			t.Errorf("Expected quota_model_context token to be empty, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"quota_context":""`) {
+			t.Errorf("Expected quota_context token to be empty, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"cost":""`) {
+			t.Errorf("Expected cost token to be empty, got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("No payload received on mock socket within timeout")
 	}
 }
 

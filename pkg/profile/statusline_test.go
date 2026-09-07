@@ -373,10 +373,10 @@ func TestResolveConversationTitle(t *testing.T) {
 		t.Errorf("expected empty string for non-existent convID, got: %q", title3)
 	}
 
-	// 4. Fallback to latest history entry only when convID is empty
+	// 4. Empty convID returns empty string without bleeding other sessions
 	title4 := ResolveConversationTitle(pDir, "")
-	if title4 != "Fix auth login bug" {
-		t.Errorf("expected latest history title fallback, got: %q", title4)
+	if title4 != "" {
+		t.Errorf("expected empty string for empty convID, got: %q", title4)
 	}
 }
 

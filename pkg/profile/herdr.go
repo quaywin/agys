@@ -284,7 +284,7 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 			// Proactively resolve conversation title and sync Herdr metadata immediately
 			if profileDir != "" {
 				resolvedTitle := ResolveConversationTitleFromTranscript(payload.TranscriptPath)
-				if resolvedTitle == "" {
+				if resolvedTitle == "" && payload.ConversationID != "" {
 					resolvedTitle = ResolveConversationTitle(profileDir, payload.ConversationID)
 				}
 				if state, ok := GetSessionContextState(profileDir); ok && state != nil {
@@ -913,9 +913,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			convTitle = sessionState.ConversationTitle
 			costVal = sessionState.Cost
 		}
-		if convTitle == "" && sessionState == nil && target.Tokens != nil && target.Tokens["conversation_title"] != "" {
-			convTitle = target.Tokens["conversation_title"]
-		}
 
 		title := fmt.Sprintf("agys: %s", profileName)
 		if convTitle != "" {
@@ -924,8 +921,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			} else {
 				title = fmt.Sprintf("agys: %s", convTitle)
 			}
-		} else if target.Title != "" && !strings.Contains(target.Title, "Ctx: ") && !strings.Contains(target.Title, "5H: ") {
-			title = target.Title
 		}
 		tokens := map[string]string{
 			"profile": profileName,
@@ -940,25 +935,19 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			// Also populate quota_model_context with convTitle for backward compatibility with unmigrated config.toml
 			tokens["quota_model_context"] = convTitle
 		} else {
-			if target.QuotaModelContext != "" {
-				tokens["quota_model_context"] = target.QuotaModelContext
-			} else {
-				tokens["quota_model_context"] = ""
-			}
 			tokens["conversation_title"] = ""
+			tokens["quota_model_context"] = ""
 		}
 
 		// Context window and cost metrics remain available in tokens
 		if hasCtx {
 			tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
-		} else if target.QuotaContext != "" {
-			tokens["quota_context"] = target.QuotaContext
+		} else {
+			tokens["quota_context"] = ""
 		}
 
 		if costVal > 0 {
 			tokens["cost"] = FormatCost(costVal)
-		} else if target.Tokens != nil && target.Tokens["cost"] != "" {
-			tokens["cost"] = target.Tokens["cost"]
 		} else {
 			tokens["cost"] = ""
 		}

@@ -246,10 +246,13 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	if convTitle == "" {
 		convTitle = payload.ConversationTitleAlt
 	}
-	if convTitle == "" {
-		convTitle = payload.Title
+	if convTitle == "" && payload.Title != "" {
+		lower := strings.ToLower(strings.TrimSpace(payload.Title))
+		if lower != "agy" && lower != "agys" && lower != "antigravity" && lower != "antigravity-cli" && lower != "bash" && lower != "zsh" && lower != "fish" {
+			convTitle = payload.Title
+		}
 	}
-	if convTitle == "" && profileDir != "" {
+	if convTitle == "" && profileDir != "" && convID != "" {
 		convTitle = ResolveConversationTitle(profileDir, convID)
 	}
 	if convTitle != "" {
@@ -273,7 +276,12 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 			Effort:              effortVal,
 		}
 		if existingState, ok := GetSessionContextState(profileDir); ok && existingState != nil {
-			isSameConv := (convID == "" || existingState.ConversationID == "" || convID == existingState.ConversationID)
+			isSameConv := false
+			if convID != "" && existingState.ConversationID != "" {
+				isSameConv = (convID == existingState.ConversationID)
+			} else if existingState.ConversationID == "" {
+				isSameConv = true
+			}
 			if isSameConv {
 				if !hasCtx {
 					state.UsedPercentage = existingState.UsedPercentage
@@ -621,25 +629,22 @@ func SyncStatusLineSettings(profileDir string) error {
 }
 
 // ResolveConversationTitle attempts to find a meaningful conversation title from:
-// 1. Direct transcript file by conversation ID
+// 1. Brain transcript.jsonl by conversation ID
 // 2. Profile history.jsonl by conversation ID
-// 3. Most recent user prompt in history.jsonl
 func ResolveConversationTitle(profileDir, convID string) string {
-	if profileDir == "" {
+	if profileDir == "" || convID == "" {
 		return ""
 	}
 
 	// 1. Check transcript.jsonl if convID is provided
-	if convID != "" {
-		for _, subDir := range []string{"antigravity-cli", "antigravity", "antigravity-ide"} {
-			tPath := filepath.Join(profileDir, ".gemini", subDir, "brain", convID, ".system_generated", "logs", "transcript.jsonl")
-			if title := ResolveConversationTitleFromTranscript(tPath); title != "" {
-				return title
-			}
+	for _, subDir := range []string{"antigravity-cli", "antigravity", "antigravity-ide"} {
+		tPath := filepath.Join(profileDir, ".gemini", subDir, "brain", convID, ".system_generated", "logs", "transcript.jsonl")
+		if title := ResolveConversationTitleFromTranscript(tPath); title != "" {
+			return title
 		}
 	}
 
-	// 2. Check history.jsonl
+	// 2. Check history.jsonl by conversation ID
 	for _, subDir := range []string{"antigravity-cli", "antigravity", "antigravity-ide"} {
 		hPath := filepath.Join(profileDir, ".gemini", subDir, "history.jsonl")
 		f, err := os.Open(hPath)
@@ -647,7 +652,6 @@ func ResolveConversationTitle(profileDir, convID string) string {
 			continue
 		}
 
-		var lastValidDisplay string
 		scanner := bufio.NewScanner(f)
 		buf := make([]byte, 128*1024)
 		scanner.Buffer(buf, 1024*1024)
@@ -667,20 +671,15 @@ func ResolveConversationTitle(profileDir, convID string) string {
 				if !strings.HasPrefix(disp, "/") {
 					cleaned := cleanPromptSummary(disp)
 					if cleaned != "" && cleaned != "(No prompt summary)" {
-						if convID != "" && item.ConversationID == convID {
+						if item.ConversationID == convID {
 							_ = f.Close()
 							return cleaned
 						}
-						lastValidDisplay = cleaned
 					}
 				}
 			}
 		}
 		_ = f.Close()
-
-		if convID == "" && lastValidDisplay != "" {
-			return lastValidDisplay
-		}
 	}
 
 	return ""
