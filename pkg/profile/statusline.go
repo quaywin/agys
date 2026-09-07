@@ -481,8 +481,8 @@ func FormatStatusLineText(profileName, modelName, effort string, cost float64, c
 		parts = append(parts, mStr)
 	}
 
-	// 4. Cumulative Cost
-	if cost > 0 || hasCtx {
+	// 4. Cumulative Cost (omitted when zero or unavailable)
+	if cost > 0 {
 		costStr := FormatCost(cost)
 		if useColor {
 			costStr = fmt.Sprintf("\033[32m%s\033[0m", costStr)

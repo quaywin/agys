@@ -149,9 +149,9 @@ func TestFormatStatusLineText(t *testing.T) {
 		t.Errorf("expected colored string to contain ANSI escapes, got: %q", sColored)
 	}
 
-	// 3. No quota data (offline or error), zero cost
+	// 3. No quota data (offline or error), zero cost (omitted)
 	sNoQuota := FormatStatusLineText("davidnguyen", "gemini-3.7-flash", "", 0.0, 10, true, nil, false)
-	expectedNoQuota := "[davidnguyen] · 10% ctx · gemini-3.7-flash · $0.00"
+	expectedNoQuota := "[davidnguyen] · 10% ctx · gemini-3.7-flash"
 	if sNoQuota != expectedNoQuota {
 		t.Errorf("FormatStatusLineText() = %q, expected %q", sNoQuota, expectedNoQuota)
 	}
