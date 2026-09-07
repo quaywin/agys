@@ -70,6 +70,15 @@ type StatusLinePayload struct {
 	} `json:"quota"`
 }
 
+func getSessionContextPath(profileDir string) string {
+	if paneID := os.Getenv("HERDR_PANE_ID"); paneID != "" {
+		sanitized := strings.ReplaceAll(paneID, ":", "_")
+		sanitized = strings.ReplaceAll(sanitized, "/", "_")
+		return filepath.Join(profileDir, fmt.Sprintf(".session_context_%s.json", sanitized))
+	}
+	return filepath.Join(profileDir, sessionContextFilename)
+}
+
 // SaveSessionContext saves the context window percentage and metrics to the profile directory.
 func SaveSessionContext(profileDir string, state *SessionContextState) error {
 	if profileDir == "" || state == nil {
@@ -80,7 +89,7 @@ func SaveSessionContext(profileDir string, state *SessionContextState) error {
 	if err != nil {
 		return err
 	}
-	targetPath := filepath.Join(profileDir, sessionContextFilename)
+	targetPath := getSessionContextPath(profileDir)
 	return WriteFileAtomic(targetPath, data, 0600)
 }
 
@@ -89,7 +98,7 @@ func ResetSessionContext(profileDir string) error {
 	if profileDir == "" {
 		return nil
 	}
-	targetPath := filepath.Join(profileDir, sessionContextFilename)
+	targetPath := getSessionContextPath(profileDir)
 	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -101,7 +110,7 @@ func GetSessionContextState(profileDir string) (*SessionContextState, bool) {
 	if profileDir == "" {
 		return nil, false
 	}
-	targetPath := filepath.Join(profileDir, sessionContextFilename)
+	targetPath := getSessionContextPath(profileDir)
 	data, err := os.ReadFile(targetPath)
 	if err != nil {
 		return nil, false
@@ -245,12 +254,6 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	convTitle := payload.ConversationTitle
 	if convTitle == "" {
 		convTitle = payload.ConversationTitleAlt
-	}
-	if convTitle == "" && payload.Title != "" {
-		lower := strings.ToLower(strings.TrimSpace(payload.Title))
-		if lower != "agy" && lower != "agys" && lower != "antigravity" && lower != "antigravity-cli" && lower != "bash" && lower != "zsh" && lower != "fish" {
-			convTitle = payload.Title
-		}
 	}
 	if convTitle == "" && profileDir != "" && convID != "" {
 		convTitle = ResolveConversationTitle(profileDir, convID)

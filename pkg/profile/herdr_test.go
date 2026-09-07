@@ -1255,3 +1255,91 @@ func TestReportHerdrMetadata_InitialSession_NoStaleTitleLeak(t *testing.T) {
 	}
 }
 
+func TestReportHerdrMetadata_NeverOverwritesOtherAgentsOrPanes(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_isolate_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	updatedPanes := make(chan string, 10)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 4096)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				// Panes:
+				// w1:p1 is current pane (agys with "Fix auth bug")
+				// w1:p2 is another agent (Claude Code)
+				// w1:p3 is another agys pane with "Build feature Y"
+				resp := `{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","display_agent":"isolate-prof","title":"agys: isolate-prof","tokens":{"profile":"isolate-prof","conversation_title":"Fix auth bug"}},{"pane_id":"w1:p2","agent":"claude","title":"claude code","tokens":{"conversation_title":"Claude task"}},{"pane_id":"w1:p3","agent":"Antigravity","display_agent":"isolate-prof","title":"agys: Build feature Y","tokens":{"profile":"isolate-prof","conversation_title":"Build feature Y"}}]}}`
+				_, _ = conn.Write([]byte(resp + "\n"))
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					updatedPanes <- reqStr
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	pDir, err := Create("isolate-prof")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	_ = SaveSessionContext(pDir, &SessionContextState{
+		ConversationTitle: "Fix auth bug",
+		ModelID:           "gemini-2.5-flash",
+	})
+
+	// Call ReportHerdrMetadataWithModel from w1:p1
+	err = ReportHerdrMetadataWithModel(context.Background(), "isolate-prof", "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("ReportHerdrMetadataWithModel error: %v", err)
+	}
+
+	// Verify that ONLY w1:p1 was updated, and NEVER w1:p2 (Claude) or w1:p3 (other agys pane)
+	select {
+	case payload := <-updatedPanes:
+		if !strings.Contains(payload, `"pane_id":"w1:p1"`) {
+			t.Errorf("Expected update for w1:p1, got: %s", payload)
+		}
+		if strings.Contains(payload, `"pane_id":"w1:p2"`) {
+			t.Errorf("CRITICAL: Mistakenly updated w1:p2 (Claude agent)! Payload: %s", payload)
+		}
+		if strings.Contains(payload, `"pane_id":"w1:p3"`) {
+			t.Errorf("CRITICAL: Mistakenly updated w1:p3 (other agys pane)! Payload: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("Timeout waiting for metadata update")
+	}
+
+	// Ensure no extra RPCs were sent to other panes
+	select {
+	case unexpected := <-updatedPanes:
+		t.Errorf("CRITICAL: Unexpected extra RPC sent to another pane/agent: %s", unexpected)
+	default:
+		// No extra RPCs, perfect!
+	}
+}
+
+

@@ -380,3 +380,62 @@ func TestResolveConversationTitle(t *testing.T) {
 	}
 }
 
+func TestSessionContext_PaneIsolation(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Seed Pane 1
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	state1 := &SessionContextState{
+		UsedPercentage:    50.0,
+		ConversationTitle: "Task in Pane 1",
+		ConversationID:    "conv-p1",
+	}
+	if err := SaveSessionContext(tempDir, state1); err != nil {
+		t.Fatalf("SaveSessionContext for p1 failed: %v", err)
+	}
+
+	// Verify Pane 1 reads its own context
+	loaded1, ok1 := GetSessionContextState(tempDir)
+	if !ok1 || loaded1.ConversationTitle != "Task in Pane 1" {
+		t.Fatalf("Pane 1 failed to load its own context: ok=%v, title=%v", ok1, loaded1)
+	}
+
+	// Switch to Pane 2 (brand new pane)
+	t.Setenv("HERDR_PANE_ID", "w1:p2")
+	loaded2, ok2 := GetSessionContextState(tempDir)
+	if ok2 || loaded2 != nil {
+		t.Fatalf("Pane 2 must NOT inherit Pane 1's context or fall back to any other file, got: %+v", loaded2)
+	}
+
+	// Seed Pane 2 with its own context
+	state2 := &SessionContextState{
+		UsedPercentage:    10.0,
+		ConversationTitle: "Task in Pane 2",
+		ConversationID:    "conv-p2",
+	}
+	if err := SaveSessionContext(tempDir, state2); err != nil {
+		t.Fatalf("SaveSessionContext for p2 failed: %v", err)
+	}
+
+	// Verify Pane 2 loads its own context
+	loaded2, ok2 = GetSessionContextState(tempDir)
+	if !ok2 || loaded2.ConversationTitle != "Task in Pane 2" {
+		t.Fatalf("Pane 2 failed to load its own context: ok=%v, title=%v", ok2, loaded2)
+	}
+
+	// Reset Pane 2 and verify Pane 1 is unaffected
+	if err := ResetSessionContext(tempDir); err != nil {
+		t.Fatalf("ResetSessionContext failed: %v", err)
+	}
+	if _, ok2AfterReset := GetSessionContextState(tempDir); ok2AfterReset {
+		t.Fatalf("Pane 2 should be empty after reset")
+	}
+
+	// Switch back to Pane 1 and ensure it is still intact
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	loaded1After, ok1After := GetSessionContextState(tempDir)
+	if !ok1After || loaded1After.ConversationTitle != "Task in Pane 1" {
+		t.Fatalf("Pane 1 context was corrupted by Pane 2 reset: ok=%v, state=%+v", ok1After, loaded1After)
+	}
+}
+

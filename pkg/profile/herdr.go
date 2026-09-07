@@ -323,14 +323,6 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 	return nil
 }
 
-func formatContextCost(ctxPct int, hasCtx bool, cost float64) string {
-	costStr := FormatCost(cost)
-	if hasCtx {
-		return fmt.Sprintf("%d%% ctx · %s", ctxPct, costStr)
-	}
-	return costStr
-}
-
 // FormatModelAbbreviation converts a full model name or group name into a clean, compact 3-letter abbreviation.
 // (e.g. "gemini-2.5-pro" -> "gem", "claude-3-7-sonnet" -> "cld", "gpt-4o" -> "gpt", "deepseek" -> "dsk").
 func FormatModelAbbreviation(modelName, groupName string) string {
@@ -634,98 +626,59 @@ func getHerdrCurrentPaneFromList(panes []HerdrRawPane, paneID, profileName, curr
 }
 
 func getMatchingHerdrPanesFromList(ctx context.Context, panes []HerdrRawPane, socketPath, currentPaneID, profileName, currentModel string) []HerdrPaneMatch {
-	targetPanes := []HerdrPaneMatch{}
-	seen := make(map[string]bool)
-
 	if len(panes) == 0 {
 		if currentPaneID != "" {
-			targetPanes = append(targetPanes, HerdrPaneMatch{PaneID: currentPaneID, Model: currentModel, DisplayAgent: profileName})
+			return []HerdrPaneMatch{{PaneID: currentPaneID, Model: currentModel, DisplayAgent: profileName}}
 		}
-		return targetPanes
+		return nil
 	}
 
-	// Verify if currentPaneID is actively running agys in a single pass
-	var currentPaneFound, currentPaneActive bool
-	var currentMatch HerdrPaneMatch
-	for _, p := range panes {
-		if p.PaneID == currentPaneID {
-			currentPaneFound = true
-			if p.Agent != "" && IsNonAgysAgent(p.Agent) && hasStaleAgysTelemetry(p.Title, p.Tokens) {
-				_ = clearHerdrPaneMetadata(ctx, socketPath, p.PaneID)
-			}
-			if isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped) {
-				currentPaneActive = true
-				var currentModelCtx, currentCtx string
-				if p.Tokens != nil {
-					currentModelCtx = p.Tokens["quota_model_context"]
-					currentCtx = p.Tokens["quota_context"]
-				}
-				currentMatch = HerdrPaneMatch{
-					PaneID:            currentPaneID,
-					Model:             currentModel,
-					DisplayAgent:      p.DisplayAgent,
-					QuotaModelContext: currentModelCtx,
-					QuotaContext:      currentCtx,
-					Title:             p.Title,
-					Tokens:            p.Tokens,
-				}
-			}
-			break
-		}
-	}
-
-	if currentPaneID != "" && currentPaneActive {
-		targetPanes = append(targetPanes, currentMatch)
-		seen[currentPaneID] = true
-	}
+	targetPanes := []HerdrPaneMatch{}
+	seen := make(map[string]bool)
 
 	for _, p := range panes {
 		if p.PaneID == "" {
 			continue
 		}
-		// Older agys builds could mark panes owned by Claude/Codex. Their title
-		// and quota tokens can outlive the agys process and then look like a
-		// match on the next scan. Retire that metadata before matching so the
-		// stale row cannot keep itself alive.
+
+		// Retire stale agys metadata from non-agys agents (e.g. Codex, Claude)
 		if p.Agent != "" && IsNonAgysAgent(p.Agent) && hasStaleAgysTelemetry(p.Title, p.Tokens) {
 			_ = clearHerdrPaneMetadata(ctx, socketPath, p.PaneID)
 			continue
 		}
+
 		// Strictly allow ONLY panes actively executing agys/Antigravity
 		if !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped) {
 			continue
 		}
 
-		termTitle := p.TerminalTitle
-		if termTitle == "" {
-			termTitle = p.TerminalTitleStripped
+		isMatch := false
+		if currentPaneID != "" && p.PaneID == currentPaneID {
+			isMatch = true
+		} else if p.Tokens != nil && p.Tokens["profile"] == profileName {
+			isMatch = true
+		} else if p.DisplayAgent == profileName || p.Agent == profileName {
+			isMatch = true
 		}
 
-		isMatch := false
-		paneModel := ""
-		var quotaModelContext, quotaContext string
-		if p.Tokens != nil {
-			if p.Tokens["profile"] == profileName {
-				isMatch = true
-			}
-			paneModel = p.Tokens["model"]
-			quotaModelContext = p.Tokens["quota_model_context"]
-			quotaContext = p.Tokens["quota_context"]
-		}
-		if !isMatch {
-			if p.DisplayAgent == profileName || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s:", profileName)) || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s]", profileName)) || strings.Contains(p.DisplayAgent, fmt.Sprintf("[%s ", profileName)) {
-				isMatch = true
-			} else if strings.Contains(p.Title, fmt.Sprintf("agys: %s", profileName)) {
-				isMatch = true
-			} else if strings.Contains(termTitle, fmt.Sprintf("agys: %s", profileName)) || strings.Contains(termTitle, fmt.Sprintf("[%s]", profileName)) {
-				isMatch = true
-			}
-		}
 		if isMatch && !seen[p.PaneID] {
+			paneModel := currentModel
+			var quotaModelContext, quotaContext string
+			if p.Tokens != nil {
+				if p.Tokens["model"] != "" && (currentModel == "" || currentModel == "auto") {
+					paneModel = p.Tokens["model"]
+				}
+				quotaModelContext = p.Tokens["quota_model_context"]
+				quotaContext = p.Tokens["quota_context"]
+			}
+			disp := p.DisplayAgent
+			if disp == "" {
+				disp = profileName
+			}
 			targetPanes = append(targetPanes, HerdrPaneMatch{
 				PaneID:            p.PaneID,
 				Model:             paneModel,
-				DisplayAgent:      p.DisplayAgent,
+				DisplayAgent:      disp,
 				QuotaModelContext: quotaModelContext,
 				QuotaContext:      quotaContext,
 				Title:             p.Title,
@@ -733,10 +686,6 @@ func getMatchingHerdrPanesFromList(ctx context.Context, panes []HerdrRawPane, so
 			})
 			seen[p.PaneID] = true
 		}
-	}
-
-	if currentPaneID != "" && !seen[currentPaneID] && !currentPaneFound {
-		targetPanes = append(targetPanes, HerdrPaneMatch{PaneID: currentPaneID, Model: currentModel, DisplayAgent: profileName})
 	}
 
 	return targetPanes
@@ -805,21 +754,21 @@ func lookupPaneAgentStateFromList(panes []HerdrRawPane, paneID string) (found, a
 
 // ReportHerdrMetadata communicates with Herdr via its UNIX domain socket to set display_agent, title, and quota for all matching panes.
 func ReportHerdrMetadata(ctx context.Context, profileName string) error {
-	return reportHerdrMetadataInternal(ctx, profileName, "", true)
+	return reportHerdrMetadataInternal(ctx, profileName, "")
 }
 
 // ReportHerdrMetadataWithModel communicates with Herdr via its UNIX domain socket to set metadata including live context window metrics.
 func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName string, preloadedDetails ...*ModelQuotaDetails) error {
-	return reportHerdrMetadataInternal(ctx, profileName, modelName, true, preloadedDetails...)
+	return reportHerdrMetadataInternal(ctx, profileName, modelName, preloadedDetails...)
 }
 
 // ReportHerdrQuotaOnly communicates with Herdr via its UNIX domain socket to update ONLY quota metrics (5H & Weekly) and reset countdowns,
 // explicitly preserving existing context window tokens and title state to prevent conflicts with live turn-by-turn stream hooks.
 func ReportHerdrQuotaOnly(ctx context.Context, profileName, modelName string) error {
-	return reportHerdrMetadataInternal(ctx, profileName, modelName, false)
+	return reportHerdrMetadataInternal(ctx, profileName, modelName)
 }
 
-func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName string, updateContext bool, preloadedDetails ...*ModelQuotaDetails) error {
+func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName string, preloadedDetails ...*ModelQuotaDetails) error {
 	if !IsInHerdrEnvironment() {
 		return nil
 	}
@@ -867,8 +816,8 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 	}
 
 	var targetPanes []HerdrPaneMatch
-	if updateContext && paneID != "" {
-		// Inline hook is per-pane: update ONLY the current pane to prevent triggering multi-pane render cascades or model overwrite.
+	if paneID != "" {
+		// When inside a specific pane, update ONLY this pane to prevent cross-pane contamination or overwriting other agents.
 		targetPanes = []HerdrPaneMatch{
 			getHerdrCurrentPaneFromList(panes, paneID, profileName, modelName),
 		}
@@ -893,8 +842,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			}
 		}
 
-		displayAgent := profileName
-
 		// Load session context state (contains context %, conversation title, and cumulative cost)
 		var sessionState *SessionContextState
 		var ctxPct int
@@ -914,14 +861,27 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			costVal = sessionState.Cost
 		}
 
-		title := fmt.Sprintf("agys: %s", profileName)
-		if convTitle != "" {
-			if strings.HasPrefix(convTitle, "agys") {
-				title = convTitle
-			} else {
-				title = fmt.Sprintf("agys: %s", convTitle)
-			}
+		isCurrentPane := paneID != "" && target.PaneID == paneID
+
+		displayAgent := profileName
+		if !isCurrentPane && target.DisplayAgent != "" {
+			displayAgent = target.DisplayAgent
 		}
+
+		title := target.Title
+		if isCurrentPane {
+			title = fmt.Sprintf("agys: %s", profileName)
+			if convTitle != "" {
+				if strings.HasPrefix(convTitle, "agys") {
+					title = convTitle
+				} else {
+					title = fmt.Sprintf("agys: %s", convTitle)
+				}
+			}
+		} else if title == "" {
+			title = fmt.Sprintf("agys: %s", profileName)
+		}
+
 		tokens := map[string]string{
 			"profile": profileName,
 		}
@@ -930,26 +890,35 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		}
 
 		// Handle Row 2: Conversation Title (replaces context window & cost on sidebar)
-		if convTitle != "" {
-			tokens["conversation_title"] = convTitle
-			// Also populate quota_model_context with convTitle for backward compatibility with unmigrated config.toml
-			tokens["quota_model_context"] = convTitle
-		} else {
-			tokens["conversation_title"] = ""
-			tokens["quota_model_context"] = ""
-		}
+		if isCurrentPane {
+			if convTitle != "" {
+				tokens["conversation_title"] = convTitle
+				tokens["quota_model_context"] = convTitle
+			} else {
+				tokens["conversation_title"] = ""
+				tokens["quota_model_context"] = ""
+			}
 
-		// Context window and cost metrics remain available in tokens
-		if hasCtx {
-			tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
-		} else {
-			tokens["quota_context"] = ""
-		}
+			// Context window and cost metrics remain available in tokens
+			if hasCtx {
+				tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
+			} else {
+				tokens["quota_context"] = ""
+			}
 
-		if costVal > 0 {
-			tokens["cost"] = FormatCost(costVal)
+			if costVal > 0 {
+				tokens["cost"] = FormatCost(costVal)
+			} else {
+				tokens["cost"] = ""
+			}
 		} else {
-			tokens["cost"] = ""
+			// For other panes: strictly preserve their own conversation_title and context metrics!
+			if target.Tokens != nil {
+				tokens["conversation_title"] = target.Tokens["conversation_title"]
+				tokens["quota_model_context"] = target.Tokens["quota_model_context"]
+				tokens["quota_context"] = target.Tokens["quota_context"]
+				tokens["cost"] = target.Tokens["cost"]
+			}
 		}
 
 		var details *ModelQuotaDetails
