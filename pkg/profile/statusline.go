@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -36,10 +37,12 @@ type SessionContextState struct {
 
 // StatusLinePayload represents the JSON payload streamed to stdin by Antigravity CLI statusLine command.
 type StatusLinePayload struct {
-	ConversationID    string  `json:"conversation_id,omitempty"`
-	SessionID         string  `json:"session_id,omitempty"`
-	ConversationTitle string  `json:"conversation_title"`
-	Cost              float64 `json:"cost"`
+	ConversationID       string  `json:"conversation_id,omitempty"`
+	SessionID            string  `json:"session_id,omitempty"`
+	ConversationTitle    string  `json:"conversation_title"`
+	ConversationTitleAlt string  `json:"conversationTitle,omitempty"`
+	Title                string  `json:"title,omitempty"`
+	Cost                 float64 `json:"cost"`
 	Effort            string  `json:"effort,omitempty"`
 	ReasoningEffort   string  `json:"reasoning_effort,omitempty"`
 	Model             struct {
@@ -239,8 +242,24 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	if convID == "" {
 		convID = payload.SessionID
 	}
+	convTitle := payload.ConversationTitle
+	if convTitle == "" {
+		convTitle = payload.ConversationTitleAlt
+	}
+	if convTitle == "" {
+		convTitle = payload.Title
+	}
+	if convTitle == "" && profileDir != "" {
+		convTitle = ResolveConversationTitle(profileDir, convID)
+	}
+	if convTitle != "" {
+		convTitle = cleanPromptSummary(convTitle)
+		if convTitle == "(No prompt summary)" {
+			convTitle = ""
+		}
+	}
 
-	if profileDir != "" && (hasCtx || payload.ConversationTitle != "" || payload.Cost > 0 || convID != "") {
+	if profileDir != "" && (hasCtx || convTitle != "" || payload.Cost > 0 || convID != "") {
 		state := &SessionContextState{
 			UsedPercentage:      ctxUsedPct,
 			InputTokens:         inputTokens,
@@ -248,36 +267,39 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 			CacheCreationTokens: cacheCreationTokens,
 			ModelID:             payload.Model.ID,
 			ModelDisplayName:    payload.Model.DisplayName,
-			ConversationTitle:   payload.ConversationTitle,
+			ConversationTitle:   convTitle,
 			ConversationID:      convID,
 			Cost:                payload.Cost,
 			Effort:              effortVal,
 		}
 		if existingState, ok := GetSessionContextState(profileDir); ok && existingState != nil {
-			if !hasCtx {
-				state.UsedPercentage = existingState.UsedPercentage
-				state.InputTokens = existingState.InputTokens
-				state.CacheReadTokens = existingState.CacheReadTokens
-				state.CacheCreationTokens = existingState.CacheCreationTokens
-			} else if state.InputTokens == 0 && existingState.InputTokens > 0 {
-				state.InputTokens = existingState.InputTokens
-				state.CacheReadTokens = existingState.CacheReadTokens
-				state.CacheCreationTokens = existingState.CacheCreationTokens
+			isSameConv := (convID == "" || existingState.ConversationID == "" || convID == existingState.ConversationID)
+			if isSameConv {
+				if !hasCtx {
+					state.UsedPercentage = existingState.UsedPercentage
+					state.InputTokens = existingState.InputTokens
+					state.CacheReadTokens = existingState.CacheReadTokens
+					state.CacheCreationTokens = existingState.CacheCreationTokens
+				} else if state.InputTokens == 0 && existingState.InputTokens > 0 {
+					state.InputTokens = existingState.InputTokens
+					state.CacheReadTokens = existingState.CacheReadTokens
+					state.CacheCreationTokens = existingState.CacheCreationTokens
+				}
+				if state.ConversationTitle == "" {
+					state.ConversationTitle = existingState.ConversationTitle
+				}
+				if state.ConversationID == "" {
+					state.ConversationID = existingState.ConversationID
+				}
+				if state.Cost == 0 {
+					state.Cost = existingState.Cost
+				}
 			}
 			if state.ModelID == "" {
 				state.ModelID = existingState.ModelID
 			}
 			if state.ModelDisplayName == "" {
 				state.ModelDisplayName = existingState.ModelDisplayName
-			}
-			if state.ConversationTitle == "" {
-				state.ConversationTitle = existingState.ConversationTitle
-			}
-			if state.ConversationID == "" {
-				state.ConversationID = existingState.ConversationID
-			}
-			if state.Cost == 0 {
-				state.Cost = existingState.Cost
 			}
 			if state.Effort == "" {
 				state.Effort = existingState.Effort
@@ -596,4 +618,110 @@ func SyncStatusLineSettings(profileDir string) error {
 	}
 
 	return nil
+}
+
+// ResolveConversationTitle attempts to find a meaningful conversation title from:
+// 1. Direct transcript file by conversation ID
+// 2. Profile history.jsonl by conversation ID
+// 3. Most recent user prompt in history.jsonl
+func ResolveConversationTitle(profileDir, convID string) string {
+	if profileDir == "" {
+		return ""
+	}
+
+	// 1. Check transcript.jsonl if convID is provided
+	if convID != "" {
+		for _, subDir := range []string{"antigravity-cli", "antigravity", "antigravity-ide"} {
+			tPath := filepath.Join(profileDir, ".gemini", subDir, "brain", convID, ".system_generated", "logs", "transcript.jsonl")
+			if title := ResolveConversationTitleFromTranscript(tPath); title != "" {
+				return title
+			}
+		}
+	}
+
+	// 2. Check history.jsonl
+	for _, subDir := range []string{"antigravity-cli", "antigravity", "antigravity-ide"} {
+		hPath := filepath.Join(profileDir, ".gemini", subDir, "history.jsonl")
+		f, err := os.Open(hPath)
+		if err != nil {
+			continue
+		}
+
+		var lastValidDisplay string
+		scanner := bufio.NewScanner(f)
+		buf := make([]byte, 128*1024)
+		scanner.Buffer(buf, 1024*1024)
+
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 || !bytes.Contains(line, []byte("display")) {
+				continue
+			}
+
+			var item struct {
+				Display        string `json:"display"`
+				ConversationID string `json:"conversationId"`
+			}
+			if err := json.Unmarshal(line, &item); err == nil && item.Display != "" {
+				disp := strings.TrimSpace(item.Display)
+				if !strings.HasPrefix(disp, "/") {
+					cleaned := cleanPromptSummary(disp)
+					if cleaned != "" && cleaned != "(No prompt summary)" {
+						if convID != "" && item.ConversationID == convID {
+							_ = f.Close()
+							return cleaned
+						}
+						lastValidDisplay = cleaned
+					}
+				}
+			}
+		}
+		_ = f.Close()
+
+		if convID == "" && lastValidDisplay != "" {
+			return lastValidDisplay
+		}
+	}
+
+	return ""
+}
+
+// ResolveConversationTitleFromTranscript extracts the initial user prompt from transcript.jsonl.
+func ResolveConversationTitleFromTranscript(transcriptPath string) string {
+	if transcriptPath == "" {
+		return ""
+	}
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 512*1024)
+
+	lineCount := 0
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		lineCount++
+		if bytes.Contains(line, []byte("<USER_REQUEST>")) {
+			var data struct {
+				Content string `json:"content"`
+			}
+			if json.Unmarshal(line, &data) == nil && data.Content != "" {
+				match := userRequestRegex.FindStringSubmatch(data.Content)
+				if len(match) > 1 {
+					cleaned := cleanPromptSummary(match[1])
+					if cleaned != "" && cleaned != "(No prompt summary)" {
+						return cleaned
+					}
+				}
+			}
+		}
+		if lineCount > 20 {
+			break
+		}
+	}
+	return ""
 }

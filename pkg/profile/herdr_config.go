@@ -5,8 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+var herdrAgentsSectionRegex = regexp.MustCompile(`(?m)^[ \t]*\[[ \t]*ui\.sidebar\.agents[ \t]*\][ \t]*(?:#.*)?(?:\r?\n)?`)
 
 const (
 	HerdrAgysRowMarker = "# herdr-agys-managed"
@@ -43,7 +46,7 @@ const Compact2RowTOML = `[ui.sidebar.agents]
 rows = [
   ["state_icon", "workspace", { token = "agent", fg = "#38bdf8", bold = true }],
   [
-    { token = "$quota_model_context", fg = "#93c5fd" }
+    { token = "$conversation_title", fg = "#93c5fd" }
   ],
   [
     { token = "$quota_5h_normal", fg = "#4ade80", bold = true },
@@ -56,14 +59,14 @@ rows = [
 ] # herdr-agys-managed
 `
 
-// IsHerdrConfiguredForAgys checks if Herdr's config.toml contains the agys 2-row sidebar configuration.
+// IsHerdrConfiguredForAgys checks if Herdr's config.toml contains the agys 2-row sidebar configuration with conversation title.
 func IsHerdrConfiguredForAgys(configPath string) bool {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return false
 	}
 	content := string(data)
-	return strings.Contains(content, "$quota_5h") || strings.Contains(content, HerdrAgysRowMarker)
+	return strings.Contains(content, "$conversation_title") && strings.Contains(content, "$quota_5h")
 }
 
 // ApplyHerdr2RowConfig updates Herdr's config.toml with the compact 2-row sidebar layout.
@@ -72,7 +75,7 @@ func ApplyHerdr2RowConfig(configPath string) error {
 		configPath = GetHerdrConfigPath()
 	}
 
-	backupPath := GetHerdrBackupConfigPath()
+	backupPath := filepath.Join(filepath.Dir(configPath), "config.original.toml")
 	_ = os.MkdirAll(filepath.Dir(configPath), 0755)
 
 	var originalContent string
@@ -101,7 +104,7 @@ func UninstallHerdr2RowConfig(configPath string) error {
 		configPath = GetHerdrConfigPath()
 	}
 
-	backupPath := GetHerdrBackupConfigPath()
+	backupPath := filepath.Join(filepath.Dir(configPath), "config.original.toml")
 	if data, err := os.ReadFile(backupPath); err == nil {
 		if err := WriteFileAtomic(configPath, data, 0644); err == nil {
 			_ = os.Remove(backupPath)
@@ -120,47 +123,61 @@ func UninstallHerdr2RowConfig(configPath string) error {
 	return nil
 }
 
+func isTOMLTableHeader(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if idx := strings.Index(trimmed, "#"); idx != -1 {
+		trimmed = strings.TrimSpace(trimmed[:idx])
+	}
+	if !strings.HasPrefix(trimmed, "[") || !strings.HasSuffix(trimmed, "]") {
+		return false
+	}
+	inner := strings.Trim(trimmed, "[]")
+	inner = strings.TrimSpace(inner)
+	if inner == "" || strings.ContainsAny(inner, "\"'=,{}():;\n\r") {
+		return false
+	}
+	return true
+}
+
 func injectHerdrSidebarSection(content string) string {
 	if strings.TrimSpace(content) == "" {
 		return Compact2RowTOML
 	}
 
-	// If [ui.sidebar.agents] is present, replace that section
-	if idx := strings.Index(content, "[ui.sidebar.agents]"); idx != -1 {
-		// Find end of section (next section starting with "[" or end of string)
-		rest := content[idx+len("[ui.sidebar.agents]"):]
-		endIdx := -1
+	loc := herdrAgentsSectionRegex.FindStringIndex(content)
+	if loc != nil {
+		rest := content[loc[1]:]
 		lines := strings.Split(rest, "\n")
 		var consumedBytes int
-		for i, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if i > 0 && strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[[") {
-				endIdx = idx + len("[ui.sidebar.agents]") + consumedBytes
+		endIdx := -1
+		for _, line := range lines {
+			if isTOMLTableHeader(line) {
+				endIdx = loc[1] + consumedBytes
 				break
 			}
 			consumedBytes += len(line) + 1 // +1 for newline
 		}
 
 		if endIdx != -1 {
-			return content[:idx] + Compact2RowTOML + "\n" + content[endIdx:]
+			return content[:loc[0]] + Compact2RowTOML + "\n" + strings.TrimLeft(content[endIdx:], "\r\n")
 		}
-		return content[:idx] + Compact2RowTOML
+		return content[:loc[0]] + Compact2RowTOML
 	}
 
 	// Append to existing config
-	return strings.TrimRight(content, "\n") + "\n\n" + Compact2RowTOML
+	return strings.TrimRight(content, "\r\n") + "\n\n" + Compact2RowTOML
 }
 
 func removeHerdrSidebarSection(content string) string {
-	if idx := strings.Index(content, "[ui.sidebar.agents]"); idx != -1 {
-		rest := content[idx+len("[ui.sidebar.agents]"):]
+	loc := herdrAgentsSectionRegex.FindStringIndex(content)
+	if loc != nil {
+		rest := content[loc[1]:]
 		lines := strings.Split(rest, "\n")
 		var consumedBytes int
 		endIdx := -1
-		for i, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if i > 0 && strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[[") {
-				endIdx = idx + len("[ui.sidebar.agents]") + consumedBytes
+		for _, line := range lines {
+			if isTOMLTableHeader(line) {
+				endIdx = loc[1] + consumedBytes
 				break
 			}
 			consumedBytes += len(line) + 1
@@ -168,9 +185,9 @@ func removeHerdrSidebarSection(content string) string {
 
 		defaultSection := "[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"]]\n"
 		if endIdx != -1 {
-			return content[:idx] + defaultSection + content[endIdx:]
+			return content[:loc[0]] + defaultSection + strings.TrimLeft(content[endIdx:], "\r\n")
 		}
-		return content[:idx] + defaultSection
+		return content[:loc[0]] + defaultSection
 	}
 	return content
 }

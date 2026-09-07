@@ -280,6 +280,36 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 				"params": params,
 			})
 			sendHerdrSocketRPC(ctx, socketPath, req)
+
+			// Proactively resolve conversation title and sync Herdr metadata immediately
+			if profileDir != "" {
+				resolvedTitle := ResolveConversationTitleFromTranscript(payload.TranscriptPath)
+				if resolvedTitle == "" {
+					resolvedTitle = ResolveConversationTitle(profileDir, payload.ConversationID)
+				}
+				if state, ok := GetSessionContextState(profileDir); ok && state != nil {
+					if state.ConversationID != payload.ConversationID {
+						state.ConversationID = payload.ConversationID
+						state.ConversationTitle = resolvedTitle
+						state.Cost = 0
+						state.UsedPercentage = 0
+						state.InputTokens = 0
+						state.CacheReadTokens = 0
+						state.CacheCreationTokens = 0
+					} else if resolvedTitle != "" {
+						state.ConversationTitle = resolvedTitle
+					}
+					_ = SaveSessionContext(profileDir, state)
+				} else {
+					_ = SaveSessionContext(profileDir, &SessionContextState{
+						ConversationTitle: resolvedTitle,
+						ConversationID:    payload.ConversationID,
+					})
+				}
+				reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel)
+				cancel()
+			}
 		}
 	} else if action == "quota" || action == "stop" {
 		if currentProfile != "" {
@@ -883,16 +913,18 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			convTitle = sessionState.ConversationTitle
 			costVal = sessionState.Cost
 		}
-
-		truncatedConvTitle := convTitle
-		if len(truncatedConvTitle) > 36 {
-			truncatedConvTitle = strings.TrimSpace(truncatedConvTitle[:33]) + "..."
+		if convTitle == "" && sessionState == nil && target.Tokens != nil && target.Tokens["conversation_title"] != "" {
+			convTitle = target.Tokens["conversation_title"]
 		}
 
 		title := fmt.Sprintf("agys: %s", profileName)
-		if truncatedConvTitle != "" {
-			title = fmt.Sprintf("agys: %s · %s", truncatedConvTitle, profileName)
-		} else if target.Title != "" && !strings.Contains(target.Title, " · ") {
+		if convTitle != "" {
+			if strings.HasPrefix(convTitle, "agys") {
+				title = convTitle
+			} else {
+				title = fmt.Sprintf("agys: %s", convTitle)
+			}
+		} else if target.Title != "" && !strings.Contains(target.Title, "Ctx: ") && !strings.Contains(target.Title, "5H: ") {
 			title = target.Title
 		}
 		tokens := map[string]string{
@@ -902,39 +934,33 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			tokens["model"] = targetModel
 		}
 
-		// Handle Row 2: Context window + Cost (replaces Model with Cost on sidebar)
-		contextCostStr := formatContextCost(ctxPct, hasCtx, costVal)
-		if updateContext && (hasCtx || costVal > 0) {
-			tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
-			tokens["quota_model_context"] = contextCostStr
-			tokens["cost"] = FormatCost(costVal)
-		} else {
-			// Preserve existing context tokens from pane if available, otherwise fallback to session context
-			if target.QuotaModelContext != "" {
-				tokens["quota_model_context"] = target.QuotaModelContext
-			} else if contextCostStr != "" {
-				tokens["quota_model_context"] = contextCostStr
-			}
-
-			if target.QuotaContext != "" {
-				tokens["quota_context"] = target.QuotaContext
-			} else if hasCtx {
-				tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
-			}
-
-			if costVal > 0 {
-				tokens["cost"] = FormatCost(costVal)
-			} else if target.Tokens != nil && target.Tokens["cost"] != "" {
-				tokens["cost"] = target.Tokens["cost"]
-			} else {
-				tokens["cost"] = ""
-			}
-		}
-
+		// Handle Row 2: Conversation Title (replaces context window & cost on sidebar)
 		if convTitle != "" {
 			tokens["conversation_title"] = convTitle
+			// Also populate quota_model_context with convTitle for backward compatibility with unmigrated config.toml
+			tokens["quota_model_context"] = convTitle
 		} else {
+			if target.QuotaModelContext != "" {
+				tokens["quota_model_context"] = target.QuotaModelContext
+			} else {
+				tokens["quota_model_context"] = ""
+			}
 			tokens["conversation_title"] = ""
+		}
+
+		// Context window and cost metrics remain available in tokens
+		if hasCtx {
+			tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
+		} else if target.QuotaContext != "" {
+			tokens["quota_context"] = target.QuotaContext
+		}
+
+		if costVal > 0 {
+			tokens["cost"] = FormatCost(costVal)
+		} else if target.Tokens != nil && target.Tokens["cost"] != "" {
+			tokens["cost"] = target.Tokens["cost"]
+		} else {
+			tokens["cost"] = ""
 		}
 
 		var details *ModelQuotaDetails
@@ -958,35 +984,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			if details.GroupName != "" {
 				tokens["group"] = details.GroupName
 			}
-			var titleParts []string
-			if updateContext {
-				if hasCtx {
-					titleParts = append(titleParts, fmt.Sprintf("Ctx: %d%%", ctxPct))
-				}
-			} else {
-				// Preserve existing Ctx string in title
-				if strings.Contains(target.Title, "Ctx: ") {
-					idx := strings.Index(target.Title, "Ctx: ")
-					rest := target.Title[idx:]
-					end := strings.Index(rest, " •")
-					if end == -1 {
-						end = len(rest)
-					}
-					titleParts = append(titleParts, rest[:end])
-				} else if target.QuotaContext != "" && strings.HasPrefix(target.QuotaContext, "ctx ") {
-					pct := strings.TrimPrefix(target.QuotaContext, "ctx ")
-					titleParts = append(titleParts, fmt.Sprintf("Ctx: %s", pct))
-				}
-			}
-
-			if convTitle != "" {
-				titleParts = append(titleParts, fmt.Sprintf("5H: %s", pct5hStr))
-			} else if details.ResetStr5H != "" && details.ResetStr5H != "-" {
-				titleParts = append(titleParts, fmt.Sprintf("5H: %s (%s)", pct5hStr, details.ResetStr5H))
-			} else {
-				titleParts = append(titleParts, fmt.Sprintf("5H: %s", pct5hStr))
-			}
-
 			// Format compact 5H token without "5h" prefix: "85% 2h" or "85%"
 			quota5hStr := pct5hStr
 			if details.CompactReset5H != "" {
@@ -1000,20 +997,12 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 				tokens["quota_5h_danger"] = quota5hStr
 			}
 
-			var quotaWkStr string
 			if details.FractionWeekly >= 0 {
 				pctWk := int(details.FractionWeekly*100 + 0.5)
 				pctWkStr := fmt.Sprintf("%d%%", pctWk)
-				if convTitle != "" {
-					titleParts = append(titleParts, fmt.Sprintf("Wk: %s", pctWkStr))
-				} else if details.ResetStrWeekly != "" && details.ResetStrWeekly != "-" {
-					titleParts = append(titleParts, fmt.Sprintf("Wk: %s (%s)", pctWkStr, details.ResetStrWeekly))
-				} else {
-					titleParts = append(titleParts, fmt.Sprintf("Wk: %s", pctWkStr))
-				}
 
 				// Format compact Weekly token without "7d" prefix: "90% 3d" or "90%"
-				quotaWkStr = pctWkStr
+				quotaWkStr := pctWkStr
 				if details.CompactResetWeekly != "" {
 					quotaWkStr = fmt.Sprintf("%s %s", pctWkStr, details.CompactResetWeekly)
 				}
@@ -1025,23 +1014,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 					tokens["quota_week_danger"] = quotaWkStr
 				}
 			}
-
-			modelAbbr := FormatModelAbbreviation(targetModel, details.GroupName)
-			var titlePrefix string
-			if truncatedConvTitle != "" {
-				titlePrefix = fmt.Sprintf("agys: %s · %s", truncatedConvTitle, profileName)
-			} else {
-				titlePrefix = fmt.Sprintf("agys: %s", profileName)
-			}
-			var modelTag string
-			if modelAbbr != "" {
-				modelTag = fmt.Sprintf(" [%s]", modelAbbr)
-			}
-			var partsStr string
-			if len(titleParts) > 0 {
-				partsStr = " " + strings.Join(titleParts, " • ")
-			}
-			title = titlePrefix + modelTag + partsStr
 		} else {
 			// Details unavailable: preserve existing quota tokens from pane if available so Row 3 does not vanish and flicker
 			hasExistingQuota := false
@@ -1140,6 +1112,12 @@ func SetTerminalTitle(titleOrProfile string) {
 	if !strings.HasPrefix(title, "agys") {
 		title = fmt.Sprintf("agys [%s]", titleOrProfile)
 	}
+	// Sanitize title to prevent ANSI escape / OSC sequence injection (CWE-150 / CWE-116)
+	title = sanitizeTerminalTitle(title)
+	if title == "" {
+		return
+	}
+
 	lastTerminalTitleMu.Lock()
 	if lastTerminalTitle == title {
 		lastTerminalTitleMu.Unlock()
@@ -1149,6 +1127,27 @@ func SetTerminalTitle(titleOrProfile string) {
 	lastTerminalTitleMu.Unlock()
 
 	fmt.Fprintf(os.Stderr, "\033]0;%s\007", title)
+}
+
+func sanitizeTerminalTitle(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		// Strip control characters (< 0x20 and DEL 0x7F), including \033, \007, \r, \n
+		if r < 0x20 || r == 0x7f {
+			b.WriteByte(' ')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	cleaned := strings.TrimSpace(b.String())
+	for strings.Contains(cleaned, "  ") {
+		cleaned = strings.ReplaceAll(cleaned, "  ", " ")
+	}
+	if len(cleaned) > 100 {
+		cleaned = strings.TrimSpace(cleaned[:97]) + "..."
+	}
+	return cleaned
 }
 
 // ResetTerminalTitle resets the terminal/window/tab title back to default shell title.

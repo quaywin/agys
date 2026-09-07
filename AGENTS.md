@@ -31,7 +31,7 @@
 - **Language**: 100% Pure Go (Zero Python / pip / asdf / shims dependency).
 - **Herdr Integration**:
   - `cmd/herdr_hook.go`: Cobra subcommand `agys herdr-hook [session|quota]`.
-  - `pkg/profile/herdr.go`: Lifecycle hook handler, socket RPC, compact sidebar badge (`FormatModelAbbreviation`), and Window Title (`5H` & `Weekly` quota).
+  - `pkg/profile/herdr.go`: Lifecycle hook handler, socket RPC, compact sidebar badge (`FormatModelAbbreviation`), and Window Title (`Conversation Title`).
   - `pkg/profile/quota.go`: `GetProfileFullQuotaDetailsForModel` with token-based dynamic matching and 3-tier fallback.
 - **Model Resolution Order**:
   `Explicit -m/--model arg` -> `Live prompt transcript (USER_SETTINGS_CHANGE)` -> `.active_model cache` -> `settings.json` -> `default Gemini`.

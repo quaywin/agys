@@ -146,6 +146,34 @@ func TestSetTerminalTitle(t *testing.T) {
 	SetTerminalTitle("prod-profile")
 }
 
+func TestSanitizeTerminalTitle(t *testing.T) {
+	// 1. Control character stripping (OSC injection prevention)
+	malicious := "agys: \033]0;evil\007malicious\r\ncommand"
+	sanitized := sanitizeTerminalTitle(malicious)
+	if strings.ContainsAny(sanitized, "\033\007\r\n") {
+		t.Errorf("expected control characters stripped, got: %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "evil") || !strings.Contains(sanitized, "command") {
+		t.Errorf("expected content preserved without control chars, got: %q", sanitized)
+	}
+
+	// 2. Whitespace collapsing
+	spaced := "agys:    hello   world   "
+	if got := sanitizeTerminalTitle(spaced); got != "agys: hello world" {
+		t.Errorf("expected whitespace collapsed, got: %q", got)
+	}
+
+	// 3. Length capping
+	veryLong := "agys: " + strings.Repeat("a", 150)
+	gotLong := sanitizeTerminalTitle(veryLong)
+	if len(gotLong) > 100 {
+		t.Errorf("expected length capped at <= 100, got len=%d: %q", len(gotLong), gotLong)
+	}
+	if !strings.HasSuffix(gotLong, "...") {
+		t.Errorf("expected ellipsis suffix, got: %q", gotLong)
+	}
+}
+
 func TestStartHerdrQuotaWatcher(t *testing.T) {
 	// Test when HERDR_ENV is not set
 	t.Setenv("HERDR_ENV", "")
@@ -494,16 +522,16 @@ func TestReportHerdrMetadata_Compact2RowTokens(t *testing.T) {
 		if !strings.Contains(payload, `"display_agent":"compact-profile"`) {
 			t.Errorf("Expected display_agent to be 'compact-profile', got: %s", payload)
 		}
-		// Line 2: % ctx + Cost (model replaced by cost)
-		if !strings.Contains(payload, "35% ctx · $0.0042") {
-			t.Errorf("Expected payload to contain '35%% ctx · $0.0042', got: %s", payload)
+		// Line 2: Conversation title on sidebar (replaces context window and cost)
+		if !strings.Contains(payload, `"conversation_title":"Optimize DB queries"`) {
+			t.Errorf("Expected tokens to contain conversation_title, got: %s", payload)
 		}
-		if !strings.Contains(payload, "quota_model_context") {
-			t.Errorf("Expected payload to contain quota_model_context token, got: %s", payload)
+		if !strings.Contains(payload, `"quota_model_context":"Optimize DB queries"`) {
+			t.Errorf("Expected payload to contain quota_model_context with conversation title, got: %s", payload)
 		}
-		// Title prioritizes conversation title first
-		if !strings.Contains(payload, "agys: Optimize DB queries · compact-profile") {
-			t.Errorf("Expected title to prioritize conversation title, got: %s", payload)
+		// Title is 100% conversation title without ctx or quota
+		if !strings.Contains(payload, `"title":"agys: Optimize DB queries"`) {
+			t.Errorf("Expected title to be 100%% conversation title, got: %s", payload)
 		}
 		if !strings.Contains(payload, `"conversation_title":"Optimize DB queries"`) {
 			t.Errorf("Expected tokens to contain conversation_title, got: %s", payload)
@@ -571,12 +599,15 @@ func TestReportHerdrQuotaOnly_PreservesExistingContext(t *testing.T) {
 
 	select {
 	case payload := <-received:
-		// Verify that existing 42% context window was strictly preserved
+		// Verify that existing 42% context window tokens were strictly preserved
 		if !strings.Contains(payload, "42% ctx · claude-3-7-sonnet") {
 			t.Errorf("Expected ReportHerdrQuotaOnly to preserve '42%% ctx · claude-3-7-sonnet', got: %s", payload)
 		}
-		if !strings.Contains(payload, "Ctx: 42%") {
-			t.Errorf("Expected title in payload to preserve 'Ctx: 42%%', got: %s", payload)
+		if !strings.Contains(payload, `"quota_context":"ctx 42%"`) {
+			t.Errorf("Expected payload to preserve 'ctx 42%%' token, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"title":"agys: quota-profile"`) {
+			t.Errorf("Expected title in payload to be 'agys: quota-profile', got: %s", payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Errorf("No payload received on mock socket within timeout")
@@ -961,7 +992,7 @@ func TestReportHerdrMetadata_DeduplicatesUnchangedRPC(t *testing.T) {
 					_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","tokens":{"profile":"dedup-profile"}}]}}` + "\n"))
 				} else {
 					// Second call: pane already has the tokens that were reported in the first call
-					_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","display_agent":"dedup-profile","title":"agys: dedup-profile","tokens":{"profile":"dedup-profile","model":"gemini-2.5-flash","quota_model_context":"gemini-2.5-flash","quota_5h_normal":"","quota_5h_warning":"","quota_5h_danger":"","quota_week_normal":"","quota_week_warning":"","quota_week_danger":""}}]}}` + "\n"))
+					_, _ = conn.Write([]byte(`{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","display_agent":"dedup-profile","title":"agys: dedup-profile","tokens":{"profile":"dedup-profile","model":"gemini-2.5-flash","conversation_title":"","quota_model_context":"","quota_5h_normal":"","quota_5h_warning":"","quota_5h_danger":"","quota_week_normal":"","quota_week_warning":"","quota_week_danger":""}}]}}` + "\n"))
 				}
 			} else {
 				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))

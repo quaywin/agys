@@ -40,7 +40,7 @@ var herdrConfigureCmd = &cobra.Command{
 		cmd.Println("✓ Real-time statusLine context & quota hooks synchronized.")
 		cmd.Println("\nSidebar Layout:")
 		cmd.Println("  Row 1: ● <project> agy[profile] (Status, Project & Profile)")
-		cmd.Println("  Row 2: model · ctx % (Active Model & Context Window)")
+		cmd.Println("  Row 2: conversation title (Active Conversation Title)")
 		cmd.Println("  Row 3: 5h 85% 2h · 7d 90% 3d (Compact 5H & Weekly Quota)")
 		return nil
 	},

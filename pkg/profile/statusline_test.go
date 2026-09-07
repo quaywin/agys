@@ -328,3 +328,55 @@ func TestFormatCostEdgeCases(t *testing.T) {
 	}
 }
 
+func TestResolveConversationTitle(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+
+	pDir, err := Create("title-test-profile")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	convID := "test-conv-abc"
+	logsDir := filepath.Join(pDir, ".gemini", "antigravity-cli", "brain", convID, ".system_generated", "logs")
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		t.Fatalf("failed to create logs dir: %v", err)
+	}
+	transcriptPath := filepath.Join(logsDir, "transcript.jsonl")
+	transcriptContent := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-09-07T09:00:00Z","content":"<USER_REQUEST>\nRefactor Herdr sidebar row to show conversation title\n</USER_REQUEST>"}`
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0644); err != nil {
+		t.Fatalf("failed to write transcript: %v", err)
+	}
+
+	// 1. Resolve directly from transcript
+	title := ResolveConversationTitle(pDir, convID)
+	if title != "Refactor Herdr sidebar row to show conversation title" {
+		t.Errorf("expected resolved title from transcript, got: %q", title)
+	}
+
+	// 2. Resolve from history.jsonl when transcript not found
+	historyPath := filepath.Join(pDir, ".gemini", "antigravity-cli", "history.jsonl")
+	historyContent := `{"display":"Fix auth login bug","timestamp":1788747000000,"workspace":"/app","conversationId":"other-conv-xyz"}` + "\n"
+	if err := os.WriteFile(historyPath, []byte(historyContent), 0644); err != nil {
+		t.Fatalf("failed to write history: %v", err)
+	}
+
+	title2 := ResolveConversationTitle(pDir, "other-conv-xyz")
+	if title2 != "Fix auth login bug" {
+		t.Errorf("expected resolved title from history, got: %q", title2)
+	}
+
+	// 3. Unknown convID returns empty string without bleeding other sessions
+	title3 := ResolveConversationTitle(pDir, "non-existent-conv")
+	if title3 != "" {
+		t.Errorf("expected empty string for non-existent convID, got: %q", title3)
+	}
+
+	// 4. Fallback to latest history entry only when convID is empty
+	title4 := ResolveConversationTitle(pDir, "")
+	if title4 != "Fix auth login bug" {
+		t.Errorf("expected latest history title fallback, got: %q", title4)
+	}
+}
+
