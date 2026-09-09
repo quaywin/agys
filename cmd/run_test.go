@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -196,4 +198,75 @@ func TestIsInteractiveSession(t *testing.T) {
 			t.Errorf("expected %v to be detected as non-interactive, got true", tc)
 		}
 	}
+}
+
+func TestResolveResumeProfile(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", tempHome+"/.agys")
+
+	p1 := "work"
+	p2 := "personal"
+	dir1, err := profile.Create(p1)
+	if err != nil {
+		t.Fatalf("failed to create p1: %v", err)
+	}
+	_, err = profile.Create(p2)
+	if err != nil {
+		t.Fatalf("failed to create p2: %v", err)
+	}
+
+	convID := "conv-resume-test"
+	brainDir := filepath.Join(dir1, ".gemini", "antigravity-cli", "brain", convID)
+	logsDir := filepath.Join(brainDir, ".system_generated", "logs")
+	_ = os.MkdirAll(logsDir, 0700)
+	_ = os.WriteFile(filepath.Join(logsDir, "transcript.jsonl"), []byte(`{"step_index":0}`+"\n"), 0600)
+	_ = profile.SaveLastConversation(convID)
+
+	t.Run("Auto mode auto-switches to owning profile", func(t *testing.T) {
+		resProf, resArgs, err := resolveResumeProfile("auto", []string{"--conversation=" + convID})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resProf != p1 {
+			t.Errorf("expected auto mode to switch to %q, got %q", p1, resProf)
+		}
+		if len(resArgs) != 1 || resArgs[0] != "--conversation="+convID {
+			t.Errorf("expected args to remain intact, got %v", resArgs)
+		}
+	})
+
+	t.Run("Same explicit profile continues without migration", func(t *testing.T) {
+		resProf, resArgs, err := resolveResumeProfile(p1, []string{"--conversation=" + convID})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resProf != p1 {
+			t.Errorf("expected %q, got %q", p1, resProf)
+		}
+		if len(resArgs) != 1 || resArgs[0] != "--conversation="+convID {
+			t.Errorf("expected args to remain intact, got %v", resArgs)
+		}
+	})
+
+	t.Run("Different explicit profile triggers migration", func(t *testing.T) {
+		resProf, resArgs, err := resolveResumeProfile(p2, []string{"-c"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resProf != p2 {
+			t.Errorf("expected profile to remain %q, got %q", p2, resProf)
+		}
+		// -c should be replaced with --conversation=<convID>
+		expectedArg := "--conversation=" + convID
+		if len(resArgs) != 1 || resArgs[0] != expectedArg {
+			t.Errorf("expected -c to be replaced by %q, got %v", expectedArg, resArgs)
+		}
+
+		// Conversation should now belong to p2
+		owner, err := profile.FindProfileByConversation(convID)
+		if err != nil || owner != p2 {
+			t.Errorf("expected conversation owner after migration to be %q, got %q (err: %v)", p2, owner, err)
+		}
+	})
 }

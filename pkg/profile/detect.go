@@ -93,25 +93,26 @@ func FindProfileByConversation(convID string) (string, error) {
 	return "", nil
 }
 
-// FindProfileByLatestConversation scans all profiles and returns the profile name
-// that has the most recently modified conversation in its brain directory.
+// FindProfileAndConvByLatestConversation scans all profiles and returns the profile name
+// and conversation ID that has the most recently modified conversation in its brain directory.
 // It attempts to use the global last active conversation cache file first for O(1) performance.
-func FindProfileByLatestConversation() (string, error) {
+func FindProfileAndConvByLatestConversation() (string, string, error) {
 	// Try reading cache first for O(1) performance
 	lastConvID, err := GetLastConversation()
 	if err == nil && lastConvID != "" {
 		p, err := FindProfileByConversation(lastConvID)
 		if err == nil && p != "" {
-			return p, nil
+			return p, lastConvID, nil
 		}
 	}
 
 	profiles, err := List()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	var latestProfile string
+	var latestConvID string
 	var latestTime time.Time
 
 	for _, p := range profiles {
@@ -148,12 +149,21 @@ func FindProfileByLatestConversation() (string, error) {
 				if mTime.After(latestTime) {
 					latestTime = mTime
 					latestProfile = p
+					latestConvID = entry.Name()
 				}
 			}
 		}
 	}
 
-	return latestProfile, nil
+	return latestProfile, latestConvID, nil
+}
+
+// FindProfileByLatestConversation scans all profiles and returns the profile name
+// that has the most recently modified conversation in its brain directory.
+// It attempts to use the global last active conversation cache file first for O(1) performance.
+func FindProfileByLatestConversation() (string, error) {
+	p, _, err := FindProfileAndConvByLatestConversation()
+	return p, err
 }
 
 // GetLatestConversationFileInfo returns the ID and modification time of the latest conversation in a profile.
