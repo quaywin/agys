@@ -215,8 +215,9 @@ func TestStatusLineBackwardsCompatibilityAndTitlePersistence(t *testing.T) {
 	t.Setenv("HOME", pDir)
 	t.Setenv("AGYS_PROFILE", "test-compat-profile")
 
-	// Step 1: Initial payload with title and cost
+	// Step 1: Initial payload with conversation_id, title and cost
 	firstPayload := `{
+		"conversation_id": "conv-persistent-123",
 		"conversation_title": "Original Title",
 		"cost": 0.005,
 		"model": {"id": "gemini-3.8-flash", "display_name": "Gemini 3.8 Flash"},
@@ -231,6 +232,9 @@ func TestStatusLineBackwardsCompatibilityAndTitlePersistence(t *testing.T) {
 	if !ok || state == nil {
 		t.Fatalf("expected state to exist")
 	}
+	if state.ConversationID != "conv-persistent-123" {
+		t.Errorf("expected 'conv-persistent-123', got %q", state.ConversationID)
+	}
 	if state.ConversationTitle != "Original Title" {
 		t.Errorf("expected 'Original Title', got %q", state.ConversationTitle)
 	}
@@ -238,7 +242,7 @@ func TestStatusLineBackwardsCompatibilityAndTitlePersistence(t *testing.T) {
 		t.Errorf("expected cost 0.005, got %f", state.Cost)
 	}
 
-	// Step 2: Subsequent legacy turn without title/cost in payload (e.g. streaming update without title)
+	// Step 2: Subsequent turn without conversation_id or title/cost in payload (e.g. streaming update)
 	secondPayload := `{
 		"model": {"id": "gemini-3.8-flash", "display_name": "Gemini 3.8 Flash"},
 		"context_window": {"used_percentage": 25.0}
@@ -252,7 +256,10 @@ func TestStatusLineBackwardsCompatibilityAndTitlePersistence(t *testing.T) {
 	if !ok2 || state2 == nil {
 		t.Fatalf("expected state2 to exist")
 	}
-	// Title and Cost must be preserved across turns!
+	// Title, ID and Cost must be preserved across turns when conversation_id is omitted!
+	if state2.ConversationID != "conv-persistent-123" {
+		t.Errorf("expected conversation_id to persist as 'conv-persistent-123', got %q", state2.ConversationID)
+	}
 	if state2.ConversationTitle != "Original Title" {
 		t.Errorf("expected title to persist as 'Original Title', got %q", state2.ConversationTitle)
 	}
@@ -265,6 +272,31 @@ func TestStatusLineBackwardsCompatibilityAndTitlePersistence(t *testing.T) {
 	pct, okPct := GetSessionContext(pDir)
 	if !okPct || pct != 25 {
 		t.Errorf("expected GetSessionContext pct=25, got %d (ok=%v)", pct, okPct)
+	}
+
+	// Step 3: Switched conversation ID should cleanly reset old title and cost
+	thirdPayload := `{
+		"conversation_id": "conv-switched-456",
+		"model": {"id": "gemini-3.8-flash", "display_name": "Gemini 3.8 Flash"},
+		"context_window": {"used_percentage": 10.0}
+	}`
+	var out3 bytes.Buffer
+	if err := HandleStatusLine(context.Background(), strings.NewReader(thirdPayload), &out3, nil); err != nil {
+		t.Fatalf("Third HandleStatusLine failed: %v", err)
+	}
+
+	state3, ok3 := GetSessionContextState(pDir)
+	if !ok3 || state3 == nil {
+		t.Fatalf("expected state3 to exist")
+	}
+	if state3.ConversationID != "conv-switched-456" {
+		t.Errorf("expected 'conv-switched-456', got %q", state3.ConversationID)
+	}
+	if state3.ConversationTitle != "" {
+		t.Errorf("expected title to reset on switched conversation, got %q", state3.ConversationTitle)
+	}
+	if state3.Cost != 0.0 {
+		t.Errorf("expected cost to reset on switched conversation, got %f", state3.Cost)
 	}
 }
 

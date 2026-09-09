@@ -130,15 +130,10 @@ func GetSessionContextStateForPane(profileDir, paneID string) (*SessionContextSt
 		return nil, false
 	}
 
-	// Invalidate if older than 2 hours
-	if time.Since(state.UpdatedAt) > 2*time.Hour {
-		return nil, false
-	}
-
 	return &state, true
 }
 
-// GetSessionContextState returns the cached session context state if valid and not expired (TTL 2 hours).
+// GetSessionContextState returns the cached session context state if valid.
 func GetSessionContextState(profileDir string) (*SessionContextState, bool) {
 	return GetSessionContextStateForPane(profileDir, os.Getenv("HERDR_PANE_ID"))
 }
@@ -147,6 +142,9 @@ func GetSessionContextState(profileDir string) (*SessionContextState, bool) {
 func GetSessionContext(profileDir string) (int, bool) {
 	state, ok := GetSessionContextState(profileDir)
 	if !ok || state == nil {
+		return 0, false
+	}
+	if time.Since(state.UpdatedAt) > 2*time.Hour {
 		return 0, false
 	}
 	pct := int(state.UsedPercentage + 0.5)
@@ -303,11 +301,9 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 			Effort:              effortVal,
 		}
 		if existingState != nil {
-			isSameConv := false
-			if convID != "" && existingState.ConversationID != "" {
-				isSameConv = (convID == existingState.ConversationID)
-			} else if existingState.ConversationID == "" {
-				isSameConv = true
+			isSameConv := true
+			if convID != "" && existingState.ConversationID != "" && convID != existingState.ConversationID {
+				isSameConv = false
 			}
 			if isSameConv {
 				if !hasCtx {
@@ -320,7 +316,7 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 					state.CacheReadTokens = existingState.CacheReadTokens
 					state.CacheCreationTokens = existingState.CacheCreationTokens
 				}
-				if existingState.ConversationTitle != "" {
+				if state.ConversationTitle == "" && existingState.ConversationTitle != "" {
 					state.ConversationTitle = existingState.ConversationTitle
 				}
 				if state.ConversationID == "" {

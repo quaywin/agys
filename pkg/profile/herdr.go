@@ -242,13 +242,15 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 	// Only lifecycle/session hooks may run before Herdr has classified the pane; all
 	// quota updates must never touch a pane that Herdr has identified as non-agys.
 	if action != "session" && paneID != "" && len(panes) > 0 {
-		if found, active := lookupPaneAgentStateFromList(panes, paneID); found && !active {
-			// Herdr may still contain metadata written by an older agys binary before
-			// pane ownership checks existed. Clear that stale telemetry once; otherwise
-			// the Codex pane can continue displaying an old agys title/sidebar forever.
-			_ = ClearHerdrMetadata(ctx)
-			fmt.Println("{}")
-			return nil
+		for _, p := range panes {
+			if p.PaneID == paneID && IsKnownNonAgysAgent(p.Agent) {
+				// Herdr may still contain metadata written by an older agys binary before
+				// pane ownership checks existed. Clear that stale telemetry once; otherwise
+				// the Codex/Claude pane can continue displaying an old agys title/sidebar forever.
+				_ = ClearHerdrMetadata(ctx)
+				fmt.Println("{}")
+				return nil
+			}
 		}
 	}
 
@@ -325,7 +327,11 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 		if currentProfile != "" {
 			quotaCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 			defer cancel()
-			_ = ReportHerdrMetadataWithModel(quotaCtx, currentProfile, activeModel)
+			if action == "quota" {
+				_ = ReportHerdrQuotaOnly(quotaCtx, currentProfile, activeModel)
+			} else {
+				_ = ReportHerdrMetadataWithModel(quotaCtx, currentProfile, activeModel)
+			}
 		}
 	}
 
@@ -525,22 +531,54 @@ func IsAgysAgent(agent string) bool {
 	if a == "" {
 		return false
 	}
-	return a == "agy" || a == "antigravity" || strings.HasPrefix(a, "herdr:antigravity") || strings.HasPrefix(a, "antigravity")
+	return a == "agy" || a == "agys" || a == "antigravity" ||
+		strings.HasPrefix(a, "agy") ||
+		strings.HasPrefix(a, "herdr:antigravity") ||
+		strings.HasPrefix(a, "herdr:agy") ||
+		strings.HasPrefix(a, "antigravity")
+}
+
+// Known competing AI agents that might run in a terminal pane.
+var knownNonAgysAgents = []string{
+	"claude",
+	"codex",
+	"droid",
+	"aider",
+	"opencode",
+	"copilot",
+	"cursor",
+	"herdr:claude",
+	"herdr:codex",
+	"herdr:droid",
+	"herdr:aider",
+	"herdr:opencode",
+	"herdr:copilot",
+	"herdr:cursor",
+}
+
+// IsKnownNonAgysAgent checks if the pane is actively running another known AI agent/CLI tool (e.g., claude, codex, droid).
+func IsKnownNonAgysAgent(agent string) bool {
+	a := strings.ToLower(strings.TrimSpace(agent))
+	if a == "" || IsAgysAgent(a) {
+		return false
+	}
+	for _, known := range knownNonAgysAgents {
+		if a == known || strings.HasPrefix(a, known) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsNonAgysAgent checks if the pane is actively running another known AI agent/CLI tool (e.g., claude, codex, droid).
 func IsNonAgysAgent(agent string) bool {
-	a := strings.ToLower(strings.TrimSpace(agent))
-	if a == "" {
-		return false
-	}
-	return !IsAgysAgent(a)
+	return IsKnownNonAgysAgent(agent)
 }
 
 // isPaneActiveAgys verifies if a pane is genuinely and actively executing an agys session.
-// Strictly returns false for plain shells (fish/zsh/bash) and non-agys processes.
-func isPaneActiveAgys(agent, title, terminalTitle, terminalTitleStripped string) bool {
-	if IsNonAgysAgent(agent) {
+// Strictly returns false for competing non-agys AI agents (Codex/Claude/Droid) and plain shells without agys titles.
+func isPaneActiveAgys(agent, title, terminalTitle, terminalTitleStripped string, tokens ...map[string]string) bool {
+	if IsKnownNonAgysAgent(agent) {
 		return false
 	}
 	if IsAgysAgent(agent) {
@@ -683,7 +721,7 @@ func getMatchingHerdrPanesFromList(ctx context.Context, panes []HerdrRawPane, so
 		}
 
 		// Strictly allow ONLY panes actively executing agys/Antigravity
-		if !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped) {
+		if !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped, p.Tokens) {
 			continue
 		}
 
@@ -776,6 +814,7 @@ func lookupPaneAgentStateFromList(panes []HerdrRawPane, paneID string) (found, a
 				pane.Title,
 				pane.TerminalTitle,
 				pane.TerminalTitleStripped,
+				pane.Tokens,
 			)
 		}
 	}
@@ -784,21 +823,21 @@ func lookupPaneAgentStateFromList(panes []HerdrRawPane, paneID string) (found, a
 
 // ReportHerdrMetadata communicates with Herdr via its UNIX domain socket to set display_agent, title, and quota for all matching panes.
 func ReportHerdrMetadata(ctx context.Context, profileName string) error {
-	return reportHerdrMetadataInternal(ctx, profileName, "")
+	return reportHerdrMetadataInternal(ctx, profileName, "", false)
 }
 
 // ReportHerdrMetadataWithModel communicates with Herdr via its UNIX domain socket to set metadata including live context window metrics.
 func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName string, preloadedDetails ...*ModelQuotaDetails) error {
-	return reportHerdrMetadataInternal(ctx, profileName, modelName, preloadedDetails...)
+	return reportHerdrMetadataInternal(ctx, profileName, modelName, false, preloadedDetails...)
 }
 
 // ReportHerdrQuotaOnly communicates with Herdr via its UNIX domain socket to update ONLY quota metrics (5H & Weekly) and reset countdowns,
 // explicitly preserving existing context window tokens and title state to prevent conflicts with live turn-by-turn stream hooks.
 func ReportHerdrQuotaOnly(ctx context.Context, profileName, modelName string) error {
-	return reportHerdrMetadataInternal(ctx, profileName, modelName)
+	return reportHerdrMetadataInternal(ctx, profileName, modelName, true)
 }
 
-func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName string, preloadedDetails ...*ModelQuotaDetails) error {
+func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName string, isQuotaOnly bool, preloadedDetails ...*ModelQuotaDetails) error {
 	if !IsInHerdrEnvironment() {
 		return nil
 	}
@@ -816,9 +855,11 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 	// Inline statusline and quota reports are pane-local. If another CLI owns the
 	// pane, agys must neither overwrite its sidebar row nor leave stale telemetry.
 	if paneID != "" && socketPath != "" && len(panes) > 0 {
-		if found, active := lookupPaneAgentStateFromList(panes, paneID); found && !active {
-			_ = clearHerdrPaneMetadata(ctx, socketPath, paneID)
-			return nil
+		for _, p := range panes {
+			if p.PaneID == paneID && IsKnownNonAgysAgent(p.Agent) {
+				_ = clearHerdrPaneMetadata(ctx, socketPath, paneID)
+				return nil
+			}
 		}
 	}
 
@@ -868,8 +909,10 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		if pDir != "" {
 			sessionState, _ = GetSessionContextStateForPane(pDir, target.PaneID)
 			if sessionState != nil {
-				ctxPct = int(sessionState.UsedPercentage + 0.5)
-				hasCtx = true
+				if time.Since(sessionState.UpdatedAt) <= 2*time.Hour {
+					ctxPct = int(sessionState.UsedPercentage + 0.5)
+					hasCtx = true
+				}
 			}
 		}
 
@@ -878,6 +921,15 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		if sessionState != nil {
 			convTitle = sessionState.ConversationTitle
 			costVal = sessionState.Cost
+		}
+
+		// If convTitle is empty, strictly preserve existing conversation title from target.Tokens
+		// during periodic quota updates or whenever an active session state exists for this pane.
+		// (Fresh sessions without a session state and !isQuotaOnly will clear stale titles from prior sessions).
+		if convTitle == "" && (isQuotaOnly || sessionState != nil) {
+			if target.Tokens != nil && target.Tokens["conversation_title"] != "" {
+				convTitle = target.Tokens["conversation_title"]
+			}
 		}
 
 		isCurrentPane := paneID != "" && target.PaneID == paneID
@@ -889,13 +941,16 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 
 		title := target.Title
 		if isCurrentPane {
-			title = fmt.Sprintf("agys: %s", profileName)
 			if convTitle != "" {
 				if strings.HasPrefix(convTitle, "agys") {
 					title = convTitle
 				} else {
 					title = fmt.Sprintf("agys: %s", convTitle)
 				}
+			} else if isQuotaOnly && target.Title != "" {
+				title = target.Title
+			} else {
+				title = fmt.Sprintf("agys: %s", profileName)
 			}
 		} else if title == "" {
 			title = fmt.Sprintf("agys: %s", profileName)
@@ -916,12 +971,16 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			// Context window and cost metrics remain available in tokens
 			if hasCtx {
 				tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
+			} else if (isQuotaOnly || sessionState != nil) && target.Tokens != nil && target.Tokens["quota_context"] != "" {
+				tokens["quota_context"] = target.Tokens["quota_context"]
 			} else {
 				tokens["quota_context"] = ""
 			}
 
 			if costVal > 0 {
 				tokens["cost"] = FormatCost(costVal)
+			} else if (isQuotaOnly || sessionState != nil) && target.Tokens != nil && target.Tokens["cost"] != "" {
+				tokens["cost"] = target.Tokens["cost"]
 			} else {
 				tokens["cost"] = ""
 			}

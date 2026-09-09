@@ -624,6 +624,99 @@ func TestReportHerdrQuotaOnly_PreservesExistingContext(t *testing.T) {
 	}
 }
 
+func TestReportHerdrQuotaOnly_PreservesTitleWhenContextOldOrMissing(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_quotaonly_old_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan string, 2)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 4096)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				paneJSON := `{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","title":"agys: idle-profile","tokens":{"profile":"idle-profile","model":"gemini-2.5-pro","conversation_title":"Persistent Session Title","quota_model_context":"Persistent Session Title"}}]}}` + "\n"
+				_, _ = conn.Write([]byte(paneJSON))
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					received <- reqStr
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	pDir, err := Create("idle-profile")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	// 1. Session context state exists but is older than 2 hours (idle terminal)
+	_ = SaveSessionContext(pDir, &SessionContextState{
+		UsedPercentage:    25.0,
+		ConversationTitle: "Persistent Session Title",
+		ModelID:           "gemini-2.5-pro",
+		UpdatedAt:         time.Now().Add(-3 * time.Hour),
+	})
+
+	err = ReportHerdrQuotaOnly(context.Background(), "idle-profile", "gemini-2.5-pro")
+	if err != nil {
+		t.Fatalf("ReportHerdrQuotaOnly error: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		if !strings.Contains(payload, `"conversation_title":"Persistent Session Title"`) {
+			t.Errorf("Expected conversation_title to be preserved after 2h idle, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"title":"agys: Persistent Session Title"`) {
+			t.Errorf("Expected window title to be preserved after 2h idle, got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("No payload received within timeout")
+	}
+
+	// 2. Session context file is completely missing (nil)
+	_ = ResetSessionContext(pDir)
+
+	err = ReportHerdrQuotaOnly(context.Background(), "idle-profile", "gemini-2.5-pro")
+	if err != nil {
+		t.Fatalf("ReportHerdrQuotaOnly 2 error: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		if !strings.Contains(payload, `"conversation_title":"Persistent Session Title"`) {
+			t.Errorf("Expected conversation_title from target.Tokens to be preserved when context missing, got: %s", payload)
+		}
+		if !strings.Contains(payload, `"title":"agys: Persistent Session Title"`) {
+			t.Errorf("Expected window title from target.Title to be preserved when context missing, got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("No payload received within timeout")
+	}
+}
+
 func TestReportHerdrMetadata_ClearsStaleQuotaTiers(t *testing.T) {
 	sockPath := fmt.Sprintf("/tmp/herdr_tier_test_%d.sock", time.Now().UnixNano())
 	_ = os.Remove(sockPath)
@@ -753,9 +846,13 @@ func TestIsAgysAgent(t *testing.T) {
 	}{
 		{"agy", true},
 		{"Agy", true},
+		{"agys", true},
+		{"Agys", true},
 		{"antigravity", true},
 		{"Antigravity", true},
 		{"herdr:antigravity_cli", true},
+		{"herdr:agys", true},
+		{"herdr:agy", true},
 		{"antigravity-cli", true},
 		{"claude", false},
 		{"codex", false},
@@ -764,6 +861,8 @@ func TestIsAgysAgent(t *testing.T) {
 		{"python", false},
 		{"node", false},
 		{"fish", false},
+		{"zsh", false},
+		{"bash", false},
 		{"", false},
 	}
 
@@ -771,6 +870,43 @@ func TestIsAgysAgent(t *testing.T) {
 		got := IsAgysAgent(tt.agent)
 		if got != tt.want {
 			t.Errorf("IsAgysAgent(%q) = %v, want %v", tt.agent, got, tt.want)
+		}
+	}
+}
+
+func TestIsKnownNonAgysAgent(t *testing.T) {
+	tests := []struct {
+		agent string
+		want  bool
+	}{
+		{"claude", true},
+		{"Claude", true},
+		{"codex", true},
+		{"droid", true},
+		{"aider", true},
+		{"opencode", true},
+		{"copilot", true},
+		{"cursor", true},
+		{"herdr:claude", true},
+		{"herdr:codex", true},
+		{"herdr:droid", true},
+		{"zsh", false},
+		{"bash", false},
+		{"fish", false},
+		{"sh", false},
+		{"python", false},
+		{"git", false},
+		{"go", false},
+		{"agys", false},
+		{"agy", false},
+		{"antigravity", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := IsKnownNonAgysAgent(tt.agent)
+		if got != tt.want {
+			t.Errorf("IsKnownNonAgysAgent(%q) = %v, want %v", tt.agent, got, tt.want)
 		}
 	}
 }
@@ -786,7 +922,10 @@ func TestIsPaneActiveAgys(t *testing.T) {
 		// Active agys agents
 		{"Antigravity", "", "fish", "", true},
 		{"agy", "", "", "", true},
+		{"agys", "", "", "", true},
 		{"herdr:antigravity_cli", "", "zsh", "", true},
+		{"zsh", "agys: khoinguyen [gem]", "", "", true},
+		{"bash", "agys [khoinguyen] 5H: 100%", "", "", true},
 		{"", "agys: khoinguyen [gem]", "", "", true},
 		{"", "", "agys [khoinguyen] 5H: 100%", "", true},
 		{"", "", "agys: khoinguyen [gem]", "", true},

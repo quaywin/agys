@@ -244,7 +244,7 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 	resumeConvID := ""
 	for i := 0; i < len(originalUserArgs); i++ {
 		a := originalUserArgs[i]
-		if a == "-c" || a == "--continue" {
+		if a == "-c" || a == "--continue" || a == "-r" || a == "--resume" {
 			isResume = true
 			break
 		}
@@ -253,7 +253,12 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 			resumeConvID = strings.TrimPrefix(a, "--conversation=")
 			break
 		}
-		if a == "--conversation" && i+1 < len(originalUserArgs) {
+		if strings.HasPrefix(a, "--resume=") {
+			isResume = true
+			resumeConvID = strings.TrimPrefix(a, "--resume=")
+			break
+		}
+		if (a == "--conversation" || a == "--resume") && i+1 < len(originalUserArgs) {
 			isResume = true
 			resumeConvID = originalUserArgs[i+1]
 			break
