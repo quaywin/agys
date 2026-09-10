@@ -1529,4 +1529,68 @@ func TestHandleHerdrSummarize_PaneSwitched(t *testing.T) {
 	}
 }
 
+func TestHandleHerdrHook_InternalExecSuppression(t *testing.T) {
+	t.Setenv("AGYS_INTERNAL_EXEC", "1")
+	t.Setenv("HERDR_SOCKET_PATH", "/tmp/nonexistent.sock")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+
+	// Must return nil and not error or attempt socket operations
+	err := HandleHerdrHook(context.Background(), "session", strings.NewReader(`{"conversationId":"test"}`))
+	if err != nil {
+		t.Errorf("expected nil error for internal exec, got %v", err)
+	}
+
+	err = HandleHerdrHook(context.Background(), "quota", nil)
+	if err != nil {
+		t.Errorf("expected nil error for internal exec quota, got %v", err)
+	}
+}
+
+func TestCleanPromptSummary_InternalPromptsAndSlashCommands(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"[AGYS_INTERNAL_TITLE_GEN] Summarize into 3 to 5 words: fix bug", "(No prompt summary)"},
+		{"[AGYS_INTERNAL_COMMIT_CHECK] You are an expert code reviewer", "(No prompt summary)"},
+		{"/clear", "(No prompt summary)"},
+		{"/changelog", "(No prompt summary)"},
+		{"/help", "(No prompt summary)"},
+		{"/ask help me deploy the application", "Help me deploy the application"},
+		{"<USER_REQUEST>\nfix database deadlock in transaction\n</USER_REQUEST>", "Fix database deadlock in transaction"},
+	}
+
+	for _, tc := range tests {
+		got := cleanPromptSummary(tc.input)
+		if got != tc.expected {
+			t.Errorf("cleanPromptSummary(%q) = %q, expected %q", tc.input, got, tc.expected)
+		}
+	}
+}
+
+func TestResolveConversationTitleFromTranscript_LongLinesAndSlashCommands(t *testing.T) {
+	tmpDir := t.TempDir()
+	transcriptPath := filepath.Join(tmpDir, "transcript.jsonl")
+
+	// Create transcript with:
+	// Line 1: /changelog (standalone slash command, should be skipped)
+	// Line 2: Giant tool output (> 600KB) which would break bufio.Scanner
+	// Line 3: Real user prompt
+	giantToolOutput := strings.Repeat("x", 700*1024)
+	content := fmt.Sprintf(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"/changelog"}`+"\n"+
+		`{"step_index":1,"source":"MODEL","type":"GENERIC","status":"DONE","content":%q}`+"\n"+
+		`{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nImplement user authentication with JWT\n</USER_REQUEST>"}`+"\n", giantToolOutput)
+
+	if err := os.WriteFile(transcriptPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test transcript: %v", err)
+	}
+
+	title := ResolveConversationTitleFromTranscript(transcriptPath)
+	expected := "Implement user authentication with JWT"
+	if title != expected {
+		t.Errorf("expected title %q, got %q", expected, title)
+	}
+}
+
+
 

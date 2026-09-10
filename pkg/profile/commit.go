@@ -514,6 +514,17 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 
 	execCmd := BuildCmdContext(ctx, profileDir, args...)
 
+	// Strictly isolate internal agy executions from Herdr hooks and pane sessions
+	isolatedEnv := make([]string, 0, len(execCmd.Env)+1)
+	for _, envVar := range execCmd.Env {
+		if strings.HasPrefix(envVar, "HERDR_PANE_ID=") || strings.HasPrefix(envVar, "HERDR_SOCKET_PATH=") {
+			continue
+		}
+		isolatedEnv = append(isolatedEnv, envVar)
+	}
+	isolatedEnv = append(isolatedEnv, "AGYS_INTERNAL_EXEC=1")
+	execCmd.Env = isolatedEnv
+
 	// Keep the OAuth token refreshed in the background so future agy launches reuse
 	// the existing authorization instead of re-authorizing at startup.
 	ArmTokenKeepAlive(filepath.Base(profileDir))

@@ -23,7 +23,7 @@ import (
 const defaultHerdrHookScript = `#!/bin/sh
 # installed by herdr / synced by agys
 # HERDR_INTEGRATION_ID=antigravity_cli
-# HERDR_INTEGRATION_VERSION=3
+# HERDR_INTEGRATION_VERSION=4
 
 set -eu
 
@@ -32,6 +32,7 @@ emit_and_exit() {
   exit 0
 }
 
+[ -z "${AGYS_INTERNAL_EXEC:-}" ] || emit_and_exit
 [ -n "${HERDR_SOCKET_PATH:-}" ] || emit_and_exit
 [ -n "${HERDR_PANE_ID:-}" ] || emit_and_exit
 
@@ -224,7 +225,7 @@ func resolveHerdrProfile(ctx context.Context, profileName, paneID string, panes 
 
 // HandleHerdrHook executes the Herdr lifecycle hook directly in pure Go without any Python dependency.
 func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error {
-	if !IsInHerdrEnvironment() {
+	if os.Getenv("AGYS_INTERNAL_EXEC") != "" || !IsInHerdrEnvironment() {
 		fmt.Println("{}")
 		return nil
 	}
@@ -297,7 +298,11 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 				if state, ok := GetSessionContextState(profileDir); ok && state != nil {
 					if state.ConversationID != payload.ConversationID {
 						state.ConversationID = payload.ConversationID
-						state.ConversationTitle = resolvedTitle
+						if resolvedTitle != "" {
+							state.ConversationTitle = resolvedTitle
+						} else {
+							state.ConversationTitle = ""
+						}
 						state.Cost = 0
 						state.UsedPercentage = 0
 						state.InputTokens = 0
@@ -313,9 +318,11 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 						ConversationID:    payload.ConversationID,
 					})
 				}
-				reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-				_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel)
-				cancel()
+				if resolvedTitle != "" {
+					reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+					_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel)
+					cancel()
+				}
 
 				// Asynchronously trigger AI title summarization in background
 				if resolvedTitle != "" && resolvedTitle != "(No prompt summary)" && paneID != "" {
@@ -924,9 +931,10 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		}
 
 		// If convTitle is empty, strictly preserve existing conversation title from target.Tokens
-		// during periodic quota updates or whenever an active session state exists for this pane.
-		// (Fresh sessions without a session state and !isQuotaOnly will clear stale titles from prior sessions).
-		if convTitle == "" && (isQuotaOnly || sessionState != nil) {
+		// during periodic quota updates (isQuotaOnly).
+		// During full metadata updates (!isQuotaOnly), respect the pane's actual sessionState so that
+		// clearing a conversation (/clear) cleanly resets the title and allows the new prompt to establish a new title.
+		if convTitle == "" && isQuotaOnly {
 			if target.Tokens != nil && target.Tokens["conversation_title"] != "" {
 				convTitle = target.Tokens["conversation_title"]
 			}
@@ -949,6 +957,8 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 				}
 			} else if isQuotaOnly && target.Title != "" {
 				title = target.Title
+			} else if target.Title != "" && !strings.Contains(target.Title, "[AGYS_INTERNAL_") && (sessionState != nil) {
+				title = target.Title
 			} else {
 				title = fmt.Sprintf("agys: %s", profileName)
 			}
@@ -964,10 +974,10 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		}
 
 		// Handle Row 2: Conversation Title (replaces context window & cost on sidebar)
-		if isCurrentPane {
-			tokens["conversation_title"] = convTitle
-			tokens["quota_model_context"] = convTitle
+		tokens["conversation_title"] = convTitle
+		tokens["quota_model_context"] = convTitle
 
+		if isCurrentPane {
 			// Context window and cost metrics remain available in tokens
 			if hasCtx {
 				tokens["quota_context"] = fmt.Sprintf("ctx %d%%", ctxPct)
@@ -987,10 +997,16 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		} else {
 			// For other panes: strictly preserve their own conversation_title and context metrics!
 			if target.Tokens != nil {
-				tokens["conversation_title"] = target.Tokens["conversation_title"]
-				tokens["quota_model_context"] = target.Tokens["quota_model_context"]
-				tokens["quota_context"] = target.Tokens["quota_context"]
-				tokens["cost"] = target.Tokens["cost"]
+				if tokens["conversation_title"] == "" && target.Tokens["conversation_title"] != "" {
+					tokens["conversation_title"] = target.Tokens["conversation_title"]
+					tokens["quota_model_context"] = target.Tokens["quota_model_context"]
+				}
+				if tokens["quota_context"] == "" {
+					tokens["quota_context"] = target.Tokens["quota_context"]
+				}
+				if tokens["cost"] == "" {
+					tokens["cost"] = target.Tokens["cost"]
+				}
 			}
 		}
 
@@ -1309,16 +1325,6 @@ func HandleHerdrSummarize(ctx context.Context, profileName, paneID, convID, tran
 		return nil
 	}
 
-	origPaneID := os.Getenv("HERDR_PANE_ID")
-	defer func() {
-		if origPaneID == "" {
-			_ = os.Unsetenv("HERDR_PANE_ID")
-		} else {
-			_ = os.Setenv("HERDR_PANE_ID", origPaneID)
-		}
-	}()
-	os.Setenv("HERDR_PANE_ID", paneID)
-
 	prompt := ResolveConversationTitleFromTranscript(transcriptPath)
 	if prompt == "" {
 		prompt = ResolveConversationTitle(pDir, convID)
@@ -1368,6 +1374,16 @@ func HandleHerdrSummarize(ctx context.Context, profileName, paneID, convID, tran
 
 	state.ConversationTitle = llmTitle
 	_ = SaveSessionContextForPane(pDir, paneID, state)
+
+	origPaneID := os.Getenv("HERDR_PANE_ID")
+	defer func() {
+		if origPaneID == "" {
+			_ = os.Unsetenv("HERDR_PANE_ID")
+		} else {
+			_ = os.Setenv("HERDR_PANE_ID", origPaneID)
+		}
+	}()
+	os.Setenv("HERDR_PANE_ID", paneID)
 
 	activeModel := ResolveActiveModel(pDir, "")
 	reportCtx, reportCancel := context.WithTimeout(context.Background(), 3*time.Second)

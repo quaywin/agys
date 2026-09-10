@@ -707,11 +707,18 @@ func cleanPromptSummary(raw string) string {
 		return "(No prompt summary)"
 	}
 
+	// Reject internal automated prompts from becoming conversation titles
+	if strings.HasPrefix(raw, "[AGYS_INTERNAL_") {
+		return "(No prompt summary)"
+	}
+
 	// Remove leading slash commands (/ask, /goal, etc.)
 	if strings.HasPrefix(raw, "/") {
 		parts := strings.SplitN(raw, " ", 2)
 		if len(parts) > 1 {
 			raw = strings.TrimSpace(parts[1])
+		} else {
+			return "(No prompt summary)"
 		}
 	}
 

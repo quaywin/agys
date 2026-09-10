@@ -214,6 +214,10 @@ func ResolveActiveEffort(profileDir, modelName, explicitEffort string) string {
 // HandleStatusLine processes the statusLine input from Antigravity CLI, updates local session cache,
 // reports real-time metadata to Herdr, and chains previous statusLine command if one was configured.
 func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
+	if os.Getenv("AGYS_INTERNAL_EXEC") != "" {
+		return nil
+	}
+
 	var input []byte
 	if stdin != nil {
 		input, _ = io.ReadAll(stdin)
@@ -268,9 +272,20 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	if convID == "" {
 		convID = payload.SessionID
 	}
+	if convID == "" && existingState != nil && existingState.ConversationID != "" {
+		convID = existingState.ConversationID
+	}
+	if convID == "" && profileDir != "" {
+		if latestID, _, err := GetLatestConversationFileInfo(filepath.Base(profileDir)); err == nil && latestID != "" {
+			convID = latestID
+		}
+	}
 	convTitle := payload.ConversationTitle
 	if convTitle == "" {
 		convTitle = payload.ConversationTitleAlt
+	}
+	if convTitle == "" {
+		convTitle = payload.Title
 	}
 	if convTitle == "" && existingState != nil && existingState.ConversationTitle != "" {
 		if convID == "" || existingState.ConversationID == "" || existingState.ConversationID == convID {
@@ -679,6 +694,7 @@ func ResolveConversationTitle(profileDir, convID string) string {
 		buf := make([]byte, 128*1024)
 		scanner.Buffer(buf, 1024*1024)
 
+		var matchingTitles []string
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			if len(line) == 0 || !bytes.Contains(line, []byte("display")) {
@@ -691,16 +707,19 @@ func ResolveConversationTitle(profileDir, convID string) string {
 			}
 			if err := json.Unmarshal(line, &item); err == nil && item.ConversationID == convID && item.Display != "" {
 				disp := strings.TrimSpace(item.Display)
-				if !strings.HasPrefix(disp, "/") {
+				if !strings.HasPrefix(disp, "/") && !strings.HasPrefix(disp, "[AGYS_INTERNAL_") {
 					cleaned := cleanPromptSummary(disp)
-					if cleaned != "" && cleaned != "(No prompt summary)" {
-						_ = f.Close()
-						return cleaned
+					if cleaned != "" && cleaned != "(No prompt summary)" && !strings.HasPrefix(cleaned, "/") {
+						matchingTitles = append(matchingTitles, cleaned)
 					}
 				}
 			}
 		}
 		_ = f.Close()
+
+		if len(matchingTitles) > 0 {
+			return matchingTitles[0]
+		}
 	}
 
 	return ""
@@ -717,31 +736,38 @@ func ResolveConversationTitleFromTranscript(transcriptPath string) string {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, 512*1024)
-
+	reader := bufio.NewReader(f)
 	lineCount := 0
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) == 0 && err != nil {
+			break
+		}
 		lineCount++
-		if bytes.Contains(line, []byte("<USER_REQUEST>")) {
+		if bytes.Contains(line, []byte("<USER_REQUEST>")) || bytes.Contains(line, []byte(`"USER_INPUT"`)) {
 			var data struct {
+				Type    string `json:"type"`
 				Content string `json:"content"`
 			}
 			if json.Unmarshal(line, &data) == nil && data.Content != "" {
+				if data.Type != "" && data.Type != "USER_INPUT" {
+					continue
+				}
 				prompt := data.Content
 				match := userRequestRegex.FindStringSubmatch(data.Content)
 				if len(match) > 1 {
 					prompt = match[1]
 				}
-				cleaned := cleanPromptSummary(prompt)
-				if cleaned != "" && cleaned != "(No prompt summary)" {
-					return cleaned
+				prompt = strings.TrimSpace(prompt)
+				if prompt != "" && !strings.HasPrefix(prompt, "[AGYS_INTERNAL_") {
+					cleaned := cleanPromptSummary(prompt)
+					if cleaned != "" && cleaned != "(No prompt summary)" && !strings.HasPrefix(cleaned, "/") {
+						return cleaned
+					}
 				}
 			}
 		}
-		if lineCount > 20 {
+		if lineCount > 100 || err != nil {
 			break
 		}
 	}
