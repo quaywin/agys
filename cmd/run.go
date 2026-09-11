@@ -140,7 +140,7 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 
 	// Detect if the user is resuming a conversation and handle profile routing or migration
 	var resumeErr error
-	profileName, agyArgs, resumeErr = resolveResumeProfile(profileName, agyArgs)
+	profileName, agyArgs, resumeErr = resolveResumeProfile(profileName, agyArgs, workingDir)
 	if resumeErr != nil {
 		return resumeErr
 	}
@@ -547,7 +547,7 @@ func EnsureDefaultModelAndEffortWithModel(args []string, defaultModel string) []
 	return finalArgs
 }
 
-func resolveResumeProfile(profileName string, agyArgs []string) (string, []string, error) {
+func resolveResumeProfile(profileName string, agyArgs []string, workingDir ...string) (string, []string, error) {
 	var detectedProfile string
 	var detectedConvID string
 	var detectErr error
@@ -567,7 +567,13 @@ func resolveResumeProfile(profileName string, agyArgs []string) (string, []strin
 			detectedProfile, detectErr = profile.FindProfileByConversation(detectedConvID)
 			break
 		} else if arg == "-c" || arg == "--continue" || arg == "-r" || arg == "--resume" {
-			detectedProfile, detectedConvID, detectErr = profile.FindProfileAndConvByLatestConversation()
+			targetDir := ""
+			if len(workingDir) > 0 && workingDir[0] != "" {
+				targetDir = workingDir[0]
+			} else {
+				targetDir, _ = os.Getwd()
+			}
+			detectedProfile, detectedConvID, detectErr = profile.FindProfileAndConvByLatestConversationInWorkspace(targetDir)
 			break
 		}
 	}

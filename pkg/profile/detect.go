@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -156,6 +157,28 @@ func FindProfileAndConvByLatestConversation() (string, string, error) {
 	}
 
 	return latestProfile, latestConvID, nil
+}
+
+// FindProfileAndConvByLatestConversationInWorkspace attempts to find the latest conversation
+// associated with the given workspace directory. If found, it returns (profile, convID, nil).
+// If no matching conversation exists for the workspace or if workspaceDir is empty,
+// it falls back to FindProfileAndConvByLatestConversation().
+func FindProfileAndConvByLatestConversationInWorkspace(workspaceDir string) (string, string, error) {
+	if workspaceDir != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		sessions, err := ListSessions(ctx, SessionFilter{
+			Project: workspaceDir,
+			All:     false,
+			Limit:   1,
+		})
+		if err == nil && len(sessions) > 0 && sessions[0].ConvID != "" && sessions[0].Profile != "" {
+			return sessions[0].Profile, sessions[0].ConvID, nil
+		}
+	}
+
+	return FindProfileAndConvByLatestConversation()
 }
 
 // FindProfileByLatestConversation scans all profiles and returns the profile name

@@ -329,15 +329,20 @@ func TestNormalizeModelName(t *testing.T) {
 		want  string
 	}{
 		// Display names from UI settings
-		{"Claude Opus 4.6 (Thinking)", "claude-opus-4"},
+		{"Claude Opus 4.6 (Thinking)", "claude-opus-4-6-thinking"},
+		{"Claude Sonnet 4.6 (Thinking)", "claude-sonnet-4-6"},
 		{"Claude Sonnet 4 (Thinking)", "claude-sonnet-4"},
 		{"Gemini 2.5 Pro", "gemini-2.5-pro"},
 		{"Gemini 2.5 Flash", "gemini-2.5-flash"},
 		{"Gemini 3.7 Flash", "gemini-3.7-flash"},
 		{"Gemini 3.8 Flash", "gemini-3.8-flash"},
 		{"Gemini 3.8 Flash (High)", "gemini-3.8-flash"},
+		{"Gemini 3.1 Pro (High)", "gemini-3.1-pro"},
 		{"GPT 4o", "gpt-4o"},
+		{"GPT-OSS 120B (Medium)", "gpt-oss-120b"},
 		// Already API-style IDs
+		{"claude-opus-4-6-thinking", "claude-opus-4-6-thinking"},
+		{"claude-sonnet-4-6", "claude-sonnet-4-6"},
 		{"claude-opus-4", "claude-opus-4"},
 		{"gemini-2.5-pro", "gemini-2.5-pro"},
 		{"gpt-4o", "gpt-4o"},
@@ -345,7 +350,7 @@ func TestNormalizeModelName(t *testing.T) {
 		// Edge cases
 		{"", ""},
 		{"auto", "auto"},
-		{"  Claude Opus 4.6 (Thinking)  ", "claude-opus-4"},
+		{"  Claude Opus 4.6 (Thinking)  ", "claude-opus-4-6-thinking"},
 	}
 
 	for _, tt := range tests {
@@ -412,7 +417,7 @@ func TestResolveActiveModel(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(settingsDir2, "settings.json"), []byte(`{"model": "Claude Opus 4.6 (Thinking)"}`), 0600)
 
 	got = ResolveActiveModel(tmpDir2, "")
-	if got != "claude-opus-4" {
+	if got != "claude-opus-4-6-thinking" {
 		t.Errorf("Expected settings.json model, got %q", got)
 	}
 

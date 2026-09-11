@@ -73,7 +73,9 @@ herdr plugin install quaywin/agys
 - **Dynamic `$HOME` Sandboxing**: Complete environment isolation per profile (`~/.agys/profiles/<profile>/`) with automatic Keychain token protection.
 - **Real-Time 5H & Weekly Quota HUD**: Parallel model quota tracking across all configured accounts powered by the `daily-cloudcode-pa` endpoint.
 - **Smart Auto Profile Selection**: Automatically routes commands to the profile with the best 5-hour Gemini quota, respecting custom priority weights (`agys priority set`).
-- **Session History & Resume (`agys resume`)**: Search, inspect, and resume past conversation sessions by project or profile with interactive selection and preserved CLI flags.
+- **System Health Doctor (`agys doctor`)**: Diagnostic audit of `agy` binaries, OAuth tokens, expiry, Keychain isolation, model discovery, and Herdr socket RPC.
+- **Multi-Profile MCP Management (`agys mcp`)**: Inspect and synchronize Model Context Protocol servers across profiles (`agys mcp sync`).
+- **Session History & Resume (`agys resume`)**: Search, inspect, and resume past conversation sessions with real-time prompt search (`/`), workspace grouping (`Ctrl+F`), and workspace-aware fallback.
 - **Cross-Platform Native (macOS & Linux)**: 100% pure Go static binary with zero CGO dependencies; safe token file sandboxing on Linux and seamless Keychain synchronization on macOS.
 - **Robust Path & Environment Preservation**: Bulletproof `$HOME` and `$PATH` routing (`~/.local/bin`, `~/go/bin`, Homebrew) guaranteeing child hooks and tools run without `command not found` or config shadowing.
 - **Herdr Multi-Agent Integration**: Native 3-row sidebar telemetry, rich terminal tab titles, and live reset countdowns.
@@ -200,10 +202,11 @@ agys run -a -- status
 > **Smart Model & Effort Defaults**: `agys run` automatically defaults to `--model gemini-3.8-flash --effort high` if no model or reasoning effort is explicitly passed in your arguments. You can override at any time with `-m / --model` or `--effort` (supports `--model latest` or `--model auto` to automatically resolve to the highest model).
 
 ### 6. Search & Resume Conversation Sessions (`agys resume`)
-List and resume previous conversation sessions by project and profile with preserved CLI flags and interactive TTY selection:
+List and resume previous conversation sessions by project and profile with interactive prompt search (`/`), workspace grouping (`Ctrl+F`), preserved CLI flags, and workspace-aware fallback:
 
 ```bash
 # List recent sessions for current project and prompt to choose interactively
+# (Press '/' in the menu to filter by keyword, or 'Ctrl+F' to toggle grouped workspace view)
 agys resume
 
 # Resume a specific session directly by index number
@@ -221,6 +224,9 @@ agys resume --profile work
 # Output sessions as JSON
 agys resume --json
 ```
+
+> [!TIP]
+> **Workspace-Aware Continue**: When executing `agys run -c`, `agys` automatically prioritizes the latest conversation belonging to the **current directory / workspace** before falling back to globally active sessions, matching Antigravity CLI 1.2.1 parity.
 
 ---
 
@@ -345,7 +351,40 @@ agys plugin list --all
 agys plugin uninstall superpowers --all
 ```
 
-### 13. Profile Utilities: Clone, Export, Import, Rename, Delete
+### 13. Multi-Profile MCP Management (`agys mcp`)
+Inspect configured Model Context Protocol servers and synchronize `mcp_config.json` definitions across profiles or swarms:
+
+```bash
+# List MCP servers configured for default or auto profile
+agys mcp list
+
+# List MCP servers across ALL profiles
+agys mcp list --all
+
+# Synchronize MCP configuration from one profile to another
+agys mcp sync work personal
+
+# Synchronize MCP configuration from a master profile to ALL profiles
+agys mcp sync work --all
+```
+
+### 14. System Environment Health Check (`agys doctor`)
+Perform a comprehensive diagnostic audit of the entire Antigravity & Herdr environment:
+
+```bash
+# Run full environment health check
+agys doctor
+# or alias:
+agys health
+```
+
+* 🩺 **Binary Audit**: Detects `agy` installation path, reports installed version, and compares against the latest GitHub release.
+* 🔑 **Credential & Token Health**: Checks OAuth token validity, remaining lifetime, and auto-refresh readiness for all profiles.
+* 🛡️ **macOS Keychain & Sandboxing**: Verifies that profile Keychain symlinks and token isolation are intact.
+* ⚡ **Model Discovery**: Validates cached Flash & Pro models and cache freshness.
+* 📡 **Herdr Connectivity**: Verifies active pane context and test-pings UNIX domain socket RPC when running inside Herdr.
+
+### 15. Profile Utilities: Clone, Export, Import, Rename, Delete
 
 ```bash
 # Duplicate an existing profile (credentials and config)
@@ -369,7 +408,7 @@ agys delete work --force
 # or alias: agys rm work --force
 ```
 
-### 14. Shell Aliases & Auto-Completions
+### 16. Shell Aliases & Auto-Completions
 
 ```bash
 # Generate shell aliases for configured profiles (e.g. alias agy-work="agys run work --")
@@ -380,7 +419,7 @@ source <(agys completion zsh)
 source <(agys completion bash)
 ```
 
-### 15. Self-Upgrade (`agys upgrade`)
+### 17. Self-Upgrade (`agys upgrade`)
 
 ```bash
 # Upgrade agys CLI to latest release automatically
@@ -391,7 +430,7 @@ agys upgrade
 agys upgrade --check
 ```
 
-### 16. AI Model Discovery & Auto-Detection (`agys models`)
+### 18. AI Model Discovery & Auto-Detection (`agys models`)
 
 `agys` automatically discovers and selects the highest version in the Gemini Flash model series from `agy` without requiring code updates when Google releases new versions:
 

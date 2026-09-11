@@ -507,7 +507,18 @@ func ParseCommitCheckResult(output string, userProvidedMessage string) CommitChe
 func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraArgs ...string) (string, error) {
 	_ = SyncTrustedWorkspaces()
 
+	hasTimeout := false
+	for _, a := range extraArgs {
+		if strings.HasPrefix(a, "--print-timeout") {
+			hasTimeout = true
+			break
+		}
+	}
+
 	args := []string{"-p", prompt, "--dangerously-skip-permissions", "--disable-slash-commands"}
+	if !hasTimeout {
+		args = append(args, "--print-timeout=45s")
+	}
 	if len(extraArgs) > 0 {
 		args = append(args, extraArgs...)
 	}
@@ -547,6 +558,14 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 	if err != nil {
 		errStr := strings.TrimSpace(stderrBuf.String())
 		if errStr != "" {
+			// Extract high-signal error marker from agy 1.1.28+ (e.g. "error: ...")
+			if idx := strings.Index(strings.ToLower(errStr), "error:"); idx != -1 {
+				errorPart := strings.TrimSpace(errStr[idx:])
+				if lineEnd := strings.Index(errorPart, "\n"); lineEnd != -1 {
+					errorPart = strings.TrimSpace(errorPart[:lineEnd])
+				}
+				return outStr, fmt.Errorf("agy execution failed: %w (%s)", err, errorPart)
+			}
 			return outStr, fmt.Errorf("agy execution failed: %w (%s)", err, errStr)
 		}
 		return outStr, fmt.Errorf("agy execution failed: %w", err)

@@ -129,7 +129,21 @@ func NormalizeModelName(displayName string) string {
 		return ""
 	}
 
-	// Strip parenthetical suffixes like "(Thinking)", "(Preview)", etc.
+	// Direct map for known special agy models
+	lowerRaw := strings.ToLower(displayName)
+	if strings.Contains(lowerRaw, "claude") {
+		if strings.Contains(lowerRaw, "opus") && (strings.Contains(lowerRaw, "4.6") || strings.Contains(lowerRaw, "4-6")) {
+			return "claude-opus-4-6-thinking"
+		}
+		if strings.Contains(lowerRaw, "sonnet") && (strings.Contains(lowerRaw, "4.6") || strings.Contains(lowerRaw, "4-6")) {
+			return "claude-sonnet-4-6"
+		}
+	}
+	if strings.Contains(lowerRaw, "gpt-oss") || strings.Contains(lowerRaw, "gpt oss") {
+		return "gpt-oss-120b"
+	}
+
+	// Strip parenthetical suffixes like "(Thinking)", "(Preview)", "(High)", "(Medium)", "(Low)", etc.
 	if idx := strings.Index(name, "("); idx > 0 {
 		name = strings.TrimSpace(name[:idx])
 	}
@@ -140,12 +154,12 @@ func NormalizeModelName(displayName string) string {
 		return lower
 	}
 
-	// Convert "Claude Opus 4.6" -> "claude-opus-4.6" -> "claude-opus-4"
+	// Convert "Claude Opus 4" -> "claude-opus-4"
 	// Convert "Gemini 2.5 Pro" -> "gemini-2.5-pro"
 	parts := strings.Fields(lower)
 	result := strings.Join(parts, "-")
 
-	// Trim trailing minor version from model names (e.g. "4.6" -> "4") for cleaner matching
+	// Trim trailing minor version from model names (e.g. "4.0" -> "4") for cleaner matching
 	// but keep major.minor for models like "2.5" where it's part of the identity
 	// Heuristic: if the last part is a version like X.Y where X >= 3, drop .Y
 	if len(parts) > 0 {

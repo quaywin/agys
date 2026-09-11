@@ -81,3 +81,63 @@ func TestGetTerminalWidth(t *testing.T) {
 		t.Errorf("expected terminal width > 0, got %d", w)
 	}
 }
+
+func TestFilterSessions(t *testing.T) {
+	sessions := []profile.ConversationSession{
+		{Profile: "work", ProjectName: "agys", UserPrompt: "fix login bug", ConvID: "conv-111"},
+		{Profile: "personal", ProjectName: "website", UserPrompt: "add dark mode styling", ConvID: "conv-222"},
+		{Profile: "work", ProjectName: "backend", UserPrompt: "implement payment api", ConvID: "conv-333"},
+	}
+
+	// Empty query returns all
+	if got := filterSessions(sessions, ""); len(got) != 3 {
+		t.Errorf("expected 3 sessions for empty query, got %d", len(got))
+	}
+
+	// Filter by prompt keyword
+	matchedPrompt := filterSessions(sessions, "dark mode")
+	if len(matchedPrompt) != 1 || matchedPrompt[0].ConvID != "conv-222" {
+		t.Errorf("expected conv-222 for 'dark mode', got %v", matchedPrompt)
+	}
+
+	// Filter by profile
+	matchedProfile := filterSessions(sessions, "work")
+	if len(matchedProfile) != 2 {
+		t.Errorf("expected 2 sessions for profile 'work', got %d", len(matchedProfile))
+	}
+
+	// Filter by project
+	matchedProject := filterSessions(sessions, "agys")
+	if len(matchedProject) != 1 || matchedProject[0].ConvID != "conv-111" {
+		t.Errorf("expected conv-111 for project 'agys', got %v", matchedProject)
+	}
+
+	// Filter with no matches
+	if got := filterSessions(sessions, "nonexistent query"); len(got) != 0 {
+		t.Errorf("expected 0 matches, got %d", len(got))
+	}
+}
+
+func TestGroupSessions(t *testing.T) {
+	sessions := []profile.ConversationSession{
+		{ProjectName: "agys", ProjectPath: "/path/agys", UserPrompt: "task 1"},
+		{ProjectName: "website", ProjectPath: "/path/web", UserPrompt: "task 2"},
+		{ProjectName: "agys", ProjectPath: "/path/agys", UserPrompt: "task 3"},
+	}
+
+	groups := groupSessions(sessions)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+
+	if groups[0].ProjectName != "agys" || len(groups[0].Sessions) != 2 {
+		t.Errorf("expected group 'agys' with 2 sessions, got %s with %d", groups[0].ProjectName, len(groups[0].Sessions))
+	}
+	if groups[1].ProjectName != "website" || len(groups[1].Sessions) != 1 {
+		t.Errorf("expected group 'website' with 1 session, got %s with %d", groups[1].ProjectName, len(groups[1].Sessions))
+	}
+	// Verify Index preserves original position in displayed list
+	if groups[0].Sessions[0].Index != 0 || groups[0].Sessions[1].Index != 2 {
+		t.Errorf("expected indices 0 and 2 for agys sessions, got %d and %d", groups[0].Sessions[0].Index, groups[0].Sessions[1].Index)
+	}
+}

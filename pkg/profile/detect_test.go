@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -152,5 +153,71 @@ func TestSaveGetSessionFlags(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != flags[0] || got[1] != flags[1] {
 		t.Errorf("Expected flags %v, got %v", flags, got)
+	}
+}
+
+func TestFindProfileAndConvByLatestConversationInWorkspace(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+
+	p1 := "work"
+	p2 := "personal"
+	dir1, _ := Create(p1)
+	dir2, _ := Create(p2)
+
+	projA := filepath.Join(tempHome, "projects", "projA")
+	projB := filepath.Join(tempHome, "projects", "projB")
+	_ = os.MkdirAll(projA, 0700)
+	_ = os.MkdirAll(projB, 0700)
+
+	convID1 := "conv-projA-123"
+	convID2 := "conv-projB-456"
+
+	brain1 := filepath.Join(dir1, ".gemini", "antigravity-cli", "brain", convID1)
+	brain2 := filepath.Join(dir2, ".gemini", "antigravity-cli", "brain", convID2)
+	_ = os.MkdirAll(filepath.Join(brain1, ".system_generated", "logs"), 0700)
+	_ = os.MkdirAll(filepath.Join(brain2, ".system_generated", "logs"), 0700)
+
+	// Mock transcript with workspace URI in <user_information>
+	t1 := fmt.Sprintf(`{"step":1,"content":"<user_information>\n[URI] -> [CorpusName]:\n%s -> projA\n</user_information>\n<USER_REQUEST>task A</USER_REQUEST>"}`+"\n", projA)
+	t2 := fmt.Sprintf(`{"step":1,"content":"<user_information>\n[URI] -> [CorpusName]:\n%s -> projB\n</user_information>\n<USER_REQUEST>task B</USER_REQUEST>"}`+"\n", projB)
+
+	f1 := filepath.Join(brain1, ".system_generated", "logs", "transcript.jsonl")
+	f2 := filepath.Join(brain2, ".system_generated", "logs", "transcript.jsonl")
+	_ = os.WriteFile(f1, []byte(t1), 0600)
+	_ = os.WriteFile(f2, []byte(t2), 0600)
+
+	// Make conv2 (personal, projB) newer than conv1 (work, projA)
+	now := time.Now()
+	_ = os.Chtimes(f1, now.Add(-10*time.Minute), now.Add(-10*time.Minute))
+	_ = os.Chtimes(f2, now, now)
+
+	// 1. Scoped to projA: should return work (p1) even though projB is newer globally
+	profA, cidA, err := FindProfileAndConvByLatestConversationInWorkspace(projA)
+	if err != nil {
+		t.Fatalf("FindProfileAndConvByLatestConversationInWorkspace failed: %v", err)
+	}
+	if profA != p1 || cidA != convID1 {
+		t.Errorf("Expected (%s, %s) for projA, got (%s, %s)", p1, convID1, profA, cidA)
+	}
+
+	// 2. Scoped to projB: should return personal (p2)
+	profB, cidB, err := FindProfileAndConvByLatestConversationInWorkspace(projB)
+	if err != nil {
+		t.Fatalf("FindProfileAndConvByLatestConversationInWorkspace failed: %v", err)
+	}
+	if profB != p2 || cidB != convID2 {
+		t.Errorf("Expected (%s, %s) for projB, got (%s, %s)", p2, convID2, profB, cidB)
+	}
+
+	// 3. Unknown workspace: should fall back to globally latest (personal, convID2)
+	unknownDir := filepath.Join(tempHome, "projects", "unknown")
+	profU, cidU, err := FindProfileAndConvByLatestConversationInWorkspace(unknownDir)
+	if err != nil {
+		t.Fatalf("FindProfileAndConvByLatestConversationInWorkspace failed: %v", err)
+	}
+	if profU != p2 || cidU != convID2 {
+		t.Errorf("Expected fallback to (%s, %s) for unknown workspace, got (%s, %s)", p2, convID2, profU, cidU)
 	}
 }
