@@ -9,13 +9,10 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-	"unicode"
 
 	"github.com/gofrs/flock"
 )
@@ -336,11 +333,6 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 					reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 					_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel)
 					cancel()
-				}
-
-				// Asynchronously trigger AI title summarization in background
-				if resolvedTitle != "" && resolvedTitle != "(No prompt summary)" && paneID != "" {
-					SpawnAsyncTitleSummarizer(currentProfile, paneID, payload.ConversationID, payload.TranscriptPath)
 				}
 			}
 		}
@@ -1304,103 +1296,3 @@ func StartHerdrQuotaWatcher(ctx context.Context, profileName string, modelName .
 	}
 }
 
-// SpawnAsyncTitleSummarizer launches a detached background worker to generate an AI title via LLM.
-func SpawnAsyncTitleSummarizer(profileName, paneID, convID, transcriptPath string) {
-	exe, err := os.Executable()
-	if err != nil || exe == "" {
-		return
-	}
-
-	args := []string{
-		"herdr-hook", "summarize",
-		"--profile", profileName,
-		"--pane", paneID,
-		"--conv", convID,
-		"--transcript", transcriptPath,
-	}
-	cmd := exec.Command(exe, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid: true,
-	}
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	_ = cmd.Start()
-}
-
-// HandleHerdrSummarize generates an AI title using the latest Gemini Flash model and updates Herdr metadata.
-func HandleHerdrSummarize(ctx context.Context, profileName, paneID, convID, transcriptPath string) error {
-	if profileName == "" || paneID == "" || convID == "" {
-		return nil
-	}
-
-	pDir, err := GetProfileDir(profileName)
-	if err != nil || pDir == "" {
-		return nil
-	}
-
-	prompt := ResolveConversationTitleFromTranscript(transcriptPath)
-	if prompt == "" {
-		prompt = ResolveConversationTitle(pDir, convID)
-	}
-	if prompt == "" || prompt == "(No prompt summary)" {
-		return nil
-	}
-
-	sumCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	flashModel := GetLatestGeminiModel()
-	extraArgs := []string{"--model", flashModel}
-	if ModelSupportsEffort(flashModel) {
-		extraArgs = append(extraArgs, "--effort", "low")
-	}
-
-	llmPrompt := fmt.Sprintf("[AGYS_INTERNAL_TITLE_GEN] Summarize into 3 to 5 words in the same language, no quotes, no markdown, no punctuation: %s", prompt)
-	outStr, err := ExecAgyPrompt(sumCtx, pDir, llmPrompt, extraArgs...)
-	if err != nil || strings.TrimSpace(outStr) == "" {
-		return nil
-	}
-
-	llmTitle := strings.TrimSpace(outStr)
-	llmTitle = strings.Trim(llmTitle, "\"`'*“”‘’")
-	llmTitle = strings.TrimRight(llmTitle, ".!?")
-	llmTitle = strings.Join(strings.Fields(llmTitle), " ")
-	runes := []rune(llmTitle)
-	if len(runes) > 0 {
-		runes[0] = unicode.ToUpper(runes[0])
-		llmTitle = string(runes)
-	}
-	llmTitle = TruncateTitle(llmTitle, 45)
-
-	// Verify pane context is still on the same conversation
-	state, ok := GetSessionContextStateForPane(pDir, paneID)
-	if !ok || state == nil {
-		return nil
-	}
-	if state.ConversationID != "" && state.ConversationID != convID {
-		return nil
-	}
-
-	if state.ConversationTitle == llmTitle {
-		return nil
-	}
-
-	state.ConversationTitle = llmTitle
-	_ = SaveSessionContextForPane(pDir, paneID, state)
-
-	origPaneID := os.Getenv("HERDR_PANE_ID")
-	defer func() {
-		if origPaneID == "" {
-			_ = os.Unsetenv("HERDR_PANE_ID")
-		} else {
-			_ = os.Setenv("HERDR_PANE_ID", origPaneID)
-		}
-	}()
-	os.Setenv("HERDR_PANE_ID", paneID)
-
-	activeModel := ResolveActiveModel(pDir, "")
-	reportCtx, reportCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer reportCancel()
-	return ReportHerdrMetadataWithModel(reportCtx, profileName, activeModel)
-}

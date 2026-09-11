@@ -663,17 +663,17 @@ var (
 	conversationalLeadInRegexes = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)^(?:về\s+(?:phần\s+)?(?:thông\s+tin\s+)?(?:vấn\s+đề\s+)?(?:herdr\s+ở\s+sidebar\s+)?(?:tôi\s+thấy\s+)?)`),
 		regexp.MustCompile(`(?i)^(?:tôi\s+(?:thấy|nghĩ|muốn|cần)(?:\s+là|\s+rằng|\s+nên)?\s+)`),
-		regexp.MustCompile(`(?i)^(?:hãy\s+)?(?:giúp\s+tôi|cho\s+tôi|cho\s+hỏi|nhờ\s+bạn)\s+`),
-		regexp.MustCompile(`(?i)^(?:làm\s+thế\s+nào\s+để|làm\s+sao\s+để|cách\s+để)\s+`),
-		regexp.MustCompile(`(?i)^(?:kiểm\s+tra|check|xem)\s+(?:giúp|thử|lại)\s+`),
-		regexp.MustCompile(`(?i)^(?:sao\s+chưa\s+thấy|tại\s+sao\s+chưa\s+thấy|tại\s+sao\s+không|sao\s+lại)\s+`),
-		regexp.MustCompile(`(?i)^(?:review\s+lại(?:\s+lần\s+nữa)?|review\s+giúp)\s*,?\s*`),
+		regexp.MustCompile(`(?i)^(?:hãy\s+)?(?:review|kiểm\s+tra|check|xem|đánh\s+giá)\s+(?:lại(?:\s+lần\s+nữa)?|giúp|hộ|thử)?(?:\s+(?:cho\s+)?(?:tôi|mình|em|bạn))?\s*,?\s*`),
+		regexp.MustCompile(`(?i)^(?:hãy\s+)?(?:giúp\s+(?:tôi|mình|em)|cho\s+(?:tôi|mình|em)\s+hỏi|cho\s+hỏi|nhờ\s+(?:bạn|anh|em)(?:\s+xem)?)\s*,?\s*`),
+		regexp.MustCompile(`(?i)^(?:làm\s+(?:thế\s+nào|sao)\s+để|cách\s+(?:nào\s+)?để|hướng\s+dẫn\s+(?:cách\s+)?)\s*`),
+		regexp.MustCompile(`(?i)^(?:sao\s+chưa\s+thấy|tại\s+sao\s+chưa\s+thấy|tại\s+sao\s+không|sao\s+lại|sao\s+không)\s+`),
 		regexp.MustCompile(`(?i)^(?:can\s+you\s+(?:please\s+)?(?:help\s+me\s+)?(?:to\s+)?|could\s+you\s+(?:please\s+)?(?:help\s+me\s+)?(?:to\s+)?)`),
 		regexp.MustCompile(`(?i)^please\s+(?:help\s+me\s+)?(?:to\s+)?`),
 		regexp.MustCompile(`(?i)^i\s+(?:want|need|would\s+like)\s+to\s+`),
 		regexp.MustCompile(`(?i)^how\s+(?:do\s+i|can\s+i|to)\s+`),
 	}
-	trailingParticlesRegex = regexp.MustCompile(`(?i)[\s,]+(?:vậy|không|nhé|nhỉ|được\s+không|đi|giúp|ạ)\s*\??$`)
+	secondaryClauseRegex   = regexp.MustCompile(`(?i),\s*(?:hiện\s+tại|bây\s+giờ|xem\s+sao|được\s+chưa|currently|so\s+that)\b.*$`)
+	trailingParticlesRegex = regexp.MustCompile(`(?i)(?:[\s,]+(?:vậy|không|nhé|nhỉ|chưa|sao|được\s+không|đi|giúp|ạ|please|thanks|thank\s+you))+\s*\??$`)
 	xmlTagRegex            = regexp.MustCompile(`<[^>]+>`)
 )
 
@@ -727,10 +727,19 @@ func cleanPromptSummary(raw string) string {
 	raw = strings.TrimSpace(raw)
 
 	cleaned := raw
-	for _, re := range conversationalLeadInRegexes {
-		cleaned = re.ReplaceAllString(cleaned, "")
-		cleaned = strings.TrimSpace(cleaned)
+	for pass := 0; pass < 2; pass++ {
+		orig := cleaned
+		for _, re := range conversationalLeadInRegexes {
+			cleaned = re.ReplaceAllString(cleaned, "")
+			cleaned = strings.TrimSpace(cleaned)
+		}
+		if cleaned == orig {
+			break
+		}
 	}
+
+	cleaned = secondaryClauseRegex.ReplaceAllString(cleaned, "")
+	cleaned = strings.TrimSpace(cleaned)
 
 	cleaned = trailingParticlesRegex.ReplaceAllString(cleaned, "")
 	cleaned = strings.TrimSpace(cleaned)

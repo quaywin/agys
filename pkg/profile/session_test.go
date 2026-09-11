@@ -339,6 +339,18 @@ func TestCleanPromptSummary(t *testing.T) {
 			input:    "về phần thông tin herdr ở sidebar tôi thấy dòng thứ 2 thể hiện model nhưng không có tiêu đề tóm tắt cho phiên trò chuyện này",
 			contains: "Dòng thứ 2 thể hiện model nhưng không có tiêu đề...",
 		},
+		{
+			input:    "review giúp tôi phần summary conversation title, hiện tại đã hoạt động hiệu quả chưa?",
+			contains: "Phần summary conversation title",
+		},
+		{
+			input:    "hãy check giúp mình lỗi deadlock khi chạy migration database postgres nhé",
+			contains: "Lỗi deadlock khi chạy migration database postgres",
+		},
+		{
+			input:    "làm sao để cấu hình herdr socket trong agys vậy nhỉ?",
+			contains: "Cấu hình herdr socket trong agys",
+		},
 	}
 
 	for _, tt := range tests {
