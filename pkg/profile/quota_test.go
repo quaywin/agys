@@ -374,6 +374,6 @@ func TestGetProfileFullQuotaDetailsFast_FreshAndStale(t *testing.T) {
 
 	staleDetails, staleOk := GetProfileFullQuotaDetailsFast(pName, "gemini-2.5-flash")
 	if !staleOk || staleDetails == nil || staleDetails.Fraction5H != 0.82 {
-		t.Fatalf("expected stale cache to return 0.82 and trigger refresh, got ok=%v, details=%+v", staleOk, staleDetails)
+		t.Fatalf("expected stale cache to return 0.82 fallback, got ok=%v, details=%+v", staleOk, staleDetails)
 	}
 }

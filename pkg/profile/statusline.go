@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -377,32 +378,11 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		}
 	}
 
-	// 2. Fallback to or overlay real-time quota provided in stdin payload by Antigravity CLI (0ms)
-	if len(payload.Quota) > 0 {
-		if fb := parsePayloadQuota(payload.Quota); fb != nil {
-			if quotaDetails == nil {
-				quotaDetails = fb
-			} else {
-				// Overlay latest fraction from payload if available
-				if fb.Fraction5H >= 0 {
-					quotaDetails.Fraction5H = fb.Fraction5H
-					if fb.CompactReset5H != "" {
-						quotaDetails.CompactReset5H = fb.CompactReset5H
-					}
-				}
-				if fb.FractionWeekly >= 0 {
-					quotaDetails.FractionWeekly = fb.FractionWeekly
-					if fb.CompactResetWeekly != "" {
-						quotaDetails.CompactResetWeekly = fb.CompactResetWeekly
-					}
-				}
-			}
+	// 2. Fallback to quota in stdin payload ONLY if local cache was missing or empty
+	if (quotaDetails == nil || quotaDetails.Fraction5H < 0) && len(payload.Quota) > 0 {
+		if fb := parsePayloadQuota(payload.Quota, activeModel); fb != nil {
+			quotaDetails = fb
 		}
-	}
-
-	// 3. If still no quota details at all (e.g. brand new profile), trigger background refresh
-	if (quotaDetails == nil || quotaDetails.Fraction5H < 0) && currentProfile != "" {
-		TriggerAsyncQuotaRefresh(currentProfile)
 	}
 
 	// If inside Herdr environment, trigger immediate metadata refresh for instant zero-latency sidebar update
@@ -436,7 +416,7 @@ func parsePayloadQuota(quotaMap map[string]struct {
 	ResetTimeAlt         string  `json:"resetTime"`
 	ResetInSeconds       uint64  `json:"reset_in_seconds"`
 	ResetInSecondsAlt    uint64  `json:"resetInSeconds"`
-}) *ModelQuotaDetails {
+}, activeModel ...string) *ModelQuotaDetails {
 	if len(quotaMap) == 0 {
 		return nil
 	}
@@ -444,8 +424,34 @@ func parsePayloadQuota(quotaMap map[string]struct {
 		Fraction5H:     -1.0,
 		FractionWeekly: -1.0,
 	}
-	for key, q := range quotaMap {
+
+	modelFilter := ""
+	if len(activeModel) > 0 {
+		modelFilter = strings.ToLower(strings.TrimSpace(activeModel[0]))
+	}
+	is3P := strings.Contains(modelFilter, "claude") || strings.Contains(modelFilter, "sonnet") || strings.Contains(modelFilter, "opus") ||
+		strings.Contains(modelFilter, "gpt") || strings.Contains(modelFilter, "openai") || strings.HasPrefix(modelFilter, "o1") || strings.HasPrefix(modelFilter, "o3")
+
+	// Sort keys deterministically to avoid random Go map iteration order
+	keys := make([]string, 0, len(quotaMap))
+	for k := range quotaMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		q := quotaMap[key]
 		k := strings.ToLower(key)
+
+		// When a 3P model is active, prefer 3P/claude/gpt keys over gemini keys
+		if is3P && strings.Contains(k, "gemini") && (details.Fraction5H >= 0 || details.FractionWeekly >= 0) {
+			continue
+		}
+		// When Gemini is active, prefer gemini keys over 3P keys
+		if !is3P && (strings.Contains(k, "3p") || strings.Contains(k, "claude") || strings.Contains(k, "gpt")) && (details.Fraction5H >= 0 || details.FractionWeekly >= 0) {
+			continue
+		}
+
 		frac := q.RemainingFraction
 		if frac == 0 && q.RemainingFractionAlt > 0 {
 			frac = q.RemainingFractionAlt
@@ -471,11 +477,11 @@ func parsePayloadQuota(quotaMap map[string]struct {
 		isWeekly := strings.Contains(k, "week") || strings.Contains(k, "7d")
 		is5H := strings.Contains(k, "5h") || (strings.Contains(k, "gemini") && !isWeekly)
 
-		if isWeekly {
+		if isWeekly && details.FractionWeekly < 0 {
 			details.FractionWeekly = frac
 			details.ResetTimeWeekly = parsedReset
 			details.CompactResetWeekly = FormatCompactResetTime(parsedReset, frac)
-		} else if is5H {
+		} else if is5H && details.Fraction5H < 0 {
 			details.Fraction5H = frac
 			details.ResetTime5H = parsedReset
 			details.CompactReset5H = FormatCompactResetTime(parsedReset, frac)

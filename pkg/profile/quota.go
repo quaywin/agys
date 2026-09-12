@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"text/tabwriter"
 	"time"
 )
@@ -698,36 +697,9 @@ func GetProfileFullQuotaDetailsForModel(ctx context.Context, profileName, modelN
 	return details, nil
 }
 
-var (
-	asyncQuotaRefreshMu  sync.Mutex
-	asyncQuotaRefreshing = make(map[string]time.Time)
-)
-
-// TriggerAsyncQuotaRefresh triggers an asynchronous background quota fetch for profileName.
-// Debounced to once every 15 seconds per profile to prevent redundant concurrent fetches.
-func TriggerAsyncQuotaRefresh(profileName string) {
-	if profileName == "" {
-		return
-	}
-	asyncQuotaRefreshMu.Lock()
-	last, active := asyncQuotaRefreshing[profileName]
-	if active && time.Since(last) < 15*time.Second {
-		asyncQuotaRefreshMu.Unlock()
-		return
-	}
-	asyncQuotaRefreshing[profileName] = time.Now()
-	asyncQuotaRefreshMu.Unlock()
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		_, _ = FetchQuota(ctx, profileName)
-	}()
-}
-
 // GetProfileFullQuotaDetailsFast returns quota details from local cache immediately (0ms).
 // If fresh cache (< 45s) is available, it returns it directly.
-// If stale cache (< 4 hours) is available, it returns it AND triggers a background refresh.
+// If stale cache (< 4 hours) is available, it returns it as a fallback without any network calls.
 // If no cache exists, it returns (nil, false).
 func GetProfileFullQuotaDetailsFast(profileName, modelName string) (*ModelQuotaDetails, bool) {
 	if profileName == "" {
@@ -741,9 +713,8 @@ func GetProfileFullQuotaDetailsFast(profileName, modelName string) (*ModelQuotaD
 		}
 	}
 
-	// 2. Stale cache check (< 4 hours) -> instant 0ms + trigger async background refresh
+	// 2. Stale cache check (< 4 hours) -> instant 0ms fallback
 	if stale, _ := GetCachedQuota(profileName, 4*time.Hour); stale != nil {
-		TriggerAsyncQuotaRefresh(profileName)
 		if details := ExtractModelQuotaDetails(stale, modelName); details != nil && details.Fraction5H >= 0 {
 			return details, true
 		}
