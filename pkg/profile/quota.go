@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 )
@@ -522,14 +523,10 @@ type ModelQuotaDetails struct {
 	GroupName          string
 }
 
-// GetProfileFullQuotaDetailsForModel returns both 5H and Weekly quota details matching the specified model name.
-func GetProfileFullQuotaDetailsForModel(ctx context.Context, profileName, modelName string) (*ModelQuotaDetails, error) {
-	summary, err := FetchQuota(ctx, profileName)
-	if err != nil {
-		return nil, err
-	}
+// ExtractModelQuotaDetails extracts 5H and Weekly quota metrics from a QuotaSummary for a given model.
+func ExtractModelQuotaDetails(summary *QuotaSummary, modelName string) *ModelQuotaDetails {
 	if summary == nil {
-		return nil, fmt.Errorf("no quota summary available")
+		return nil
 	}
 
 	mLower := strings.ToLower(strings.TrimSpace(modelName))
@@ -673,15 +670,88 @@ func GetProfileFullQuotaDetailsForModel(ctx context.Context, profileName, modelN
 		}
 	}
 
-	if details.Fraction5H < 0 {
-		return nil, fmt.Errorf("no quota bucket found in summary")
+	if details.Fraction5H < 0 && details.FractionWeekly < 0 {
+		return nil
 	}
 
 	details.CompactReset5H = FormatCompactResetTime(details.ResetTime5H, details.Fraction5H)
 	details.CompactResetWeekly = FormatCompactResetTime(details.ResetTimeWeekly, details.FractionWeekly)
 
+	return details
+}
+
+// GetProfileFullQuotaDetailsForModel returns both 5H and Weekly quota details matching the specified model name.
+func GetProfileFullQuotaDetailsForModel(ctx context.Context, profileName, modelName string) (*ModelQuotaDetails, error) {
+	summary, err := FetchQuota(ctx, profileName)
+	if err != nil {
+		return nil, err
+	}
+	if summary == nil {
+		return nil, fmt.Errorf("no quota summary available")
+	}
+
+	details := ExtractModelQuotaDetails(summary, modelName)
+	if details == nil || details.Fraction5H < 0 {
+		return nil, fmt.Errorf("no quota bucket found in summary")
+	}
+
 	return details, nil
 }
+
+var (
+	asyncQuotaRefreshMu  sync.Mutex
+	asyncQuotaRefreshing = make(map[string]time.Time)
+)
+
+// TriggerAsyncQuotaRefresh triggers an asynchronous background quota fetch for profileName.
+// Debounced to once every 15 seconds per profile to prevent redundant concurrent fetches.
+func TriggerAsyncQuotaRefresh(profileName string) {
+	if profileName == "" {
+		return
+	}
+	asyncQuotaRefreshMu.Lock()
+	last, active := asyncQuotaRefreshing[profileName]
+	if active && time.Since(last) < 15*time.Second {
+		asyncQuotaRefreshMu.Unlock()
+		return
+	}
+	asyncQuotaRefreshing[profileName] = time.Now()
+	asyncQuotaRefreshMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		_, _ = FetchQuota(ctx, profileName)
+	}()
+}
+
+// GetProfileFullQuotaDetailsFast returns quota details from local cache immediately (0ms).
+// If fresh cache (< 45s) is available, it returns it directly.
+// If stale cache (< 4 hours) is available, it returns it AND triggers a background refresh.
+// If no cache exists, it returns (nil, false).
+func GetProfileFullQuotaDetailsFast(profileName, modelName string) (*ModelQuotaDetails, bool) {
+	if profileName == "" {
+		return nil, false
+	}
+
+	// 1. Fresh cache check (< 45s) -> instant 0ms
+	if cached, fresh := GetCachedQuota(profileName, 45*time.Second); fresh && cached != nil {
+		if details := ExtractModelQuotaDetails(cached, modelName); details != nil && details.Fraction5H >= 0 {
+			return details, true
+		}
+	}
+
+	// 2. Stale cache check (< 4 hours) -> instant 0ms + trigger async background refresh
+	if stale, _ := GetCachedQuota(profileName, 4*time.Hour); stale != nil {
+		TriggerAsyncQuotaRefresh(profileName)
+		if details := ExtractModelQuotaDetails(stale, modelName); details != nil && details.Fraction5H >= 0 {
+			return details, true
+		}
+	}
+
+	return nil, false
+}
+
 
 func loadCodeAssist(ctx context.Context, accessToken string) (string, error) {
 	url := "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"

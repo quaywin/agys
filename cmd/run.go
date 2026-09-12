@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/quaywin/agys/pkg/profile"
 	"github.com/spf13/cobra"
@@ -261,7 +262,18 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 	if profile.IsInHerdrEnvironment() {
 		_ = profile.SyncHerdrIntegration(profileDir)
 		profile.SetTerminalTitle(targetProfile)
-		_ = profile.ReportHerdrMetadataWithModel(cmd.Context(), targetProfile, activeModel)
+		// Fast initial Herdr sidebar sync without blocking CLI startup
+		fastQuota, hasFast := profile.GetProfileFullQuotaDetailsFast(targetProfile, activeModel)
+		if hasFast && fastQuota != nil {
+			_ = profile.ReportHerdrMetadataWithModel(cmd.Context(), targetProfile, activeModel, fastQuota)
+		} else {
+			// First run / no cache: launch agy immediately and update Herdr sidebar in background
+			go func() {
+				bgCtx, bgCancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer bgCancel()
+				_ = profile.ReportHerdrMetadataWithModel(bgCtx, targetProfile, activeModel)
+			}()
+		}
 
 		// Start background watcher for reset timer / periodic refresh if running in Herdr
 		stopWatcher := profile.StartHerdrQuotaWatcher(cmd.Context(), targetProfile, activeModel)

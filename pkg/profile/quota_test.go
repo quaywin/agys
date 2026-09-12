@@ -3,6 +3,7 @@ package profile
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -263,4 +264,116 @@ func TestGetProfileFullQuotaDetailsForModel(t *testing.T) {
 	tokenPath := filepath.Join(pDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 	_ = os.MkdirAll(filepath.Dir(tokenPath), 0700)
 	_ = os.WriteFile(tokenPath, []byte(`{"token":{"access_token":"fake"}}`), 0600)
+}
+
+func TestExtractModelQuotaDetails(t *testing.T) {
+	now := time.Now()
+	summary := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Description: "gemini-2.5-pro, gemini-2.5-flash",
+				Buckets: []QuotaBucket{
+					{
+						BucketID:          "5h",
+						RemainingFraction: 0.75,
+						ResetTime:         now.Add(2 * time.Hour),
+					},
+					{
+						BucketID:          "weekly",
+						RemainingFraction: 0.90,
+						ResetTime:         now.Add(48 * time.Hour),
+					},
+				},
+			},
+			{
+				DisplayName: "Claude Models",
+				Description: "claude-3-7-sonnet, 3p",
+				Buckets: []QuotaBucket{
+					{
+						BucketID:          "5h",
+						RemainingFraction: 0.40,
+						ResetTime:         now.Add(1 * time.Hour),
+					},
+					{
+						BucketID:          "weekly",
+						RemainingFraction: 0.60,
+						ResetTime:         now.Add(24 * time.Hour),
+					},
+				},
+			},
+		},
+	}
+
+	// 1. Test nil summary
+	if res := ExtractModelQuotaDetails(nil, "gemini-2.5-flash"); res != nil {
+		t.Errorf("expected nil for nil summary, got %+v", res)
+	}
+
+	// 2. Test Gemini match
+	geminiDetails := ExtractModelQuotaDetails(summary, "gemini-2.5-flash")
+	if geminiDetails == nil || geminiDetails.Fraction5H != 0.75 || geminiDetails.FractionWeekly != 0.90 {
+		t.Errorf("unexpected gemini details: %+v", geminiDetails)
+	}
+
+	// 3. Test Claude match
+	claudeDetails := ExtractModelQuotaDetails(summary, "claude-3-7-sonnet")
+	if claudeDetails == nil || claudeDetails.Fraction5H != 0.40 || claudeDetails.FractionWeekly != 0.60 {
+		t.Errorf("unexpected claude details: %+v", claudeDetails)
+	}
+}
+
+func TestGetProfileFullQuotaDetailsFast_FreshAndStale(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("AGYS_DIR", tmpDir)
+
+	pName := "testfastquota"
+	_, err := Create(pName)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// 1. When no cache exists -> false
+	if _, ok := GetProfileFullQuotaDetailsFast(pName, "gemini-2.5-flash"); ok {
+		t.Errorf("expected ok=false when cache does not exist")
+	}
+
+	// 2. Seed fresh cache (< 45s)
+	summary := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Buckets: []QuotaBucket{
+					{
+						BucketID:          "5h",
+						RemainingFraction: 0.82,
+						ResetTime:         time.Now().Add(2 * time.Hour),
+					},
+				},
+			},
+		},
+	}
+	if err := SaveCachedQuota(pName, summary); err != nil {
+		t.Fatalf("SaveCachedQuota error: %v", err)
+	}
+
+	details, ok := GetProfileFullQuotaDetailsFast(pName, "gemini-2.5-flash")
+	if !ok || details == nil || details.Fraction5H != 0.82 {
+		t.Fatalf("expected fresh cache to return 0.82, got ok=%v, details=%+v", ok, details)
+	}
+
+	// 3. Fake stale cache (> 45s but < 4 hours)
+	pDir, _ := GetProfileDir(pName)
+	cachePath := filepath.Join(pDir, quotaCacheFilename)
+	cachedData := CachedProfileQuota{
+		Summary:   summary,
+		UpdatedAt: time.Now().Add(-2 * time.Minute),
+	}
+	staleBytes, _ := json.Marshal(cachedData)
+	_ = os.WriteFile(cachePath, staleBytes, 0600)
+
+	staleDetails, staleOk := GetProfileFullQuotaDetailsFast(pName, "gemini-2.5-flash")
+	if !staleOk || staleDetails == nil || staleDetails.Fraction5H != 0.82 {
+		t.Fatalf("expected stale cache to return 0.82 and trigger refresh, got ok=%v, details=%+v", staleOk, staleDetails)
+	}
 }

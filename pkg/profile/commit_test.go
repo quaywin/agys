@@ -236,6 +236,115 @@ func TestGitRepositoryChecks(t *testing.T) {
 	}
 }
 
+func TestContainsSecurityRisk(t *testing.T) {
+	tests := []struct {
+		summary  string
+		expected bool
+	}{
+		{"Clean - No issues found.", false},
+		{"Clean - No issues reported.", false},
+		{"No issues found in staged changes.", false},
+		{"", false},
+		{"Found exposed API key: sk-proj-12345 in main.go", true},
+		{"Hardcoded secret token detected in config.json", true},
+		{"Potential password leak in auth.go", true},
+		{"Security risk: SQL injection vulnerability in query", true},
+		{"Private key file committed", true},
+		{"Refactored error handling and types.", false},
+	}
+
+	for _, tc := range tests {
+		got := ContainsSecurityRisk(tc.summary)
+		if got != tc.expected {
+			t.Errorf("ContainsSecurityRisk(%q) = %v, expected %v", tc.summary, got, tc.expected)
+		}
+	}
+}
+
+func TestStageAllFiles(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agys-test-stage-all-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	gitInitCmd := execCommandInDir(tmpDir, "git", "init")
+	if err := gitInitCmd.Run(); err != nil {
+		t.Skipf("git command not available: %v", err)
+	}
+
+	// Create an untracked file
+	untracked := filepath.Join(tmpDir, "untracked.txt")
+	if err := os.WriteFile(untracked, []byte("new file"), 0644); err != nil {
+		t.Fatalf("failed to write untracked file: %v", err)
+	}
+
+	// StageTrackedFiles (git add -u) will NOT stage untracked files
+	_ = StageTrackedFiles(tmpDir)
+	staged, _ := GetStagedFiles(tmpDir)
+	if len(staged) != 0 {
+		t.Errorf("expected StageTrackedFiles to not stage untracked files, got %d", len(staged))
+	}
+
+	// StageAllFiles (git add -A) MUST stage untracked files
+	if err := StageAllFiles(tmpDir); err != nil {
+		t.Fatalf("StageAllFiles failed: %v", err)
+	}
+	staged, _ = GetStagedFiles(tmpDir)
+	if len(staged) != 1 || staged[0] != "untracked.txt" {
+		t.Errorf("expected StageAllFiles to stage 'untracked.txt', got %v", staged)
+	}
+}
+
+func TestCleanInternalCommitSessions(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agys-test-clean-sessions-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Setup brain folders:
+	// 1. Internal commit check session (should be removed)
+	internalBrain := filepath.Join(tmpDir, ".gemini", "antigravity-cli", "brain", "internal-conv")
+	_ = os.MkdirAll(filepath.Join(internalBrain, ".system_generated", "logs"), 0700)
+	internalTranscript := filepath.Join(internalBrain, ".system_generated", "logs", "transcript.jsonl")
+	_ = os.WriteFile(internalTranscript, []byte(`{"step_index":0,"content":"[AGYS_INTERNAL_COMMIT_CHECK] You are an expert"}`+"\n"), 0644)
+
+	// 2. Real user session (must be preserved!)
+	userBrain := filepath.Join(tmpDir, ".gemini", "antigravity-cli", "brain", "user-conv")
+	_ = os.MkdirAll(filepath.Join(userBrain, ".system_generated", "logs"), 0700)
+	userTranscript := filepath.Join(userBrain, ".system_generated", "logs", "transcript.jsonl")
+	_ = os.WriteFile(userTranscript, []byte(`{"step_index":0,"content":"<USER_REQUEST>Real user task</USER_REQUEST>"}`+"\n"), 0644)
+
+	// 3. history.jsonl containing both entries
+	hPath := filepath.Join(tmpDir, ".gemini", "antigravity-cli", "history.jsonl")
+	historyContent := `{"display":"[AGYS_INTERNAL_COMMIT_CHECK] prompt","conversationId":"internal-conv"}` + "\n" +
+		`{"display":"Real user task","conversationId":"user-conv"}` + "\n"
+	_ = os.WriteFile(hPath, []byte(historyContent), 0644)
+
+	CleanInternalCommitSessions(tmpDir)
+
+	// Internal brain folder must be deleted
+	if _, err := os.Stat(internalBrain); !os.IsNotExist(err) {
+		t.Errorf("expected internal brain folder to be deleted")
+	}
+
+	// User brain folder must be preserved
+	if _, err := os.Stat(userBrain); err != nil {
+		t.Errorf("expected user brain folder to be preserved, got error: %v", err)
+	}
+
+	// history.jsonl must only retain the real user task
+	data, _ := os.ReadFile(hPath)
+	hStr := string(data)
+	if strings.Contains(hStr, "[AGYS_INTERNAL_COMMIT_CHECK]") {
+		t.Errorf("expected history.jsonl to have internal entry removed, got: %s", hStr)
+	}
+	if !strings.Contains(hStr, "Real user task") {
+		t.Errorf("expected history.jsonl to preserve real user task, got: %s", hStr)
+	}
+}
+
 func execCommandInDir(dir string, name string, args ...string) *exec.Cmd {
 	cmd := execCommand(name, args...)
 	cmd.Dir = dir

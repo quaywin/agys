@@ -1020,6 +1020,12 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		var err error
 		if len(preloadedDetails) > 0 && preloadedDetails[0] != nil {
 			details = preloadedDetails[0]
+		} else if !isQuotaOnly {
+			if fast, ok := GetProfileFullQuotaDetailsFast(profileName, targetModel); ok && fast != nil {
+				details = fast
+			} else {
+				details, err = GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
+			}
 		} else {
 			details, err = GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
 		}

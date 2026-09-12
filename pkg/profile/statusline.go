@@ -367,19 +367,42 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		}
 	}
 
-	// Retrieve real-time quota details for CLI statusline footer & Herdr update
+	// Retrieve real-time quota details for CLI statusline footer & Herdr update (0ms non-blocking)
 	var quotaDetails *ModelQuotaDetails
+
+	// 1. Check local cache (0ms, Stale-While-Revalidate with async background refresh)
 	if currentProfile != "" {
-		quotaCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		quotaDetails, _ = GetProfileFullQuotaDetailsForModel(quotaCtx, currentProfile, activeModel)
-		cancel()
+		if fast, ok := GetProfileFullQuotaDetailsFast(currentProfile, activeModel); ok && fast != nil {
+			quotaDetails = fast
+		}
 	}
 
-	// Fallback to quota in stdin payload if API returned no quota
-	if (quotaDetails == nil || quotaDetails.Fraction5H < 0) && len(payload.Quota) > 0 {
+	// 2. Fallback to or overlay real-time quota provided in stdin payload by Antigravity CLI (0ms)
+	if len(payload.Quota) > 0 {
 		if fb := parsePayloadQuota(payload.Quota); fb != nil {
-			quotaDetails = fb
+			if quotaDetails == nil {
+				quotaDetails = fb
+			} else {
+				// Overlay latest fraction from payload if available
+				if fb.Fraction5H >= 0 {
+					quotaDetails.Fraction5H = fb.Fraction5H
+					if fb.CompactReset5H != "" {
+						quotaDetails.CompactReset5H = fb.CompactReset5H
+					}
+				}
+				if fb.FractionWeekly >= 0 {
+					quotaDetails.FractionWeekly = fb.FractionWeekly
+					if fb.CompactResetWeekly != "" {
+						quotaDetails.CompactResetWeekly = fb.CompactResetWeekly
+					}
+				}
+			}
 		}
+	}
+
+	// 3. If still no quota details at all (e.g. brand new profile), trigger background refresh
+	if (quotaDetails == nil || quotaDetails.Fraction5H < 0) && currentProfile != "" {
+		TriggerAsyncQuotaRefresh(currentProfile)
 	}
 
 	// If inside Herdr environment, trigger immediate metadata refresh for instant zero-latency sidebar update

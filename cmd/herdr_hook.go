@@ -17,9 +17,6 @@ var herdrHookCmd = &cobra.Command{
 		if len(args) > 0 {
 			action = args[0]
 		}
-		if action == "summarize" {
-			return nil
-		}
 		return profile.HandleHerdrHook(cmd.Context(), action, os.Stdin)
 	},
 }

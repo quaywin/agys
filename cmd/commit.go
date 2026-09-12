@@ -13,15 +13,16 @@ import (
 )
 
 var (
-	commitMsg     string
-	commitAll     bool
-	commitYes     bool
-	commitPush    bool
-	commitNoCheck bool
-	commitDryRun  bool
-	commitModel   string
-	commitEffort  string
-	commitPrompt  string
+	commitMsg      string
+	commitAll      bool
+	commitStageAll bool
+	commitYes      bool
+	commitPush     bool
+	commitNoCheck  bool
+	commitDryRun   bool
+	commitModel    string
+	commitEffort   string
+	commitPrompt   string
 )
 
 var commitCmd = &cobra.Command{
@@ -36,8 +37,12 @@ var commitCmd = &cobra.Command{
 			return fmt.Errorf("not a git repository (or any of the parent directories)")
 		}
 
-		// 2. Stage tracked modified/deleted files if -a / --all is set
-		if commitAll {
+		// 2. Stage files if -a / --all or -A / --stage-all is set
+		if commitStageAll {
+			if err := profile.StageAllFiles(""); err != nil {
+				return err
+			}
+		} else if commitAll {
 			if err := profile.StageTrackedFiles(""); err != nil {
 				return err
 			}
@@ -148,20 +153,49 @@ var commitCmd = &cobra.Command{
 			}
 		}
 
+		useColor := os.Getenv("NO_COLOR") == ""
+		hasSecurityRisk := profile.ContainsSecurityRisk(checkSummary)
+
 		// Display Code Review Summary
 		if checkSummary != "" {
-			fmt.Println("\n--- Code Review Summary ---")
+			if hasSecurityRisk {
+				if useColor {
+					fmt.Println("\n\033[1;31m┌────────────────────────────────────────────────────────────────────────┐\033[0m")
+					fmt.Println("\033[1;31m│  ⚠️  SECURITY WARNING: Potential secrets or security risks detected!   │\033[0m")
+					fmt.Println("\033[1;31m└────────────────────────────────────────────────────────────────────────┘\033[0m")
+					fmt.Println("\033[1;31m--- Code Review Summary (Security Risk Detected!) ---\033[0m")
+				} else {
+					fmt.Println("\n[!] SECURITY WARNING: Potential secrets or security risks detected!")
+					fmt.Println("--- Code Review Summary ---")
+				}
+			} else {
+				if useColor {
+					fmt.Println("\n\033[1;36m--- Code Review Summary ---\033[0m")
+				} else {
+					fmt.Println("\n--- Code Review Summary ---")
+				}
+			}
 			fmt.Println(checkSummary)
 		}
 
 		// Display Proposed Commit Message
-		fmt.Println("\n--- Proposed Commit Message ---")
+		if useColor {
+			fmt.Println("\n\033[1;32m--- Proposed Commit Message ---\033[0m")
+		} else {
+			fmt.Println("\n--- Proposed Commit Message ---")
+		}
 		fmt.Println(finalMessage)
 		fmt.Println()
 
 		if commitDryRun {
 			fmt.Println("[agys] Dry-run complete. No changes committed.")
 			return nil
+		}
+
+		// If a security warning is detected, bypass -y/--yes to force explicit confirmation
+		if hasSecurityRisk && commitYes {
+			fmt.Println("[agys] ⚠️  Security warning detected in staged changes! Bypassing -y/--yes to require explicit confirmation.")
+			commitYes = false
 		}
 
 		// Ask for confirmation if not auto-accepted (-y / --yes)
@@ -203,7 +237,8 @@ var commitCmd = &cobra.Command{
 
 func init() {
 	commitCmd.Flags().StringVarP(&commitMsg, "message", "m", "", "Specify commit message directly")
-	commitCmd.Flags().BoolVarP(&commitAll, "all", "a", false, "Automatically stage modified/deleted tracked files before commit")
+	commitCmd.Flags().BoolVarP(&commitAll, "all", "a", false, "Automatically stage modified/deleted tracked files before commit (git add -u)")
+	commitCmd.Flags().BoolVarP(&commitStageAll, "stage-all", "A", false, "Automatically stage all changes including untracked files before commit (git add -A)")
 	commitCmd.Flags().BoolVarP(&commitYes, "yes", "y", false, "Automatically accept commit message and commit without interactive prompt")
 	commitCmd.Flags().BoolVarP(&commitPush, "push", "p", false, "Automatically push to current git branch after committing")
 	commitCmd.Flags().BoolVar(&commitNoCheck, "no-check", false, "Skip AI code review check")

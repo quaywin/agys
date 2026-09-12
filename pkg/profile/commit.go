@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -46,6 +47,19 @@ func StageTrackedFiles(repoDir string) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to stage files (git add -u): %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// StageAllFiles stages all changes including new untracked files (equivalent to git add -A).
+func StageAllFiles(repoDir string) error {
+	cmd := exec.Command("git", "add", "-A")
+	if repoDir != "" {
+		cmd.Dir = repoDir
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to stage all files (git add -A): %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
@@ -576,6 +590,8 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 
 // RunAgyCommitCheck performs the AI review and/or commit message generation using the specified profile.
 func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []string, diffContent string, diffStat string, userMsg string, noCheck bool, model string, effort string, customPrompt string) (*CommitCheckResult, error) {
+	defer CleanInternalCommitSessions(profileDir)
+
 	nameStatus, _ := GetStagedNameStatus("")
 	diffFormatted := FormatCompactDiffForPrompt(stagedFiles, nameStatus, diffStat, diffContent)
 
@@ -646,5 +662,86 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 
 	res := ParseCommitCheckResult(outStr, userMsg)
 	return &res, nil
+}
+
+// ContainsSecurityRisk inspects the code review summary for indicators of leaked secrets, credentials, or critical vulnerabilities.
+func ContainsSecurityRisk(summary string) bool {
+	s := strings.ToLower(summary)
+	if s == "" || strings.Contains(s, "clean - no issues") || strings.Contains(s, "no issues reported") || strings.Contains(s, "no issues found") {
+		return false
+	}
+	riskIndicators := []string{
+		"api key", "apikey", "private key", "secret", "password", "credential",
+		"token", "hardcoded", "leak", "security risk", "vulnerability",
+	}
+	for _, ind := range riskIndicators {
+		if strings.Contains(s, ind) {
+			return true
+		}
+	}
+	return false
+}
+
+// CleanInternalCommitSessions removes temporary brain session directories and history entries created by internal commit checks.
+func CleanInternalCommitSessions(profileDir string) {
+	if profileDir == "" {
+		return
+	}
+
+	// 1. Clean brain directories
+	for _, brainDir := range getProfileBrainDirs(profileDir) {
+		entries, err := os.ReadDir(brainDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			convDir := filepath.Join(brainDir, entry.Name())
+			tPath := filepath.Join(convDir, ".system_generated", "logs", "transcript.jsonl")
+			f, err := os.Open(tPath)
+			if err != nil {
+				continue
+			}
+			buf := make([]byte, 2048)
+			n, _ := f.Read(buf)
+			_ = f.Close()
+			if bytes.Contains(buf[:n], []byte("[AGYS_INTERNAL_COMMIT_CHECK]")) {
+				_ = os.RemoveAll(convDir)
+			}
+		}
+	}
+
+	// 2. Clean history.jsonl
+	for _, subDir := range []string{"antigravity-cli", "antigravity", "antigravity-ide"} {
+		hPath := filepath.Join(profileDir, ".gemini", subDir, "history.jsonl")
+		data, err := os.ReadFile(hPath)
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		if !bytes.Contains(data, []byte("[AGYS_INTERNAL_COMMIT_CHECK]")) {
+			continue
+		}
+
+		var cleanLines [][]byte
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		buf := make([]byte, 128*1024)
+		scanner.Buffer(buf, 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if !bytes.Contains(line, []byte("[AGYS_INTERNAL_COMMIT_CHECK]")) {
+				cleanLines = append(cleanLines, append([]byte(nil), line...))
+			}
+		}
+		if err := scanner.Err(); err == nil {
+			var newContent bytes.Buffer
+			for _, l := range cleanLines {
+				newContent.Write(l)
+				newContent.WriteByte('\n')
+			}
+			_ = WriteFileAtomic(hPath, newContent.Bytes(), 0600)
+		}
+	}
 }
 
