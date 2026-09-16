@@ -396,6 +396,12 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 	// Ensure PATH retains real user binary locations and prevents stale profile binaries from shadowing agys
 	envMap["PATH"] = SanitizeProfilePath(os.Getenv("PATH"), realUserHome, profileDir)
 
+	// On Linux, isolate from host Secret Service / DBus Keyring (GNOME Keyring / KWallet)
+	// to prevent cross-profile credential bleed and enforce pure file-based profile token sandboxing.
+	if runtime.GOOS == "linux" {
+		envMap["DBUS_SESSION_BUS_ADDRESS"] = "/dev/null"
+	}
+
 
 	env := os.Environ()
 	newEnv := make([]string, 0, len(env))

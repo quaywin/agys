@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -670,6 +671,31 @@ func TestCleanStaleProfileBinaries(t *testing.T) {
 	}
 	if _, err := os.Stat(stale2); !os.IsNotExist(err) {
 		t.Errorf("Expected %s to be deleted, but still exists", stale2)
+	}
+}
+
+func TestBuildCmdContext_LinuxKeyringIsolation(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Skipping Linux Keyring isolation test on non-Linux")
+	}
+
+	pDir := t.TempDir()
+	cmd := BuildCmdContext(context.Background(), pDir, "models")
+
+	var dbusVal string
+	hasDbus := false
+	for _, env := range cmd.Env {
+		if strings.HasPrefix(env, "DBUS_SESSION_BUS_ADDRESS=") {
+			hasDbus = true
+			dbusVal = strings.TrimPrefix(env, "DBUS_SESSION_BUS_ADDRESS=")
+			break
+		}
+	}
+	if !hasDbus {
+		t.Errorf("Expected DBUS_SESSION_BUS_ADDRESS to be present in cmd.Env on Linux")
+	}
+	if dbusVal != "/dev/null" {
+		t.Errorf("Expected DBUS_SESSION_BUS_ADDRESS=/dev/null, got %q", dbusVal)
 	}
 }
 
