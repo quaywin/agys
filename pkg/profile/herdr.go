@@ -33,6 +33,10 @@ emit_and_exit() {
 [ -n "${HERDR_SOCKET_PATH:-}" ] || emit_and_exit
 [ -n "${HERDR_PANE_ID:-}" ] || emit_and_exit
 
+# Session-only: this hook reports the Antigravity conversation so Herdr can
+# resume the pane. Lifecycle state comes from Herdr's screen detection.
+[ "${1:-session}" = "session" ] || emit_and_exit
+
 # Locate real user home if $HOME is pointing to an isolated profile directory
 REAL_HOME="$HOME"
 case "$HOME" in
@@ -55,7 +59,7 @@ elif command -v agys >/dev/null 2>&1; then
   AGYS_BIN="$(command -v agys)"
 fi
 
-exec "$AGYS_BIN" herdr-hook "${1:-session}"
+exec "$AGYS_BIN" herdr-hook session
 `
 
 // ReadSettingsModel reads the "model" field from the newest settings.json across all product variants (cli, ide, antigravity).
@@ -306,8 +310,10 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 				if resolvedTitle == "" && payload.ConversationID != "" {
 					resolvedTitle = ResolveConversationTitle(profileDir, payload.ConversationID)
 				}
+				isNewSession := false
 				if state, ok := GetSessionContextState(profileDir); ok && state != nil {
 					if state.ConversationID != payload.ConversationID {
+						isNewSession = true
 						state.ConversationID = payload.ConversationID
 						if resolvedTitle != "" {
 							state.ConversationTitle = resolvedTitle
@@ -324,12 +330,13 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 					}
 					_ = SaveSessionContext(profileDir, state)
 				} else {
+					isNewSession = true
 					_ = SaveSessionContext(profileDir, &SessionContextState{
 						ConversationTitle: resolvedTitle,
 						ConversationID:    payload.ConversationID,
 					})
 				}
-				if resolvedTitle != "" {
+				if resolvedTitle != "" || isNewSession {
 					reportCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 					_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel)
 					cancel()
@@ -447,14 +454,36 @@ func SyncHerdrIntegration(profileDir string) error {
 		_ = os.Chmod(hookFile, 0755)
 	}
 
-	// Ensure hooks.json is configured with PreInvocation, PostInvocation, and Stop hooks
+	// Ensure hooks.json is configured strictly for PreInvocation session hook (Herdr standard)
 	hooksJSONPath := filepath.Join(profileDir, ".gemini", "config", "hooks.json")
 	if err := ensureHooksJSON(hooksJSONPath, hookFile); err != nil {
 		return err
 	}
 
+	// Clean legacy PostInvocation/Stop hooks across all profiles asynchronously in background
+	go CleanStaleHooksInProfiles()
+
 	// Ensure statusLine hook is configured in settings.json to capture real-time context window
 	return SyncStatusLineSettings(profileDir)
+}
+
+// CleanStaleHooksInProfiles scans all known profile directories and cleans legacy PostInvocation/Stop hooks.
+func CleanStaleHooksInProfiles() {
+	profiles, err := List()
+	if err != nil {
+		return
+	}
+	for _, p := range profiles {
+		pDir, err := GetProfileDir(p)
+		if err != nil {
+			continue
+		}
+		hooksJSONPath := filepath.Join(pDir, ".gemini", "config", "hooks.json")
+		if _, err := os.Stat(hooksJSONPath); err == nil {
+			hookFile := filepath.Join(pDir, ".gemini", "config", "hooks", "herdr-agent-state.sh")
+			_ = ensureHooksJSON(hooksJSONPath, hookFile)
+		}
+	}
 }
 
 func ensureHooksJSON(hooksJSONPath, hookScriptPath string) error {
@@ -475,7 +504,6 @@ func ensureHooksJSON(hooksJSONPath, hookScriptPath string) error {
 	}
 
 	sessionCmd := "bash '$HOME/.gemini/config/hooks/herdr-agent-state.sh' session"
-	quotaCmd := "bash '$HOME/.gemini/config/hooks/herdr-agent-state.sh' quota"
 
 	herdrMap["PreInvocation"] = []interface{}{
 		map[string]interface{}{
@@ -485,21 +513,9 @@ func ensureHooksJSON(hooksJSONPath, hookScriptPath string) error {
 		},
 	}
 
-	herdrMap["PostInvocation"] = []interface{}{
-		map[string]interface{}{
-			"command": quotaCmd,
-			"timeout": 10,
-			"type":    "command",
-		},
-	}
-
-	herdrMap["Stop"] = []interface{}{
-		map[string]interface{}{
-			"command": quotaCmd,
-			"timeout": 10,
-			"type":    "command",
-		},
-	}
+	// Remove legacy PostInvocation and Stop hooks that compete with prompt PTY I/O
+	delete(herdrMap, "PostInvocation")
+	delete(herdrMap, "Stop")
 
 	updatedData, err := json.MarshalIndent(hooksConfig, "", "  ")
 	if err != nil {
@@ -942,7 +958,9 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		// clearing a conversation (/clear) cleanly resets the title and allows the new prompt to establish a new title.
 		if convTitle == "" && isQuotaOnly {
 			if target.Tokens != nil && target.Tokens["conversation_title"] != "" {
-				convTitle = target.Tokens["conversation_title"]
+				if sessionState == nil || sessionState.ConversationTitle != "" {
+					convTitle = target.Tokens["conversation_title"]
+				}
 			}
 		}
 
@@ -961,9 +979,9 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 				} else {
 					title = fmt.Sprintf("agys: %s", convTitle)
 				}
-			} else if isQuotaOnly && target.Title != "" {
+			} else if isQuotaOnly && target.Title != "" && (sessionState == nil || sessionState.ConversationTitle != "") {
 				title = target.Title
-			} else if target.Title != "" && !strings.Contains(target.Title, "[AGYS_INTERNAL_") && (sessionState != nil) {
+			} else if target.Title != "" && !strings.Contains(target.Title, "[AGYS_INTERNAL_") && (sessionState != nil && sessionState.ConversationTitle != "") {
 				title = target.Title
 			} else {
 				title = fmt.Sprintf("agys: %s", profileName)

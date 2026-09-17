@@ -276,11 +276,6 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	if convID == "" && existingState != nil && existingState.ConversationID != "" {
 		convID = existingState.ConversationID
 	}
-	if convID == "" && profileDir != "" {
-		if latestID, _, err := GetLatestConversationFileInfo(filepath.Base(profileDir)); err == nil && latestID != "" {
-			convID = latestID
-		}
-	}
 	convTitle := payload.ConversationTitle
 	if convTitle == "" {
 		convTitle = payload.ConversationTitleAlt
@@ -352,7 +347,9 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 				state.Effort = existingState.Effort
 			}
 		}
-		_ = SaveSessionContext(profileDir, state)
+		if existingState == nil || !isSessionContextStateEqual(existingState, state) {
+			_ = SaveSessionContext(profileDir, state)
+		}
 		costVal = state.Cost
 		if state.Effort != "" {
 			effortVal = state.Effort
@@ -368,7 +365,7 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		}
 	}
 
-	// Retrieve real-time quota details for CLI statusline footer & Herdr update (0ms non-blocking)
+	// Retrieve real-time quota details for CLI statusline footer (0ms non-blocking)
 	var quotaDetails *ModelQuotaDetails
 
 	// 1. Check local cache (0ms, Stale-While-Revalidate with async background refresh)
@@ -383,13 +380,6 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		if fb := parsePayloadQuota(payload.Quota, activeModel); fb != nil {
 			quotaDetails = fb
 		}
-	}
-
-	// If inside Herdr environment, trigger immediate metadata refresh for instant zero-latency sidebar update
-	if IsInHerdrEnvironment() && currentProfile != "" {
-		reportCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		defer cancel()
-		_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel, quotaDetails)
 	}
 
 	// Format high-contrast real-time telemetry string for Antigravity CLI footer
@@ -634,9 +624,67 @@ func chainPreviousStatusLine(ctx context.Context, profileDir string, input []byt
 	_ = cmd.Run()
 }
 
+func isSessionContextStateEqual(a, b *SessionContextState) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.UsedPercentage == b.UsedPercentage &&
+		a.InputTokens == b.InputTokens &&
+		a.CacheReadTokens == b.CacheReadTokens &&
+		a.CacheCreationTokens == b.CacheCreationTokens &&
+		a.ModelID == b.ModelID &&
+		a.ModelDisplayName == b.ModelDisplayName &&
+		a.ConversationTitle == b.ConversationTitle &&
+		a.ConversationID == b.ConversationID &&
+		a.Cost == b.Cost &&
+		a.Effort == b.Effort
+}
+
+// IsStatusLineDisabled reports whether the statusLine footer and hook are disabled.
+func IsStatusLineDisabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("AGYS_NO_STATUSLINE")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
+// RemoveStatusLineSettings removes the "statusLine" entry from settings.json across all product variants.
+func RemoveStatusLineSettings(profileDir string) error {
+	cliPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "settings.json")
+	candidatePaths := []string{
+		cliPath,
+		filepath.Join(profileDir, ".gemini", "antigravity", "settings.json"),
+		filepath.Join(profileDir, ".gemini", "antigravity-ide", "settings.json"),
+	}
+
+	for _, sPath := range candidatePaths {
+		data, err := os.ReadFile(sPath)
+		if err != nil {
+			continue
+		}
+		var settings map[string]interface{}
+		if json.Unmarshal(data, &settings) != nil || settings == nil {
+			continue
+		}
+
+		if _, ok := settings["statusLine"]; !ok {
+			continue
+		}
+		delete(settings, "statusLine")
+
+		out, err := json.MarshalIndent(settings, "", "  ")
+		if err == nil {
+			_ = WriteFileAtomic(sPath, []byte(string(out)+"\n"), 0600)
+		}
+	}
+	return nil
+}
+
 // SyncStatusLineSettings configures the "statusLine" entry in settings.json to call agys statusline-hook,
 // preserving any pre-existing custom statusLine command in statusline.original.json.
 func SyncStatusLineSettings(profileDir string) error {
+	if IsStatusLineDisabled() {
+		return RemoveStatusLineSettings(profileDir)
+	}
+
 	cliPath := filepath.Join(profileDir, ".gemini", "antigravity-cli", "settings.json")
 	candidatePaths := []string{
 		cliPath,

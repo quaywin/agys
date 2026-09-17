@@ -13,12 +13,13 @@ import (
 )
 
 var (
-	resumeAll         bool
-	resumeProject     string
-	resumeProfile     string
-	resumeLimit       int
-	resumeInteractive bool
-	resumeJSON        bool
+	resumeAll          bool
+	resumeProject      string
+	resumeProfile      string
+	resumeLimit        int
+	resumeInteractive  bool
+	resumeJSON         bool
+	resumeNoStatusLine bool
 )
 
 var resumeCmd = &cobra.Command{
@@ -27,6 +28,9 @@ var resumeCmd = &cobra.Command{
 	Short:             "List and resume previous conversation sessions by project and profile",
 	ValidArgsFunction: CompleteResumeArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if resumeNoStatusLine {
+			_ = os.Setenv("AGYS_NO_STATUSLINE", "1")
+		}
 		var selectedIndex int
 		var extraAgyArgs []string
 		var filterProjectArg string
@@ -211,6 +215,7 @@ func init() {
 	resumeCmd.Flags().IntVarP(&resumeLimit, "limit", "n", 20, "Maximum number of sessions to display")
 	resumeCmd.Flags().BoolVarP(&resumeInteractive, "interactive", "i", false, "Prompt interactively to choose a session")
 	resumeCmd.Flags().BoolVar(&resumeJSON, "json", false, "Output session list in JSON format")
+	resumeCmd.Flags().BoolVar(&resumeNoStatusLine, "no-statusline", false, "Disable statusline footer and hook in agy for maximum performance")
 
 	_ = resumeCmd.RegisterFlagCompletionFunc("profile", CompleteProfileNames)
 	_ = resumeCmd.RegisterFlagCompletionFunc("project", cobra.FixedCompletions(nil, cobra.ShellCompDirectiveFilterDirs))

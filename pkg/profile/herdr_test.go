@@ -69,14 +69,13 @@ func TestSyncHerdrIntegration(t *testing.T) {
 		t.Errorf("Expected command to reference herdr-agent-state.sh, got %q", cmdStr)
 	}
 
-	postInv, ok := herdrMap["PostInvocation"].([]interface{})
-	if !ok || len(postInv) == 0 {
-		t.Fatalf("Expected 'PostInvocation' array in herdr config")
+	// Verify that PostInvocation and Stop are absent (session-only for PTY stability)
+	if postInv, exists := herdrMap["PostInvocation"]; exists && postInv != nil {
+		t.Errorf("Expected 'PostInvocation' to be absent or nil, got %v", postInv)
 	}
 
-	stopInv, ok := herdrMap["Stop"].([]interface{})
-	if !ok || len(stopInv) == 0 {
-		t.Fatalf("Expected 'Stop' array in herdr config")
+	if stopInv, exists := herdrMap["Stop"]; exists && stopInv != nil {
+		t.Errorf("Expected 'Stop' to be absent or nil, got %v", stopInv)
 	}
 }
 
@@ -1393,6 +1392,83 @@ func TestReportHerdrMetadata_InitialSession_NoStaleTitleLeak(t *testing.T) {
 		}
 		if !strings.Contains(payload, `"cost":""`) {
 			t.Errorf("Expected cost token to be empty, got: %s", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("No payload received on mock socket within timeout")
+	}
+}
+
+func TestReportHerdrMetadata_FreshSessionWithEmptyTitle_ResetsStalePaneTitle(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_test_empty_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan string, 5)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 4096)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				paneJSON := `{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","title":"agys: Stale Old Prompt","tokens":{"profile":"fresh-profile-2","model":"gemini-3.8-flash","conversation_title":"Stale Old Prompt","quota_model_context":"Stale Old Prompt"}}]}}` + "\n"
+				_, _ = conn.Write([]byte(paneJSON))
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					received <- reqStr
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	pDir, err := Create("fresh-profile-2")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	// Create an active session context for this pane with an explicit empty title (brand new conversation)
+	err = SaveSessionContext(pDir, &SessionContextState{
+		ConversationID:    "new-conv-12345",
+		ConversationTitle: "",
+	})
+	if err != nil {
+		t.Fatalf("SaveSessionContext error: %v", err)
+	}
+
+	err = ReportHerdrMetadataWithModel(context.Background(), "fresh-profile-2", "gemini-3.8-flash")
+	if err != nil {
+		t.Fatalf("ReportHerdrMetadataWithModel error: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		if strings.Contains(payload, "Stale Old Prompt") {
+			t.Errorf("Stale title leaked into metadata payload for fresh session: %s", payload)
+		}
+		if !strings.Contains(payload, `"title":"agys: fresh-profile-2"`) {
+			t.Errorf("Expected window title to reset to 'agys: fresh-profile-2', got: %s", payload)
+		}
+		if !strings.Contains(payload, `"conversation_title":""`) {
+			t.Errorf("Expected conversation_title token to be empty, got: %s", payload)
 		}
 	case <-time.After(2 * time.Second):
 		t.Errorf("No payload received on mock socket within timeout")

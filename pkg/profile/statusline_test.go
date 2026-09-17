@@ -472,3 +472,85 @@ func TestSessionContext_PaneIsolation(t *testing.T) {
 	}
 }
 
+func TestRemoveStatusLineSettings(t *testing.T) {
+	tempHome := t.TempDir()
+	pDir := filepath.Join(tempHome, "test-prof")
+	cliSettings := filepath.Join(pDir, ".gemini", "antigravity-cli", "settings.json")
+	_ = os.MkdirAll(filepath.Dir(cliSettings), 0700)
+	_ = os.WriteFile(cliSettings, []byte(`{"model":"gemini-flash","statusLine":{"command":"agys statusline-hook"}}`), 0600)
+
+	if err := RemoveStatusLineSettings(pDir); err != nil {
+		t.Fatalf("RemoveStatusLineSettings failed: %v", err)
+	}
+
+	data, err := os.ReadFile(cliSettings)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if strings.Contains(string(data), "statusLine") {
+		t.Errorf("Expected statusLine to be removed, got: %s", string(data))
+	}
+	if !strings.Contains(string(data), "gemini-flash") {
+		t.Errorf("Expected model to be preserved, got: %s", string(data))
+	}
+}
+
+func TestIsStatusLineDisabled(t *testing.T) {
+	t.Setenv("AGYS_NO_STATUSLINE", "")
+	if IsStatusLineDisabled() {
+		t.Errorf("Expected false when empty")
+	}
+
+	t.Setenv("AGYS_NO_STATUSLINE", "1")
+	if !IsStatusLineDisabled() {
+		t.Errorf("Expected true when 1")
+	}
+
+	t.Setenv("AGYS_NO_STATUSLINE", "true")
+	if !IsStatusLineDisabled() {
+		t.Errorf("Expected true when true")
+	}
+}
+
+func TestStatusLine_FreshSessionDoesNotAdoptOldConversationFromDisk(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+
+	pDir, err := Create("test-no-adopt-profile")
+	if err != nil {
+		t.Fatalf("Create profile failed: %v", err)
+	}
+	_ = SetCurrent("test-no-adopt-profile")
+	t.Setenv("AGYS_PROFILE", "test-no-adopt-profile")
+
+	// Create an old historical conversation on disk
+	oldConvDir := filepath.Join(pDir, ".gemini", "antigravity-cli", "brain", "old-conv-999", ".system_generated", "logs")
+	_ = os.MkdirAll(oldConvDir, 0700)
+	transcriptPath := filepath.Join(oldConvDir, "transcript.jsonl")
+	_ = os.WriteFile(transcriptPath, []byte(`{"type":"USER_INPUT","content":"Ancient conversation prompt"}`+"\n"), 0600)
+
+	// Live statusline payload from a newly opened session without conversation_id yet
+	freshPayload := `{
+		"model": {"id": "gemini-3.8-flash", "display_name": "Gemini 3.8 Flash"},
+		"context_window": {"used_percentage": 5.0}
+	}`
+
+	var stdout, stderr bytes.Buffer
+	if err := HandleStatusLine(context.Background(), strings.NewReader(freshPayload), &stdout, &stderr); err != nil {
+		t.Fatalf("HandleStatusLine error: %v", err)
+	}
+
+	state, ok := GetSessionContextState(pDir)
+	if !ok || state == nil {
+		t.Fatalf("expected session context state to exist")
+	}
+
+	if state.ConversationID == "old-conv-999" {
+		t.Errorf("Fresh session improperly adopted old conversation ID 'old-conv-999'")
+	}
+	if state.ConversationTitle == "Ancient conversation prompt" {
+		t.Errorf("Fresh session improperly adopted old conversation title 'Ancient conversation prompt'")
+	}
+}
+

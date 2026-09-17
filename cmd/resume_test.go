@@ -45,4 +45,9 @@ func TestResumeCommandFlags(t *testing.T) {
 	if projFlag == nil || projFlag.Shorthand != "p" {
 		t.Errorf("missing or invalid -p/--project flag")
 	}
+
+	noSlFlag := resumeCmd.Flag("no-statusline")
+	if noSlFlag == nil {
+		t.Errorf("missing --no-statusline flag on resumeCmd")
+	}
 }

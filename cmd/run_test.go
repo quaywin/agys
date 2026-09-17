@@ -17,6 +17,11 @@ func TestRunCommandFlags(t *testing.T) {
 	if flag.Shorthand != "a" {
 		t.Errorf("Expected 'all' flag shorthand to be 'a', got %s", flag.Shorthand)
 	}
+
+	noSlFlag := runCmd.Flags().Lookup("no-statusline")
+	if noSlFlag == nil {
+		t.Fatalf("Expected 'no-statusline' flag to exist on runCmd")
+	}
 }
 
 func TestEnsureDefaultModelAndEffort(t *testing.T) {

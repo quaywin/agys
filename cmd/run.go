@@ -12,7 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var runAll bool
+var (
+	runAll          bool
+	runNoStatusLine bool
+)
 
 var runCmd = &cobra.Command{
 	Use:               "run [profile_name] -- [agy_commands]",
@@ -256,7 +259,12 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 	}
 
 	// Ensure statusLine hook is configured in settings.json to capture real-time context window and render footer telemetry
-	_ = profile.SyncStatusLineSettings(profileDir)
+	if runNoStatusLine || profile.IsStatusLineDisabled() {
+		_ = os.Setenv("AGYS_NO_STATUSLINE", "1")
+		_ = profile.RemoveStatusLineSettings(profileDir)
+	} else {
+		_ = profile.SyncStatusLineSettings(profileDir)
+	}
 
 	// Ensure Herdr integration hook and display metadata are active ONLY in Herdr environment
 	if profile.IsInHerdrEnvironment() {
@@ -362,6 +370,7 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 
 func init() {
 	runCmd.Flags().BoolVarP(&runAll, "all", "a", false, "Execute agy command across all profiles sequentially")
+	runCmd.Flags().BoolVar(&runNoStatusLine, "no-statusline", false, "Disable statusline footer and hook in agy for maximum performance")
 	// Disable flag parsing for arguments after `--` to pass raw flags directly to agy
 	runCmd.DisableFlagParsing = false
 	rootCmd.AddCommand(runCmd)
