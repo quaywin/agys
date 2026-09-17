@@ -269,7 +269,6 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 	// Ensure Herdr integration hook and display metadata are active ONLY in Herdr environment
 	if profile.IsInHerdrEnvironment() {
 		_ = profile.SyncHerdrIntegration(profileDir)
-		profile.SetTerminalTitle(targetProfile)
 		// Fast initial Herdr sidebar sync without blocking CLI startup
 		fastQuota, hasFast := profile.GetProfileFullQuotaDetailsFast(targetProfile, activeModel)
 		if hasFast && fastQuota != nil {

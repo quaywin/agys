@@ -18,6 +18,8 @@ func TestSyncHerdrIntegration(t *testing.T) {
 	t.Setenv("HOME", tempHome)
 	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
 	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", filepath.Join(tempHome, "herdr.sock"))
 
 	profileName := "test-herdr-profile"
 	pDir, err := Create(profileName)
@@ -292,6 +294,70 @@ func TestHandleHerdrHookQuotaIgnoresCodexPane(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("stale Codex pane metadata was not cleared")
+	}
+}
+
+func TestHandleHerdrHookQuota_IgnoresClaudeTitleWithoutAgent(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_hook_claude_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	cleared := make(chan string, 1)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 2048)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				// Pane running Claude Code without agent reported by Herdr
+				paneJSON := `{"id":"test","result":{"panes":[{"pane_id":"w1:p1","agent":"","title":"Claude Code"}]}}` + "\n"
+				_, _ = conn.Write([]byte(paneJSON))
+			} else if strings.Contains(reqStr, "pane.report_metadata") {
+				cleared <- reqStr
+				_, _ = conn.Write([]byte(`{"id":"test","result":"ok"}` + "\n"))
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	_, err = Create("auto-profile-candidate")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	if err := HandleHerdrHook(context.Background(), "quota", nil); err != nil {
+		t.Fatalf("HandleHerdrHook quota error: %v", err)
+	}
+
+	select {
+	case payload := <-cleared:
+		// If metadata is cleared, it must be clear payload, NOT setting a profile
+		if strings.Contains(payload, `"profile":"auto-profile-candidate"`) {
+			t.Errorf("Random profile was improperly assigned to Claude pane: %s", payload)
+		}
+		if !strings.Contains(payload, `"clear_display_agent":true`) && !strings.Contains(payload, `"clear_title":true`) {
+			t.Errorf("Unexpected metadata payload: %s", payload)
+		}
+	case <-time.After(300 * time.Millisecond):
+		// No metadata report call sent is also completely valid (ignored)
 	}
 }
 
@@ -945,6 +1011,12 @@ func TestIsPaneActiveAgys(t *testing.T) {
 		{"", "fish", "fish", "", false},
 		{"", "zsh", "zsh", "", false},
 		{"", "bash", "bash", "", false},
+		{"", "Claude Code", "", "", false},
+		{"", "Claude Code v0.2.29", "", "", false},
+		{"", "codex", "", "", false},
+		{"", "OpenAI Codex", "", "", false},
+		{"zsh", "", "Claude Code", "", false},
+		{"bash", "", "", "codex", false},
 		{"", "", "", "", false},
 	}
 
@@ -1270,7 +1342,7 @@ func TestReportHerdrMetadata_PreservesExistingQuotaWhenDetailsUnavailable(t *tes
 	}
 }
 
-func TestSetTerminalTitle_Deduplicates(t *testing.T) {
+func TestSetTerminalTitle_DoesNotEmitRawEscapeSequences(t *testing.T) {
 	t.Setenv("HERDR_ENV", "1")
 
 	// Redirect stderr to buffer
@@ -1286,7 +1358,7 @@ func TestSetTerminalTitle_Deduplicates(t *testing.T) {
 
 	ResetTerminalTitle()
 
-	// Call twice with identical title
+	// Calling SetTerminalTitle must NOT write raw OSC escape sequences to stderr
 	SetTerminalTitle("agys: my-title")
 	SetTerminalTitle("agys: my-title")
 
@@ -1295,10 +1367,8 @@ func TestSetTerminalTitle_Deduplicates(t *testing.T) {
 	n, _ := r.Read(buf)
 	out := string(buf[:n])
 
-	// Should contain escape sequence exactly once
-	count := strings.Count(out, "\033]0;agys: my-title\007")
-	if count != 1 {
-		t.Errorf("Expected escape sequence exactly 1 time, got %d. Output: %q", count, out)
+	if len(out) != 0 {
+		t.Errorf("Expected 0 bytes written to stderr to prevent PTY stream corruption, got: %q", out)
 	}
 }
 

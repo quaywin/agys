@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -231,11 +230,13 @@ func resolveHerdrProfile(ctx context.Context, profileName, paneID string, panes 
 			return paneProf, pDir
 		}
 	}
-	if best, _, err := SelectBestProfile(ctx); err == nil && best != "" {
-		pDir, _ := GetProfileDir(best)
-		return best, pDir
+	if IsAuto(profileName) {
+		if best, _, err := SelectBestProfile(ctx); err == nil && best != "" {
+			pDir, _ := GetProfileDir(best)
+			return best, pDir
+		}
 	}
-	return profileName, ""
+	return "", ""
 }
 
 // HandleHerdrHook executes the Herdr lifecycle hook directly in pure Go without any Python dependency.
@@ -254,18 +255,19 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 	}
 
 	// Herdr plugin events (e.g. pane.focused) are pane-global.
-	// They can fire while another CLI such as Codex, Claude, or Droid owns the pane.
+	// They fire while another CLI such as Codex, Claude, Droid, or a plain shell owns the pane.
 	// Only lifecycle/session hooks may run before Herdr has classified the pane; all
-	// quota updates must never touch a pane that Herdr has identified as non-agys.
+	// quota updates must never touch a pane that is not actively executing agys.
 	if action != "session" && paneID != "" && len(panes) > 0 {
 		for _, p := range panes {
-			if p.PaneID == paneID && IsKnownNonAgysAgent(p.Agent) {
-				// Herdr may still contain metadata written by an older agys binary before
-				// pane ownership checks existed. Clear that stale telemetry once; otherwise
-				// the Codex/Claude pane can continue displaying an old agys title/sidebar forever.
-				_ = ClearHerdrMetadata(ctx)
-				fmt.Println("{}")
-				return nil
+			if p.PaneID == paneID {
+				if IsPaneNonAgys(p) || !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped, p.Tokens) {
+					if hasStaleAgysTelemetry(p.Title, p.Tokens) || IsPaneNonAgys(p) {
+						_ = ClearHerdrMetadata(ctx)
+					}
+					fmt.Println("{}")
+					return nil
+				}
 			}
 		}
 	}
@@ -414,12 +416,10 @@ func FormatModelAbbreviation(modelName, groupName string) string {
 	return "gem"
 }
 
-// IsInHerdrEnvironment checks if the current process is actively executing inside a Herdr workspace/pane session.
+// IsInHerdrEnvironment checks if the current process is actively executing inside a Herdr workspace/pane session
+// with a valid and reachable Herdr UNIX domain socket.
 func IsInHerdrEnvironment() bool {
-	if os.Getenv("HERDR_SOCKET_PATH") != "" && os.Getenv("HERDR_PANE_ID") != "" {
-		return true
-	}
-	return os.Getenv("HERDR_ENV") == "1" || os.Getenv("HERDR_ENV") == "true"
+	return os.Getenv("HERDR_SOCKET_PATH") != "" && os.Getenv("HERDR_PANE_ID") != ""
 }
 
 // SyncHerdrIntegration ensures that Herdr's antigravity integration hook is configured for the given profile directory.
@@ -604,11 +604,46 @@ func IsNonAgysAgent(agent string) bool {
 	return IsKnownNonAgysAgent(agent)
 }
 
+// IsPaneNonAgys reports whether a Herdr pane is actively running another known AI agent or CLI tool
+// (e.g., claude, codex, droid, aider, opencode, cursor, copilot) based on agent, display_agent, or titles.
+func IsPaneNonAgys(p HerdrRawPane) bool {
+	if IsKnownNonAgysAgent(p.Agent) || IsKnownNonAgysAgent(p.DisplayAgent) {
+		return true
+	}
+	titles := []string{p.Title, p.TerminalTitle, p.TerminalTitleStripped}
+	for _, t := range titles {
+		lower := strings.ToLower(strings.TrimSpace(t))
+		if lower == "" {
+			continue
+		}
+		for _, nonAgys := range knownNonAgysAgents {
+			clean := strings.TrimPrefix(nonAgys, "herdr:")
+			if strings.Contains(lower, clean) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isPaneActiveAgys verifies if a pane is genuinely and actively executing an agys session.
 // Strictly returns false for competing non-agys AI agents (Codex/Claude/Droid) and plain shells without agys titles.
 func isPaneActiveAgys(agent, title, terminalTitle, terminalTitleStripped string, tokens ...map[string]string) bool {
 	if IsKnownNonAgysAgent(agent) {
 		return false
+	}
+	titles := []string{title, terminalTitle, terminalTitleStripped}
+	for _, t := range titles {
+		lower := strings.ToLower(strings.TrimSpace(t))
+		if lower == "" {
+			continue
+		}
+		for _, nonAgys := range knownNonAgysAgents {
+			clean := strings.TrimPrefix(nonAgys, "herdr:")
+			if strings.Contains(lower, clean) {
+				return false
+			}
+		}
 	}
 	if IsAgysAgent(agent) {
 		return true
@@ -717,6 +752,9 @@ func createPaneMatch(p HerdrRawPane, profileName, currentModel string) HerdrPane
 func getHerdrCurrentPaneFromList(panes []HerdrRawPane, paneID, profileName, currentModel string) HerdrPaneMatch {
 	for _, p := range panes {
 		if p.PaneID == paneID {
+			if IsPaneNonAgys(p) || !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped, p.Tokens) {
+				return HerdrPaneMatch{}
+			}
 			return createPaneMatch(p, profileName, currentModel)
 		}
 	}
@@ -744,8 +782,10 @@ func getMatchingHerdrPanesFromList(ctx context.Context, panes []HerdrRawPane, so
 		}
 
 		// Retire stale agys metadata from non-agys agents (e.g. Codex, Claude)
-		if p.Agent != "" && IsNonAgysAgent(p.Agent) && hasStaleAgysTelemetry(p.Title, p.Tokens) {
-			_ = clearHerdrPaneMetadata(ctx, socketPath, p.PaneID)
+		if IsPaneNonAgys(p) {
+			if hasStaleAgysTelemetry(p.Title, p.Tokens) {
+				_ = clearHerdrPaneMetadata(ctx, socketPath, p.PaneID)
+			}
 			continue
 		}
 
@@ -885,7 +925,7 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 	// pane, agys must neither overwrite its sidebar row nor leave stale telemetry.
 	if paneID != "" && socketPath != "" && len(panes) > 0 {
 		for _, p := range panes {
-			if p.PaneID == paneID && IsKnownNonAgysAgent(p.Agent) {
+			if p.PaneID == paneID && (IsPaneNonAgys(p) || !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped, p.Tokens)) {
 				_ = clearHerdrPaneMetadata(ctx, socketPath, paneID)
 				return nil
 			}
@@ -893,6 +933,9 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 	}
 
 	profileName, pDir := resolveHerdrProfile(quotaCtx, profileName, paneID, panes)
+	if profileName == "" {
+		return nil
+	}
 
 	// Resolve explicit active model if provided; otherwise let each target pane
 	// preserve its own active model token before falling back to profile default.
@@ -984,11 +1027,13 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			} else if target.Title != "" && !strings.Contains(target.Title, "[AGYS_INTERNAL_") && (sessionState != nil && sessionState.ConversationTitle != "") {
 				title = target.Title
 			} else {
-				title = fmt.Sprintf("agys: %s", profileName)
+				title = formatAgysDefaultTitle(profileName)
 			}
 		} else if title == "" {
-			title = fmt.Sprintf("agys: %s", profileName)
+			title = formatAgysDefaultTitle(profileName)
 		}
+
+		title = sanitizeTerminalTitle(title)
 
 		tokens := map[string]string{
 			"profile": profileName,
@@ -1088,9 +1133,6 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			}
 		}
 
-		if target.PaneID == paneID {
-			SetTerminalTitle(title)
-		}
 
 		if isPaneMetadataUnchanged(target, displayAgent, title, tokens) {
 			continue
@@ -1144,42 +1186,21 @@ func isPaneMetadataUnchanged(target HerdrPaneMatch, newDisplayAgent, newTitle st
 	return true
 }
 
-var (
-	lastTerminalTitleMu sync.Mutex
-	lastTerminalTitle   string
-)
 
-// SetTerminalTitle sets the terminal/window/tab title using ANSI OSC escape sequence ONLY when inside Herdr.
-// When an active Herdr UNIX socket is available, Herdr manages titles natively via pane.report_metadata;
-// writing raw OSC 0 sequences to os.Stderr injects uncoordinated escape sequences into the PTY stream
-// and collides with TUI capability queries (\x1b[>c sent by agy's ultraviolet engine) across SSH bridges.
+
+// SetTerminalTitle is intentionally a no-op because writing raw OSC 0 escape sequences to os.Stderr
+// injects uncoordinated escape sequences into the PTY stream (especially across SSH bridges)
+// and collides with TUI capability queries (\x1b[>c / DA2 sent by agy's engine),
+// causing phantom characters like ";0;0c[>1;0;0c" to leak into the prompt.
+// Inside Herdr, pane/window titles are managed natively out-of-band via UNIX socket RPC (pane.report_metadata).
 func SetTerminalTitle(titleOrProfile string) {
-	if !IsInHerdrEnvironment() {
-		return
-	}
-	if os.Getenv("HERDR_SOCKET_PATH") != "" {
-		return
-	}
+}
 
-	title := strings.TrimSpace(titleOrProfile)
-	if !strings.HasPrefix(title, "agys") {
-		title = fmt.Sprintf("agys [%s]", titleOrProfile)
+func formatAgysDefaultTitle(profileName string) string {
+	if sshServer := os.Getenv("AGYS_SSH_SERVER"); sshServer != "" {
+		return fmt.Sprintf("agys: %s (%s)", profileName, sshServer)
 	}
-	// Sanitize title to prevent ANSI escape / OSC sequence injection (CWE-150 / CWE-116)
-	title = sanitizeTerminalTitle(title)
-	if title == "" {
-		return
-	}
-
-	lastTerminalTitleMu.Lock()
-	if lastTerminalTitle == title {
-		lastTerminalTitleMu.Unlock()
-		return
-	}
-	lastTerminalTitle = title
-	lastTerminalTitleMu.Unlock()
-
-	fmt.Fprintf(os.Stderr, "\033]0;%s\007", title)
+	return fmt.Sprintf("agys: %s", profileName)
 }
 
 func sanitizeTerminalTitle(s string) string {
@@ -1203,19 +1224,8 @@ func sanitizeTerminalTitle(s string) string {
 	return cleaned
 }
 
-// ResetTerminalTitle resets the terminal/window/tab title back to default shell title.
+// ResetTerminalTitle is intentionally a no-op because pane metadata and titles are cleared natively via clearHerdrPaneMetadata RPC.
 func ResetTerminalTitle() {
-	if !IsInHerdrEnvironment() {
-		return
-	}
-	if os.Getenv("HERDR_SOCKET_PATH") != "" {
-		return
-	}
-	lastTerminalTitleMu.Lock()
-	lastTerminalTitle = ""
-	lastTerminalTitleMu.Unlock()
-
-	fmt.Fprintf(os.Stderr, "\033]0;\007")
 }
 
 // ClearHerdrMetadata clears agys tokens and resets terminal title for the current pane upon session exit.
@@ -1229,7 +1239,6 @@ func ClearHerdrMetadata(ctx context.Context) error {
 		return nil
 	}
 
-	ResetTerminalTitle()
 	return clearHerdrPaneMetadata(ctx, socketPath, paneID)
 }
 

@@ -298,9 +298,12 @@ Examples:
 			fmt.Fprintf(os.Stderr, "[agys] Connecting to %s over SSH with PTY (API tunnel active)...\n", server)
 		}
 		if profile.IsInHerdrEnvironment() {
-			profile.SetTerminalTitle(fmt.Sprintf("%s (%s)", targetProfile, server))
+			_ = os.Setenv("AGYS_SSH_SERVER", server)
 			_ = profile.ReportHerdrMetadata(cmd.Context(), targetProfile)
+			stopWatcher := profile.StartHerdrQuotaWatcher(cmd.Context(), targetProfile)
 			defer func() {
+				stopWatcher()
+				_ = os.Unsetenv("AGYS_SSH_SERVER")
 				_ = profile.ClearHerdrMetadata(context.Background())
 			}()
 		}
