@@ -89,6 +89,13 @@ func FindProfileByConversation(convID string) (string, error) {
 				return p, nil
 			}
 		}
+
+		for _, sub := range []string{filepath.Join(".gemini", "antigravity-cli", "conversations"), filepath.Join(".gemini", "antigravity", "conversations")} {
+			dbFile := filepath.Join(profileDir, sub, convID+".db")
+			if _, err := os.Stat(dbFile); err == nil {
+				return p, nil
+			}
+		}
 	}
 
 	return "", nil

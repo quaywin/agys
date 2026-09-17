@@ -1132,11 +1132,18 @@ var (
 )
 
 // SetTerminalTitle sets the terminal/window/tab title using ANSI OSC escape sequence ONLY when inside Herdr.
+// When an active Herdr UNIX socket is available, Herdr manages titles natively via pane.report_metadata;
+// writing raw OSC 0 sequences to os.Stderr injects uncoordinated escape sequences into the PTY stream
+// and collides with TUI capability queries (\x1b[>c sent by agy's ultraviolet engine) across SSH bridges.
 func SetTerminalTitle(titleOrProfile string) {
-	if !IsInHerdrEnvironment() || titleOrProfile == "" {
+	if !IsInHerdrEnvironment() {
 		return
 	}
-	title := titleOrProfile
+	if os.Getenv("HERDR_SOCKET_PATH") != "" {
+		return
+	}
+
+	title := strings.TrimSpace(titleOrProfile)
 	if !strings.HasPrefix(title, "agys") {
 		title = fmt.Sprintf("agys [%s]", titleOrProfile)
 	}
@@ -1181,6 +1188,9 @@ func sanitizeTerminalTitle(s string) string {
 // ResetTerminalTitle resets the terminal/window/tab title back to default shell title.
 func ResetTerminalTitle() {
 	if !IsInHerdrEnvironment() {
+		return
+	}
+	if os.Getenv("HERDR_SOCKET_PATH") != "" {
 		return
 	}
 	lastTerminalTitleMu.Lock()

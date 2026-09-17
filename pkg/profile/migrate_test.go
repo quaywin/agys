@@ -46,6 +46,23 @@ func TestMigrateConversation_Success(t *testing.T) {
 		t.Fatalf("failed to write artifact: %v", err)
 	}
 
+	// Setup conversations db and annotations in srcProfile
+	srcConvDir := filepath.Join(srcDir, ".gemini", "antigravity-cli", "conversations")
+	_ = os.MkdirAll(srcConvDir, 0700)
+	dbContent := "SQLite format 3\x00mockdb"
+	srcDBPath := filepath.Join(srcConvDir, convID+".db")
+	if err := os.WriteFile(srcDBPath, []byte(dbContent), 0600); err != nil {
+		t.Fatalf("failed to write mock db: %v", err)
+	}
+
+	srcAnnotDir := filepath.Join(srcDir, ".gemini", "antigravity-cli", "annotations")
+	_ = os.MkdirAll(srcAnnotDir, 0700)
+	pbtxtContent := "title: \"Test Title\""
+	srcPbtxtPath := filepath.Join(srcAnnotDir, convID+".pbtxt")
+	if err := os.WriteFile(srcPbtxtPath, []byte(pbtxtContent), 0600); err != nil {
+		t.Fatalf("failed to write mock pbtxt: %v", err)
+	}
+
 	// Setup history.jsonl in srcProfile
 	historyLine := fmt.Sprintf(`{"display":"hello world","timestamp":1784550487866,"workspace":"/workspace/test","conversationId":"%s"}`+"\n", convID)
 	otherHistoryLine := `{"display":"other conversation","timestamp":1784550000000,"workspace":"/workspace/other","conversationId":"other-conv-111"}` + "\n"
@@ -85,20 +102,39 @@ func TestMigrateConversation_Success(t *testing.T) {
 		t.Errorf("dest artifact content mismatch: %s (err: %v)", string(data), err)
 	}
 
-	// 3. Dest history.jsonl has the matching entry
+	// 3. Conversations db and annotations are migrated to destProfile
+	destDBPath := filepath.Join(destDir, ".gemini", "antigravity-cli", "conversations", convID+".db")
+	dbData, err := os.ReadFile(destDBPath)
+	if err != nil || string(dbData) != dbContent {
+		t.Errorf("dest db content mismatch: %s (err: %v)", string(dbData), err)
+	}
+	if _, err := os.Stat(srcDBPath); !os.IsNotExist(err) {
+		t.Errorf("expected src db to be removed after migration")
+	}
+
+	destPbtxtPath := filepath.Join(destDir, ".gemini", "antigravity-cli", "annotations", convID+".pbtxt")
+	pbtxtData, err := os.ReadFile(destPbtxtPath)
+	if err != nil || string(pbtxtData) != pbtxtContent {
+		t.Errorf("dest pbtxt content mismatch: %s (err: %v)", string(pbtxtData), err)
+	}
+	if _, err := os.Stat(srcPbtxtPath); !os.IsNotExist(err) {
+		t.Errorf("expected src pbtxt to be removed after migration")
+	}
+
+	// 4. Dest history.jsonl has the matching entry
 	destHistoryPath := filepath.Join(destDir, ".gemini", "antigravity-cli", "history.jsonl")
 	destHistData, err := os.ReadFile(destHistoryPath)
 	if err != nil || string(destHistData) != historyLine {
 		t.Errorf("dest history.jsonl mismatch: expected %q, got %q (err: %v)", historyLine, string(destHistData), err)
 	}
 
-	// 4. FindProfileByConversation now returns destProfile
+	// 5. FindProfileByConversation now returns destProfile
 	ownerAfter, err := FindProfileByConversation(convID)
 	if err != nil || ownerAfter != destProfile {
 		t.Errorf("expected owner after migration to be %q, got %q (err: %v)", destProfile, ownerAfter, err)
 	}
 
-	// 5. Last active conversation is updated
+	// 6. Last active conversation is updated
 	lastConv, err := GetLastConversation()
 	if err != nil || lastConv != convID {
 		t.Errorf("expected last conversation to be %q, got %q (err: %v)", convID, lastConv, err)
