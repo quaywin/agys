@@ -1,8 +1,8 @@
-- [x] Task 1: Initialize Go module `go.mod` and Cobra dependency
-- [x] Task 2: Implement `pkg/profile` for directory management and profile validation
-- [x] Task 3: Implement Cobra subcommands (`root`, `add`, `list`, `delete`, `run`) and `main.go`
-- [x] Task 4: Add GoReleaser configuration (`.goreleaser.yaml`) and GitHub Actions workflow (`.github/workflows/release.yml`)
-- [x] Task 5: Create POSIX installer script (`install.sh`)
-- [x] Task 6: Validate compilation and test execution
-- [x] Task 7: Integrate quota retrieval subcommand (`quota` / `q`) for individual and batch profile query
-- [x] Task 8: Implement shell auto-completion (`completion`), alias generator (`alias`), and default profile switcher (`use`)
+- [x] Task 1: Sửa cơ chế Timeout của WithFileLock (pkg/profile/lock.go)
+- [x] Task 2: Enforce nghiêm ngặt Quota Cache TTL 4 giờ (pkg/profile/quota.go)
+- [x] Task 3: Loại bỏ Durable Write dư thừa khi đồng bộ Token (pkg/profile/profile.go)
+- [x] Task 4: Tối ưu Hot Path Statusline & Chained Command (pkg/profile/statusline.go)
+- [x] Task 5: Tối ưu hóa toàn diện agys resume & Session Cache (pkg/profile/session.go, session_cache.go)
+- [x] Task 6: Ổn định hóa Model Refresh trong Hook Process (pkg/profile/models.go)
+- [x] Task 7: Giới hạn Concurrency & Lọc Profile Chưa Cấu Hình (pkg/profile/auto.go, cmd/quota.go, cmd/list.go)
+- [x] Task 8: Kiểm tra toàn diện (go test ./..., go vet ./...) & đo lường hiệu năng

@@ -1,10 +1,12 @@
 package profile
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -360,3 +362,85 @@ func TestCleanPromptSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestListSessions_GlobalSessionCachedAndEarlyLimit(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+
+	pDir, err := Create("test-limit-profile")
+	if err != nil {
+		t.Fatalf("Create profile failed: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create 5 mock global sessions (no project workspace)
+	for i := 1; i <= 5; i++ {
+		convID := fmt.Sprintf("conv-global-%d", i)
+		logDir := filepath.Join(pDir, ".gemini", "antigravity-cli", "brain", convID, ".system_generated", "logs")
+		_ = os.MkdirAll(logDir, 0700)
+		transcriptPath := filepath.Join(logDir, "transcript.jsonl")
+		content := fmt.Sprintf(`{"type":"USER_INPUT","content":"<USER_REQUEST>Global question %d</USER_REQUEST>"}`+"\n", i)
+		_ = os.WriteFile(transcriptPath, []byte(content), 0600)
+		// Stagger mod times
+		modTime := time.Now().Add(time.Duration(i) * time.Minute)
+		_ = os.Chtimes(transcriptPath, modTime, modTime)
+	}
+
+	// 1. First run: parse and cache all 5 sessions
+	sessions, err := ListSessions(ctx, SessionFilter{})
+	if err != nil {
+		t.Fatalf("ListSessions run 1 failed: %v", err)
+	}
+	if len(sessions) != 5 {
+		t.Fatalf("expected 5 sessions, got %d", len(sessions))
+	}
+
+	// Verify all 5 are cached with ProjectName == "(Global)"
+	cache, err := LoadSessionCache()
+	if err != nil {
+		t.Fatalf("LoadSessionCache failed: %v", err)
+	}
+	if len(cache) != 5 {
+		t.Fatalf("expected 5 items in cache, got %d", len(cache))
+	}
+
+	// 2. Corrupt transcript files on disk to verify that subsequent call relies on cache!
+	// If it hits cache, it will succeed with cached metadata. If it re-parses, it would see corrupted data.
+	for i := 1; i <= 5; i++ {
+		convID := fmt.Sprintf("conv-global-%d", i)
+		transcriptPath := filepath.Join(pDir, ".gemini", "antigravity-cli", "brain", convID, ".system_generated", "logs", "transcript.jsonl")
+		info, _ := os.Stat(transcriptPath)
+		// Keep mtime and size unchanged, but corrupt content
+		data := bytes.Repeat([]byte("x"), int(info.Size()))
+		_ = os.WriteFile(transcriptPath, data, 0600)
+		_ = os.Chtimes(transcriptPath, info.ModTime(), info.ModTime())
+	}
+
+	// Second run: should hit cache even though it's (Global)
+	cachedSessions, err := ListSessions(ctx, SessionFilter{})
+	if err != nil {
+		t.Fatalf("ListSessions run 2 failed: %v", err)
+	}
+	if len(cachedSessions) != 5 {
+		t.Fatalf("expected 5 cached sessions, got %d", len(cachedSessions))
+	}
+	if !strings.HasPrefix(cachedSessions[0].UserPrompt, "Global question") {
+		t.Errorf("expected cached prompt, got %q", cachedSessions[0].UserPrompt)
+	}
+
+	// 3. Test Limit: Limit=2 should return exactly 2 newest sessions
+	limitSessions, err := ListSessions(ctx, SessionFilter{Limit: 2})
+	if err != nil {
+		t.Fatalf("ListSessions with limit failed: %v", err)
+	}
+	if len(limitSessions) != 2 {
+		t.Fatalf("expected 2 sessions with Limit=2, got %d", len(limitSessions))
+	}
+	// Newest sessions were conv-global-5 and conv-global-4
+	if limitSessions[0].ConvID != "conv-global-5" || limitSessions[1].ConvID != "conv-global-4" {
+		t.Errorf("expected conv-global-5 and conv-global-4, got %s and %s", limitSessions[0].ConvID, limitSessions[1].ConvID)
+	}
+}
+

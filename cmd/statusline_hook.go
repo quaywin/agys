@@ -12,6 +12,7 @@ var statuslineHookCmd = &cobra.Command{
 	Short:  "Internal statusLine hook handler for Antigravity context window and quota capture",
 	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		profile.SetHookProcess(true)
 		return profile.HandleStatusLine(cmd.Context(), os.Stdin, os.Stdout, os.Stderr)
 	},
 }

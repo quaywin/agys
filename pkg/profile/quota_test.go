@@ -376,4 +376,22 @@ func TestGetProfileFullQuotaDetailsFast_FreshAndStale(t *testing.T) {
 	if !staleOk || staleDetails == nil || staleDetails.Fraction5H != 0.82 {
 		t.Fatalf("expected stale cache to return 0.82 fallback, got ok=%v, details=%+v", staleOk, staleDetails)
 	}
+
+	// 4. Fake expired cache (> 4 hours, e.g. 5 hours)
+	cachedData.UpdatedAt = time.Now().Add(-5 * time.Hour)
+	expiredBytes, _ := json.Marshal(cachedData)
+	_ = os.WriteFile(cachePath, expiredBytes, 0600)
+
+	// Direct GetCachedQuota check: should return nil, false
+	expiredSummary, expiredOk := GetCachedQuota(pName, 4*time.Hour)
+	if expiredOk || expiredSummary != nil {
+		t.Fatalf("expected cache older than 4 hours to return (nil, false), got ok=%v, summary=%+v", expiredOk, expiredSummary)
+	}
+
+	// Fast fallback check: should return nil, false (not using 5-hour expired cache)
+	expDetails, expOk := GetProfileFullQuotaDetailsFast(pName, "gemini-2.5-flash")
+	if expOk || expDetails != nil {
+		t.Fatalf("expected cache older than 4 hours to NOT be used as fallback, got ok=%v, details=%+v", expOk, expDetails)
+	}
 }
+

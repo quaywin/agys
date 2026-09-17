@@ -95,7 +95,7 @@ func SaveSessionContextForPane(profileDir, paneID string, state *SessionContextS
 		return err
 	}
 	targetPath := getSessionContextPathForPane(profileDir, paneID)
-	return WriteFileAtomic(targetPath, data, 0600)
+	return WriteFileAtomicNoSync(targetPath, data, 0600)
 }
 
 // SaveSessionContext saves the context window percentage and metrics to the profile directory.
@@ -609,7 +609,7 @@ func chainPreviousStatusLine(ctx context.Context, profileDir string, input []byt
 		return
 	}
 
-	cmdCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	cmdCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 
 	var cmd *exec.Cmd
@@ -629,9 +629,6 @@ func isSessionContextStateEqual(a, b *SessionContextState) bool {
 		return a == b
 	}
 	return a.UsedPercentage == b.UsedPercentage &&
-		a.InputTokens == b.InputTokens &&
-		a.CacheReadTokens == b.CacheReadTokens &&
-		a.CacheCreationTokens == b.CacheCreationTokens &&
 		a.ModelID == b.ModelID &&
 		a.ModelDisplayName == b.ModelDisplayName &&
 		a.ConversationTitle == b.ConversationTitle &&

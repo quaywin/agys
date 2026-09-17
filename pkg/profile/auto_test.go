@@ -1,6 +1,8 @@
 package profile
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -163,3 +165,40 @@ func TestPrioritySelectionAlgorithm(t *testing.T) {
 		t.Errorf("expected winner personal, got %s", winner.ProfileName)
 	}
 }
+
+func TestHasProfileToken(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+
+	pDir, err := Create("profile-with-token")
+	if err != nil {
+		t.Fatalf("Create profile failed: %v", err)
+	}
+
+	_, err = Create("profile-empty")
+	if err != nil {
+		t.Fatalf("Create profile failed: %v", err)
+	}
+
+	// Before token write: both should be false
+	if HasProfileToken("profile-with-token") {
+		t.Errorf("expected profile-with-token to be false before token write")
+	}
+	if HasProfileToken("profile-empty") {
+		t.Errorf("expected profile-empty to be false")
+	}
+
+	// Write mock token to profile-with-token
+	tokenFile := filepath.Join(pDir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	_ = os.MkdirAll(filepath.Dir(tokenFile), 0700)
+	_ = os.WriteFile(tokenFile, []byte(`{"token":{"access_token":"valid"}}`), 0600)
+
+	if !HasProfileToken("profile-with-token") {
+		t.Errorf("expected profile-with-token to be true after token write")
+	}
+	if HasProfileToken("profile-empty") {
+		t.Errorf("expected profile-empty to still be false")
+	}
+}
+

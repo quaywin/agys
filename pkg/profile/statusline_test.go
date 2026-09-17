@@ -554,3 +554,43 @@ func TestStatusLine_FreshSessionDoesNotAdoptOldConversationFromDisk(t *testing.T
 	}
 }
 
+func TestSessionContextEquality_IgnoresTokenCounters(t *testing.T) {
+	state1 := &SessionContextState{
+		UsedPercentage:      35.0,
+		InputTokens:         1000,
+		CacheReadTokens:     2000,
+		CacheCreationTokens: 500,
+		ModelID:             "gemini-3.8-flash",
+		ModelDisplayName:    "Gemini 3.8 Flash",
+		ConversationTitle:   "Fixing bugs",
+		ConversationID:      "conv-123",
+		Cost:                0.05,
+		Effort:              "high",
+	}
+
+	// State 2 has identical visible metadata but different token counters (e.g. after prompt interaction)
+	state2 := &SessionContextState{
+		UsedPercentage:      35.0,
+		InputTokens:         4500,
+		CacheReadTokens:     8000,
+		CacheCreationTokens: 1200,
+		ModelID:             "gemini-3.8-flash",
+		ModelDisplayName:    "Gemini 3.8 Flash",
+		ConversationTitle:   "Fixing bugs",
+		ConversationID:      "conv-123",
+		Cost:                0.05,
+		Effort:              "high",
+	}
+
+	if !isSessionContextStateEqual(state1, state2) {
+		t.Errorf("expected isSessionContextStateEqual to return true when only token counts differ")
+	}
+
+	// Changing UsedPercentage or Model should mark it dirty
+	state2.UsedPercentage = 36.0
+	if isSessionContextStateEqual(state1, state2) {
+		t.Errorf("expected isSessionContextStateEqual to return false when UsedPercentage changes")
+	}
+}
+
+

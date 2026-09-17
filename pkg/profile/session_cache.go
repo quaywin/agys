@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -66,7 +67,22 @@ func LoadSessionCache() (SessionCache, error) {
 	return cache, nil
 }
 
-// SaveSessionCache writes the session cache to disk atomically.
+// PruneSessionCache removes entries from cache whose key is not present in validKeys.
+func PruneSessionCache(cache SessionCache, validKeys map[string]bool) int {
+	if cache == nil || validKeys == nil {
+		return 0
+	}
+	pruned := 0
+	for k := range cache {
+		if !validKeys[k] {
+			delete(cache, k)
+			pruned++
+		}
+	}
+	return pruned
+}
+
+// SaveSessionCache writes the session cache to disk atomically under WithFileLock.
 func SaveSessionCache(cache SessionCache) error {
 	if cache == nil {
 		return nil
@@ -82,5 +98,31 @@ func SaveSessionCache(cache SessionCache) error {
 		return err
 	}
 
-	return WriteFileAtomic(cachePath, data, 0600)
+	return WithFileLock(context.Background(), func() error {
+		return WriteFileAtomic(cachePath, data, 0600)
+	})
 }
+
+// UpdateSessionCache acquires WithFileLock, reloads disk cache, applies updater, and writes atomically.
+func UpdateSessionCache(updater func(diskCache SessionCache) error) error {
+	cachePath, err := GetSessionCachePath()
+	if err != nil {
+		return err
+	}
+
+	return WithFileLock(context.Background(), func() error {
+		diskCache, _ := LoadSessionCache()
+		if diskCache == nil {
+			diskCache = make(SessionCache)
+		}
+		if err := updater(diskCache); err != nil {
+			return err
+		}
+		data, err := json.MarshalIndent(diskCache, "", "  ")
+		if err != nil {
+			return err
+		}
+		return WriteFileAtomic(cachePath, data, 0600)
+	})
+}
+

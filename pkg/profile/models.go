@@ -235,16 +235,41 @@ func IsAgyBinaryNewerThan(t time.Time) bool {
 	return fi.ModTime().After(t)
 }
 
+var (
+	isHookProcessLock sync.RWMutex
+	isHookProcess     bool
+)
+
+// SetHookProcess marks the current process as a short-lived hook process (e.g. statusline or herdr hook)
+// where background goroutines should not be spawned because the process terminates immediately.
+func SetHookProcess(val bool) {
+	isHookProcessLock.Lock()
+	defer isHookProcessLock.Unlock()
+	isHookProcess = val
+}
+
+// IsHookProcess reports whether the current process is running as a short-lived hook.
+func IsHookProcess() bool {
+	if os.Getenv("AGYS_HOOK_PROCESS") == "1" {
+		return true
+	}
+	isHookProcessLock.RLock()
+	defer isHookProcessLock.RUnlock()
+	return isHookProcess
+}
+
 // GetOrRefreshModels retrieves the latest model metadata, auto-refreshing in background if stale or agy was updated.
 func GetOrRefreshModels() *DiscoveredModels {
 	cached := ReadCachedDiscoveredModels()
 
 	// Check if agy binary was updated after cache was generated
 	if cached != nil && IsAgyBinaryNewerThan(cached.FetchedAt) {
-		// agy was updated: refresh cache in background
-		go func() {
-			_, _ = DiscoverLatestModels()
-		}()
+		// agy was updated: refresh cache in background only if not in short-lived hook process
+		if !IsHookProcess() {
+			go func() {
+				_, _ = DiscoverLatestModels()
+			}()
+		}
 		return cached
 	}
 
@@ -258,9 +283,11 @@ func GetOrRefreshModels() *DiscoveredModels {
 	if data, err := os.ReadFile(cachePath); err == nil {
 		var dm DiscoveredModels
 		if json.Unmarshal(data, &dm) == nil && dm.LatestFlash != "" {
-			go func() {
-				_, _ = DiscoverLatestModels()
-			}()
+			if !IsHookProcess() {
+				go func() {
+					_, _ = DiscoverLatestModels()
+				}()
+			}
 			return &dm
 		}
 	}

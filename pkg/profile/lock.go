@@ -32,6 +32,8 @@ func GetLockFilePath() (string, error) {
 	return filepath.Join(agysDir, lockFilename), nil
 }
 
+var defaultLockTimeout = 5 * time.Second
+
 // WithFileLock executes function fn under an exclusive OS file lock with a 5-second default timeout.
 // This prevents cross-process race conditions when multiple agys CLI instances run concurrently.
 func WithFileLock(ctx context.Context, fn func() error) error {
@@ -47,8 +49,11 @@ func WithFileLock(ctx context.Context, fn func() error) error {
 
 	lockCtx := ctx
 	if lockCtx == nil {
+		lockCtx = context.Background()
+	}
+	if _, hasDeadline := lockCtx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
-		lockCtx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		lockCtx, cancel = context.WithTimeout(lockCtx, defaultLockTimeout)
 		defer cancel()
 	}
 

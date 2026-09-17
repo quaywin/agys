@@ -133,18 +133,43 @@ func SelectBestProfileFiltered(ctx context.Context, filterFn func(profileName st
 		return "", -1, fmt.Errorf("no valid profiles available for auto-selection")
 	}
 
+	// Filter candidate profiles: prefer configured profiles with valid tokens on disk
+	var configuredCandidates []string
+	var unconfiguredCandidates []string
+	for _, p := range candidateProfiles {
+		if HasProfileToken(p) {
+			configuredCandidates = append(configuredCandidates, p)
+		} else {
+			unconfiguredCandidates = append(unconfiguredCandidates, p)
+		}
+	}
+
+	targets := configuredCandidates
+	if len(targets) == 0 {
+		targets = unconfiguredCandidates
+	}
+
 	priorities, _ := GetAllPriorities()
 
 	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	var wg sync.WaitGroup
-	scores := make([]ProfileScore, len(candidateProfiles))
+	maxWorkers := 6
+	if maxWorkers > len(targets) {
+		maxWorkers = len(targets)
+	}
+	semaphore := make(chan struct{}, maxWorkers)
 
-	for i, pName := range candidateProfiles {
+	var wg sync.WaitGroup
+	scores := make([]ProfileScore, len(targets))
+
+	for i, pName := range targets {
 		wg.Add(1)
 		go func(index int, name string) {
 			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
 			prio := priorities[name]
 			summary, err := FetchQuota(fetchCtx, name)
 			if err != nil {

@@ -51,7 +51,13 @@ var quotaCmd = &cobra.Command{
 			}
 		}
 
-		// Run queries in parallel
+		// Run queries with bounded concurrency (max 6 workers)
+		maxWorkers := 6
+		if maxWorkers > len(targetProfiles) {
+			maxWorkers = len(targetProfiles)
+		}
+		semaphore := make(chan struct{}, maxWorkers)
+
 		var wg sync.WaitGroup
 		results := make([]profile.ProfileQuotaInfo, len(targetProfiles))
 
@@ -59,6 +65,9 @@ var quotaCmd = &cobra.Command{
 			wg.Add(1)
 			go func(index int, name string) {
 				defer wg.Done()
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }()
+
 				email, _ := profile.FetchProfileEmail(ctx, name)
 				summary, err := profile.FetchQuota(ctx, name)
 				cliCfg := profile.IsCLIConfigured(name)

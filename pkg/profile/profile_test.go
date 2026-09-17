@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -672,4 +673,63 @@ func TestCleanStaleProfileBinaries(t *testing.T) {
 		t.Errorf("Expected %s to be deleted, but still exists", stale2)
 	}
 }
+
+func TestWriteTokenToProfile_SkipsIdenticalContent(t *testing.T) {
+	tempHome := t.TempDir()
+	profileDir := filepath.Join(tempHome, "test-profile")
+
+	tokenJSON := `{"token": {"access_token": "test-token-123", "refresh_token": "refresh-123"}}`
+	
+	// First write creates all candidate files
+	if err := WriteTokenToProfile(profileDir, tokenJSON); err != nil {
+		t.Fatalf("WriteTokenToProfile initial write failed: %v", err)
+	}
+
+	// Record mod times and verify files exist
+	paths := GetTokenFilePaths(profileDir)
+	modTimes := make(map[string]time.Time)
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("expected token file %s to exist: %v", p, err)
+		}
+		modTimes[p] = info.ModTime()
+	}
+
+	// Sleep slightly to ensure time tick
+	time.Sleep(20 * time.Millisecond)
+
+	// Second write with identical content should skip rewriting
+	if err := WriteTokenToProfile(profileDir, tokenJSON); err != nil {
+		t.Fatalf("WriteTokenToProfile second write failed: %v", err)
+	}
+
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("expected token file %s to exist: %v", p, err)
+		}
+		if !info.ModTime().Equal(modTimes[p]) {
+			t.Errorf("expected file %s modtime to remain untouched, but changed from %v to %v", p, modTimes[p], info.ModTime())
+		}
+	}
+
+	// Third write with changed content should update files
+	newTokenJSON := `{"token": {"access_token": "new-token-456", "refresh_token": "new-refresh-456"}}`
+	time.Sleep(20 * time.Millisecond)
+	if err := WriteTokenToProfile(profileDir, newTokenJSON); err != nil {
+		t.Fatalf("WriteTokenToProfile third write failed: %v", err)
+	}
+
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("expected token file %s to exist: %v", p, err)
+		}
+		if info.ModTime().Equal(modTimes[p]) {
+			t.Errorf("expected file %s modtime to be updated for new content", p)
+		}
+	}
+}
+
 

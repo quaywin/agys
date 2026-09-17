@@ -138,3 +138,31 @@ func TestModelCachePersistence(t *testing.T) {
 	// Clean up
 	_ = os.Remove(filepath.Join(tempDir, "models_cache.json"))
 }
+
+func TestHookProcess_DoesNotSpawnBackgroundRefresh(t *testing.T) {
+	SetHookProcess(true)
+	defer SetHookProcess(false)
+
+	if !IsHookProcess() {
+		t.Errorf("expected IsHookProcess to return true")
+	}
+
+	tempDir := t.TempDir()
+	t.Setenv("AGYS_DIR", tempDir)
+
+	// Save stale model cache (older than 24 hours)
+	dm := &DiscoveredModels{
+		FetchedAt:   time.Now().Add(-48 * time.Hour),
+		LatestFlash: "gemini-3.8-flash",
+		LatestPro:   "gemini-3.8-pro",
+		AllModels:   []string{"gemini-3.8-flash"},
+	}
+	_ = SaveCachedDiscoveredModels(dm)
+
+	// Calling GetOrRefreshModels in hook process should return existing cache without blocking or errors
+	res := GetOrRefreshModels()
+	if res == nil || res.LatestFlash != "gemini-3.8-flash" {
+		t.Errorf("expected GetOrRefreshModels in hook process to return cached models, got %+v", res)
+	}
+}
+

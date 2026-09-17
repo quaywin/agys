@@ -408,29 +408,43 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 		}
 	}
 
+	// Sort candidates by modification time descending early so newest sessions are evaluated first
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.After(candidates[j].modTime)
+	})
+
 	var allSessions []ConversationSession
 	var toParse []sessionCandidate
 
+	matchedCount := 0
 	for _, cand := range candidates {
 		key := cand.profile + ":" + cand.convID
 		if cachedItem, exists := cache[key]; exists &&
 			cachedItem.TranscriptMTime == cand.fileMTime &&
-			cachedItem.TranscriptSize == cand.fileSize &&
-			cachedItem.ProjectName != "" &&
-			cachedItem.ProjectName != "(Global)" &&
-			cachedItem.ProjectPath != "" &&
-			!isSystemOrHomeDir(cachedItem.ProjectPath) {
-			// Cache hit: use cached session info with valid project metadata
-			allSessions = append(allSessions, ConversationSession{
+			cachedItem.TranscriptSize == cand.fileSize {
+			// Cache hit: use cached session info (including Global sessions)
+			sess := ConversationSession{
 				Profile:     cachedItem.Profile,
 				ConvID:      cachedItem.ConvID,
 				ModTime:     cachedItem.ModTime,
 				ProjectPath: cachedItem.ProjectPath,
 				ProjectName: cachedItem.ProjectName,
 				UserPrompt:  cachedItem.UserPrompt,
-			})
+			}
+			allSessions = append(allSessions, sess)
+
+			// If session matches filter criteria, count it towards early limit
+			if !IsInternalAutomatedSession(sess.UserPrompt) {
+				if filter.All || filter.Project == "" || MatchProject(filter.Project, sess) {
+					matchedCount++
+					// If we already have enough strictly newer matching sessions, stop scanning older candidates
+					if filter.Limit > 0 && matchedCount >= filter.Limit {
+						break
+					}
+				}
+			}
 		} else {
-			// Cache miss or missing/invalid project info: queue for parsing
+			// Cache miss: queue for parsing
 			toParse = append(toParse, cand)
 		}
 	}
@@ -497,7 +511,15 @@ func ListSessions(ctx context.Context, filter SessionFilter) ([]ConversationSess
 		}
 
 		if cacheChanged {
-			_ = SaveSessionCache(cache)
+			_ = UpdateSessionCache(func(diskCache SessionCache) error {
+				for k, v := range cache {
+					diskCache[k] = v
+				}
+				if len(seenConvIDs) > 0 && filter.Profile == "" {
+					PruneSessionCache(diskCache, seenConvIDs)
+				}
+				return nil
+			})
 		}
 	}
 

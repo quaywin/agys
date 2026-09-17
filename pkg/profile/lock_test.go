@@ -86,3 +86,41 @@ func TestWithFileLock_TimeoutWhenLocked(t *testing.T) {
 		t.Fatalf("expected WithFileLock to fail due to lock timeout, but succeeded")
 	}
 }
+
+func TestWithFileLock_DefaultTimeoutWithBackgroundContext(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("AGYS_DIR", tempDir)
+
+	lockPath := filepath.Join(tempDir, lockFilename)
+	fLock := flock.New(lockPath)
+
+	locked, err := fLock.TryLock()
+	if err != nil || !locked {
+		t.Fatalf("failed to manually acquire lock for test: %v", err)
+	}
+	defer func() {
+		_ = fLock.Unlock()
+	}()
+
+	// Temporarily reduce defaultLockTimeout for fast test execution
+	oldTimeout := defaultLockTimeout
+	defaultLockTimeout = 100 * time.Millisecond
+	defer func() {
+		defaultLockTimeout = oldTimeout
+	}()
+
+	start := time.Now()
+	// Pass context.Background() without explicit deadline - should still timeout after defaultLockTimeout
+	err = WithFileLock(context.Background(), func() error {
+		return nil
+	})
+
+	duration := time.Since(start)
+	if err == nil {
+		t.Fatalf("expected WithFileLock to fail due to default lock timeout, but succeeded")
+	}
+	if duration < 80*time.Millisecond || duration > 1*time.Second {
+		t.Errorf("expected timeout around 100ms, got %v", duration)
+	}
+}
+

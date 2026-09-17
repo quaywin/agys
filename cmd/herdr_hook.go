@@ -13,6 +13,7 @@ var herdrHookCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		profile.SetHookProcess(true)
 		action := "session"
 		if len(args) > 0 {
 			action = args[0]

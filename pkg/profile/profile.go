@@ -535,12 +535,32 @@ func ReadRawTokenData(profileDir string) ([]byte, error) {
 	return nil, fmt.Errorf("token file not found (not logged in)")
 }
 
-// WriteTokenToProfile writes token JSON to standard token file paths in profileDir.
-func WriteTokenToProfile(profileDir string, rawJSON string) error {
-	trimmed := strings.TrimSpace(rawJSON) + "\n"
+// HasProfileToken quickly checks whether profileName has at least one existing non-empty token file on disk.
+func HasProfileToken(profileName string) bool {
+	profileDir, err := GetProfileDir(profileName)
+	if err != nil {
+		return false
+	}
 	for _, p := range GetTokenFilePaths(profileDir) {
+		if fi, err := os.Stat(p); err == nil && fi.Size() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// WriteTokenToProfile writes token JSON to standard token file paths in profileDir.
+// It skips writing to files whose content is already identical to rawJSON to avoid unnecessary fsync disk I/O.
+func WriteTokenToProfile(profileDir string, rawJSON string) error {
+	trimmed := []byte(strings.TrimSpace(rawJSON) + "\n")
+	for _, p := range GetTokenFilePaths(profileDir) {
+		if existing, err := os.ReadFile(p); err == nil {
+			if bytes.Equal(existing, trimmed) {
+				continue
+			}
+		}
 		_ = os.MkdirAll(filepath.Dir(p), 0700)
-		_ = WriteFileAtomic(p, []byte(trimmed), 0600)
+		_ = WriteFileAtomic(p, trimmed, 0600)
 	}
 	return nil
 }

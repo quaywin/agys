@@ -56,7 +56,7 @@ func SaveCachedQuota(profileName string, summary *QuotaSummary) error {
 }
 
 // GetCachedQuota returns the cached quota summary if available. If maxAge > 0 and the cache is older than maxAge,
-// it returns (summary, false) so callers can use it as a fallback if network fails.
+// it returns (nil, false). If maxAge <= 0, it returns the summary regardless of age.
 func GetCachedQuota(profileName string, maxAge time.Duration) (*QuotaSummary, bool) {
 	if profileName == "" {
 		return nil, false
@@ -74,7 +74,7 @@ func GetCachedQuota(profileName string, maxAge time.Duration) (*QuotaSummary, bo
 		return nil, false
 	}
 	if maxAge > 0 && time.Since(cached.UpdatedAt) > maxAge {
-		return cached.Summary, false
+		return nil, false
 	}
 	return cached.Summary, true
 }
@@ -438,7 +438,7 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 	token, err := ReadToken(profileName)
 	if err != nil {
 		// If read token failed, fallback to stale cached quota if available (< 4 hours)
-		if stale, _ := GetCachedQuota(profileName, 4*time.Hour); stale != nil {
+		if stale, ok := GetCachedQuota(profileName, 4*time.Hour); ok && stale != nil {
 			return stale, nil
 		}
 		return nil, err
@@ -455,7 +455,7 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 
 	accessToken := token.Token.AccessToken
 	if accessToken == "" {
-		if stale, _ := GetCachedQuota(profileName, 4*time.Hour); stale != nil {
+		if stale, ok := GetCachedQuota(profileName, 4*time.Hour); ok && stale != nil {
 			return stale, nil
 		}
 		return nil, fmt.Errorf("access token is empty (not logged in)")
@@ -498,7 +498,7 @@ func FetchQuota(ctx context.Context, profileName string) (*QuotaSummary, error) 
 	}
 
 	// 4. Fallback to stale cached quota if API network request failed (< 4 hours)
-	if stale, _ := GetCachedQuota(profileName, 4*time.Hour); stale != nil {
+	if stale, ok := GetCachedQuota(profileName, 4*time.Hour); ok && stale != nil {
 		return stale, nil
 	}
 
@@ -714,7 +714,7 @@ func GetProfileFullQuotaDetailsFast(profileName, modelName string) (*ModelQuotaD
 	}
 
 	// 2. Stale cache check (< 4 hours) -> instant 0ms fallback
-	if stale, _ := GetCachedQuota(profileName, 4*time.Hour); stale != nil {
+	if stale, ok := GetCachedQuota(profileName, 4*time.Hour); ok && stale != nil {
 		if details := ExtractModelQuotaDetails(stale, modelName); details != nil && details.Fraction5H >= 0 {
 			return details, true
 		}
