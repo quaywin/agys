@@ -732,4 +732,158 @@ func TestWriteTokenToProfile_SkipsIdenticalContent(t *testing.T) {
 	}
 }
 
+func TestSanitizeAgyEnv(t *testing.T) {
+	t.Run("BasicSanitizationAndSSHStripping", func(t *testing.T) {
+		baseEnv := []string{
+			"USER=testuser",
+			"PATH=/usr/bin:/bin",
+			"SSH_CLIENT=100.70.188.99 56622 22",
+			"SSH_CONNECTION=100.70.188.99 56622 100.81.62.112 22",
+			"SSH_TTY=/dev/pts/1",
+			"SSH_AUTH_SOCK=/tmp/ssh-agent.sock",
+			"LANG=en_US.UTF-8",
+		}
 
+		envMap := map[string]string{
+			"HOME":         "/custom/home",
+			"AGYS_PROFILE": "myprofile",
+		}
+
+		sanitized := SanitizeAgyEnv(baseEnv, envMap)
+
+		envLookup := make(map[string]string)
+		for _, e := range sanitized {
+			parts := strings.SplitN(e, "=", 2)
+			if len(parts) == 2 {
+				envLookup[parts[0]] = parts[1]
+			}
+		}
+
+		// 1. Verify SSH variables causing DA2 probe are stripped
+		if _, ok := envLookup["SSH_CLIENT"]; ok {
+			t.Errorf("expected SSH_CLIENT to be stripped, but found: %s", envLookup["SSH_CLIENT"])
+		}
+		if _, ok := envLookup["SSH_CONNECTION"]; ok {
+			t.Errorf("expected SSH_CONNECTION to be stripped, but found: %s", envLookup["SSH_CONNECTION"])
+		}
+		if _, ok := envLookup["SSH_TTY"]; ok {
+			t.Errorf("expected SSH_TTY to be stripped, but found: %s", envLookup["SSH_TTY"])
+		}
+
+		// 2. Verify SSH_AUTH_SOCK (git SSH key forwarding) is PRESERVED
+		if envLookup["SSH_AUTH_SOCK"] != "/tmp/ssh-agent.sock" {
+			t.Errorf("expected SSH_AUTH_SOCK to be preserved, got: %s", envLookup["SSH_AUTH_SOCK"])
+		}
+
+		// 3. Verify TERM_PROGRAM is populated with non-empty fallback
+		if tp, ok := envLookup["TERM_PROGRAM"]; !ok || tp == "" {
+			t.Errorf("expected TERM_PROGRAM to be populated, got: %q", tp)
+		}
+
+		// 4. Verify overrides are applied
+		if envLookup["HOME"] != "/custom/home" {
+			t.Errorf("expected HOME to be /custom/home, got %s", envLookup["HOME"])
+		}
+		if envLookup["AGYS_PROFILE"] != "myprofile" {
+			t.Errorf("expected AGYS_PROFILE to be myprofile, got %s", envLookup["AGYS_PROFILE"])
+		}
+
+		// 5. Verify regular env vars are preserved
+		if envLookup["USER"] != "testuser" {
+			t.Errorf("expected USER to be testuser, got %s", envLookup["USER"])
+		}
+		if envLookup["LANG"] != "en_US.UTF-8" {
+			t.Errorf("expected LANG to be en_US.UTF-8, got %s", envLookup["LANG"])
+		}
+	})
+
+	t.Run("PreserveExistingTermProgramFromBaseEnv", func(t *testing.T) {
+		baseEnv := []string{
+			"USER=testuser",
+			"TERM_PROGRAM=ghostty",
+		}
+		sanitized := SanitizeAgyEnv(baseEnv, nil)
+		envLookup := make(map[string]string)
+		for _, e := range sanitized {
+			parts := strings.SplitN(e, "=", 2)
+			if len(parts) == 2 {
+				envLookup[parts[0]] = parts[1]
+			}
+		}
+		if envLookup["TERM_PROGRAM"] != "ghostty" {
+			t.Errorf("expected TERM_PROGRAM=ghostty from baseEnv to be preserved, got: %q", envLookup["TERM_PROGRAM"])
+		}
+	})
+
+	t.Run("EmptyTermProgramInBaseEnvFallsBack", func(t *testing.T) {
+		baseEnv := []string{
+			"USER=testuser",
+			"TERM_PROGRAM=",
+		}
+		sanitized := SanitizeAgyEnv(baseEnv, nil)
+		envLookup := make(map[string]string)
+		for _, e := range sanitized {
+			parts := strings.SplitN(e, "=", 2)
+			if len(parts) == 2 {
+				envLookup[parts[0]] = parts[1]
+			}
+		}
+		if envLookup["TERM_PROGRAM"] == "" {
+			t.Errorf("expected empty TERM_PROGRAM to be replaced with fallback, got empty string")
+		}
+	})
+
+	t.Run("EnvMapTermProgramOverridePrecedence", func(t *testing.T) {
+		baseEnv := []string{
+			"TERM_PROGRAM=apple_terminal",
+		}
+		sanitized := SanitizeAgyEnv(baseEnv, map[string]string{"TERM_PROGRAM": "custom_override"})
+		envLookup := make(map[string]string)
+		for _, e := range sanitized {
+			parts := strings.SplitN(e, "=", 2)
+			if len(parts) == 2 {
+				envLookup[parts[0]] = parts[1]
+			}
+		}
+		if envLookup["TERM_PROGRAM"] != "custom_override" {
+			t.Errorf("expected envMap to override TERM_PROGRAM, got: %q", envLookup["TERM_PROGRAM"])
+		}
+	})
+
+	t.Run("DeduplicateOverriddenKeys", func(t *testing.T) {
+		baseEnv := []string{
+			"PATH=/usr/bin",
+			"PATH=/bin",
+			"USER=testuser",
+		}
+		sanitized := SanitizeAgyEnv(baseEnv, map[string]string{"PATH": "/custom/bin"})
+		pathCount := 0
+		for _, e := range sanitized {
+			if strings.HasPrefix(e, "PATH=") {
+				pathCount++
+				if e != "PATH=/custom/bin" {
+					t.Errorf("unexpected PATH entry: %s", e)
+				}
+			}
+		}
+		if pathCount != 1 {
+			t.Errorf("expected exactly 1 PATH entry after override, got %d", pathCount)
+		}
+	})
+
+	t.Run("NilInputsHandling", func(t *testing.T) {
+		sanitized := SanitizeAgyEnv(nil, nil)
+		if len(sanitized) == 0 {
+			t.Errorf("expected non-empty environment when baseEnv is nil")
+		}
+		hasTermProgram := false
+		for _, e := range sanitized {
+			if strings.HasPrefix(e, "TERM_PROGRAM=") && len(e) > len("TERM_PROGRAM=") {
+				hasTermProgram = true
+			}
+		}
+		if !hasTermProgram {
+			t.Errorf("expected TERM_PROGRAM to be present in default environment")
+		}
+	})
+}

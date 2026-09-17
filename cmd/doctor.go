@@ -66,6 +66,7 @@ func runDoctor(ctx context.Context) error {
 	} else {
 		fmt.Printf("  \033[1;32m✓\033[0m Binary found: %s\n", agyPath)
 		verCmd := exec.CommandContext(ctx, agyPath, "--version")
+		verCmd.Env = profile.SanitizeAgyEnv(os.Environ(), map[string]string{"AGYS_INTERNAL_EXEC": "1"})
 		verOut, verErr := verCmd.Output()
 		if verErr == nil {
 			installedAgyVer := strings.TrimSpace(string(verOut))

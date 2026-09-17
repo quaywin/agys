@@ -212,7 +212,9 @@ func DiscoverLatestModels() (*DiscoveredModels, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "agy", "models")
+	agyPath := GetAgyPath()
+	cmd := exec.CommandContext(ctx, agyPath, "models")
+	cmd.Env = SanitizeAgyEnv(os.Environ(), map[string]string{"AGYS_INTERNAL_EXEC": "1"})
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

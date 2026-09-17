@@ -283,7 +283,7 @@ Examples:
 				`export PATH="$HOME/.local/bin:$HOME/bin:$HOME/go/bin:$HOME/.gemini/antigravity-cli/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"; `+
 				`fi; `+
 				`%sif command -v agys >/dev/null 2>&1; then exec %s%s; `+
-				`elif command -v agy >/dev/null 2>&1; then exec agy%s; `+
+				`elif command -v agy >/dev/null 2>&1; then unset SSH_CLIENT SSH_CONNECTION SSH_TTY; export TERM_PROGRAM="${TERM_PROGRAM:-agys}"; exec agy%s; `+
 				`else `+
 				`echo "[agys] Error: Unable to locate agy or agys on %s." >&2; exit 127; `+
 				`fi`,

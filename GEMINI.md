@@ -35,6 +35,9 @@
   - `pkg/profile/quota.go`: `GetProfileFullQuotaDetailsForModel` with token-based dynamic matching and 3-tier fallback.
 - **Model Resolution Order**:
   `Explicit -m/--model arg` -> `Live prompt transcript (USER_SETTINGS_CHANGE)` -> `.active_model cache` -> `settings.json` -> `default Gemini`.
+- **Terminal Environment & DA2 Probe Prevention**:
+  - Always use `pkg/profile.SanitizeAgyEnv` when launching `agy` subcommands or background queries (`exec.Command("agy", ...)`).
+  - Strips `SSH_CLIENT`, `SSH_CONNECTION`, and `SSH_TTY` and guarantees `TERM_PROGRAM` presence to prevent `agy`'s uncoordinated Apple Terminal DA2 probe (`\x1b[>c`) from leaking phantom escape characters (`0;0c[>1;0;0c`) into user PTY input.
 - **Quality Assurance**:
   - Always run `go test ./...` and ensure zero test failures before completing tasks.
   - Keep `go vet ./...` clean without warnings.
