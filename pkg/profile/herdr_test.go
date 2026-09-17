@@ -1696,5 +1696,126 @@ func TestResolveConversationTitleFromTranscript_LongLinesAndSlashCommands(t *tes
 	}
 }
 
+func TestReportHerdrQuotaOnly_UpdatesAllPanesOfProfile(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_multi_pane_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	updatedPanes := make(chan string, 10)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 4096)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				resp := `{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"Antigravity","display_agent":"multi-prof","title":"agys: Task 1","tokens":{"profile":"multi-prof","model":"gemini-2.5-flash","conversation_title":"Task 1","quota_5h_normal":"100%"}},{"pane_id":"w1:p2","agent":"claude","title":"claude code","tokens":{}},{"pane_id":"w1:p3","agent":"Antigravity","display_agent":"multi-prof","title":"agys: Task 2","tokens":{"profile":"multi-prof","model":"gemini-2.5-flash","conversation_title":"Task 2","quota_5h_normal":"100%"}}]}}`
+				_, _ = conn.Write([]byte(resp + "\n"))
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					updatedPanes <- reqStr
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	pDir, err := Create("multi-prof")
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	// Save cached quota with 95% remaining
+	summary := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Buckets: []QuotaBucket{
+					{
+						BucketID:          "gemini-5h",
+						Window:            "5h",
+						RemainingFraction: 0.95,
+					},
+					{
+						BucketID:          "gemini-weekly",
+						Window:            "weekly",
+						RemainingFraction: 0.85,
+					},
+				},
+			},
+		},
+	}
+	if err := SaveCachedQuota("multi-prof", summary); err != nil {
+		t.Fatalf("SaveCachedQuota error: %v", err)
+	}
+
+	_ = SaveSessionContextForPane(pDir, "w1:p1", &SessionContextState{
+		ConversationTitle: "Task 1",
+		ModelID:           "gemini-2.5-flash",
+	})
+	_ = SaveSessionContextForPane(pDir, "w1:p3", &SessionContextState{
+		ConversationTitle: "Task 2",
+		ModelID:           "gemini-2.5-flash",
+	})
+
+	// Call ReportHerdrQuotaOnly from w1:p1 (simulating 60s background watcher)
+	err = ReportHerdrQuotaOnly(context.Background(), "multi-prof", "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("ReportHerdrQuotaOnly error: %v", err)
+	}
+
+	receivedPanes := make(map[string]string)
+	for i := 0; i < 2; i++ {
+		select {
+		case payload := <-updatedPanes:
+			if strings.Contains(payload, `"pane_id":"w1:p1"`) {
+				receivedPanes["w1:p1"] = payload
+			} else if strings.Contains(payload, `"pane_id":"w1:p3"`) {
+				receivedPanes["w1:p3"] = payload
+			} else if strings.Contains(payload, `"pane_id":"w1:p2"`) {
+				t.Errorf("CRITICAL: Mistakenly updated w1:p2 (Claude agent)! Payload: %s", payload)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("Timeout waiting for metadata updates; received so far: %v", receivedPanes)
+		}
+	}
+
+	if _, ok := receivedPanes["w1:p1"]; !ok {
+		t.Errorf("Expected quota update for w1:p1")
+	}
+	p3Payload, ok := receivedPanes["w1:p3"]
+	if !ok {
+		t.Errorf("Expected quota update for w1:p3")
+	} else {
+		if !strings.Contains(p3Payload, `"quota_5h_normal":"95%"`) {
+			t.Errorf("Expected w1:p3 to receive 95%% quota, got: %s", p3Payload)
+		}
+		if !strings.Contains(p3Payload, `"conversation_title":"Task 2"`) {
+			t.Errorf("Expected w1:p3 to preserve its own conversation title 'Task 2', got: %s", p3Payload)
+		}
+		if !strings.Contains(p3Payload, `"title":"agys: Task 2"`) {
+			t.Errorf("Expected w1:p3 to preserve its own title 'agys: Task 2', got: %s", p3Payload)
+		}
+	}
+}
+
 
 

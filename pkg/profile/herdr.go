@@ -599,11 +599,6 @@ func IsKnownNonAgysAgent(agent string) bool {
 	return false
 }
 
-// IsNonAgysAgent checks if the pane is actively running another known AI agent/CLI tool (e.g., claude, codex, droid).
-func IsNonAgysAgent(agent string) bool {
-	return IsKnownNonAgysAgent(agent)
-}
-
 // IsPaneNonAgys reports whether a Herdr pane is actively running another known AI agent or CLI tool
 // (e.g., claude, codex, droid, aider, opencode, cursor, copilot) based on agent, display_agent, or titles.
 func IsPaneNonAgys(p HerdrRawPane) bool {
@@ -795,12 +790,15 @@ func getMatchingHerdrPanesFromList(ctx context.Context, panes []HerdrRawPane, so
 		}
 
 		isMatch := false
-		if currentPaneID != "" && p.PaneID == currentPaneID {
-			isMatch = true
-		} else if p.Tokens != nil && p.Tokens["profile"] == profileName {
+		if p.Tokens != nil && p.Tokens["profile"] == profileName {
 			isMatch = true
 		} else if p.DisplayAgent == profileName || p.Agent == profileName {
 			isMatch = true
+		} else if currentPaneID != "" && p.PaneID == currentPaneID {
+			if (p.Tokens == nil || p.Tokens["profile"] == "" || p.Tokens["profile"] == profileName) &&
+				(p.DisplayAgent == "" || p.DisplayAgent == profileName || p.DisplayAgent == "agy" || p.DisplayAgent == "Antigravity") {
+				isMatch = true
+			}
 		}
 
 		if isMatch && !seen[p.PaneID] {
@@ -875,21 +873,6 @@ func resolveProfileFromPane(ctx context.Context, socketPath, paneID string) stri
 	return resolveProfileFromPaneList(panes, paneID)
 }
 
-func lookupPaneAgentStateFromList(panes []HerdrRawPane, paneID string) (found, active bool) {
-	for _, pane := range panes {
-		if pane.PaneID == paneID {
-			return true, isPaneActiveAgys(
-				pane.Agent,
-				pane.Title,
-				pane.TerminalTitle,
-				pane.TerminalTitleStripped,
-				pane.Tokens,
-			)
-		}
-	}
-	return false, false
-}
-
 // ReportHerdrMetadata communicates with Herdr via its UNIX domain socket to set display_agent, title, and quota for all matching panes.
 func ReportHerdrMetadata(ctx context.Context, profileName string) error {
 	return reportHerdrMetadataInternal(ctx, profileName, "", false)
@@ -948,12 +931,13 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 	}
 
 	var targetPanes []HerdrPaneMatch
-	if paneID != "" {
-		// When inside a specific pane, update ONLY this pane to prevent cross-pane contamination or overwriting other agents.
+	if !isQuotaOnly && paneID != "" {
+		// When inside a specific pane and updating full session metadata/title, update ONLY this pane to prevent cross-pane contamination.
 		targetPanes = []HerdrPaneMatch{
 			getHerdrCurrentPaneFromList(panes, paneID, profileName, modelName),
 		}
 	} else {
+		// When updating periodic quota metrics across the profile (isQuotaOnly), update ALL panes matching this profile.
 		targetPanes = getMatchingHerdrPanesFromList(quotaCtx, panes, socketPath, paneID, profileName, modelName)
 	}
 
@@ -963,7 +947,9 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 		}
 
 		targetModel := modelName
-		if targetModel == "" || targetModel == "auto" {
+		if isQuotaOnly && target.Model != "" && target.Model != "auto" {
+			targetModel = target.Model
+		} else if targetModel == "" || targetModel == "auto" {
 			targetModel = target.Model
 		}
 		if targetModel == "" || targetModel == "auto" || targetModel == "gemini" {
@@ -1309,10 +1295,16 @@ func StartHerdrQuotaWatcher(ctx context.Context, profileName string, modelName .
 	watchCtx, cancel := context.WithCancel(ctx)
 
 	go func() {
-		locked, err := fileLock.TryLock()
-		if err != nil || !locked {
-			// Another pane for this profile is already the active watcher leader
-			return
+		for {
+			locked, err := fileLock.TryLock()
+			if err == nil && locked {
+				break
+			}
+			select {
+			case <-watchCtx.Done():
+				return
+			case <-time.After(15 * time.Second):
+			}
 		}
 		defer func() {
 			_ = fileLock.Unlock()
