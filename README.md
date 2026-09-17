@@ -419,16 +419,31 @@ source <(agys completion zsh)
 source <(agys completion bash)
 ```
 
-### 17. Self-Upgrade (`agys upgrade`)
+### 17. Self-Upgrade & Background Auto-Updater (`agys upgrade`)
+
+`agys` includes an **automatic silent background updater** modeled directly after `agy`'s internal architecture:
+- **Fast-Path Throttling**: Checks `last_check.timestamp` (<0.1ms overhead) on everyday commands with a 6-hour interval.
+- **Detached Worker**: Runs asynchronously in the background (`Setsid`) with zero blocking or delay to user commands.
+- **Atomic POSIX Swap & Code Signing**: Safely installs new releases on macOS/Linux using atomic rename and pre-swap `codesign`, preventing kernel SIGKILL on active sessions.
+- **Notification**: When an update completes in the background, a subtle message is displayed once on the next terminal command.
+- **Safety Guards**: Automatically disabled in CI environments (`CI=true`), when local dev builds (`-dev`) are detected, and during sensitive loops like `agys herdr-hook` or tab completion.
 
 ```bash
-# Upgrade agys CLI to latest release automatically
+# Upgrade agys CLI to latest release manually
 agys upgrade
 # or alias: agys update
 
 # Check if an update is available without installing
 agys upgrade --check
+
+# Reinstall or force upgrade to latest release
+agys upgrade --force
 ```
+
+#### Environment Variables for Auto-Updater:
+- `AGYS_NO_AUTO_UPDATE=1` or `AGYS_AUTO_UPDATE=off`: Disable background auto-updates completely.
+- `AGYS_UPDATE_INTERVAL=12h`: Override default check interval (default: `6h`).
+- `AGYS_DEBUG=1`: Log background updater activity to `~/.agys/updater/updater.log`.
 
 ### 18. AI Model Discovery & Auto-Detection (`agys models`)
 

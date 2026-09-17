@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/quaywin/agys/pkg/updater"
 	"github.com/quaywin/agys/pkg/version"
 	"github.com/spf13/cobra"
 )
@@ -13,6 +14,10 @@ var rootCmd = &cobra.Command{
 	Short: "agys (Antigravity Switcher) manages isolated account profiles and real-time Herdr multi-agent quota tracking",
 	Long: `agys isolates multi-account profiles across the Google Antigravity ecosystem (CLI, IDE, GUI, Remote)
 and provides native, real-time profile quota tracking (5H & Weekly) and lifecycle hooks for Herdr multi-agent workspaces.`,
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		updater.NotifyIfRecentlyUpdated(cmd.Name())
+		updater.MaybeTriggerBackgroundUpdate(cmd.Name())
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.

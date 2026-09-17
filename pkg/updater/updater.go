@@ -274,6 +274,9 @@ func InstallBinary(newBinaryPath string) error {
 		}
 		_ = os.Remove(oldPath)
 	} else {
+		if runtime.GOOS == "darwin" {
+			_ = exec.Command("codesign", "-f", "-s", "-", tmpPath).Run()
+		}
 		if err := os.Rename(tmpPath, execPath); err != nil {
 			os.Remove(tmpPath)
 			return fmt.Errorf("failed to replace binary: %w", err)
