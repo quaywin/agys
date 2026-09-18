@@ -53,6 +53,10 @@ func ShouldSkipArchiveEntry(relPathInsideProfile string, info os.FileInfo) (skip
 	if base == ".agys.lock" || base == ".keychain.lock" || base == ".DS_Store" {
 		return true, info.IsDir()
 	}
+	// Skip host symlinked .gitconfig to avoid baking host-specific paths into export archive
+	if base == ".gitconfig" && (info.Mode()&os.ModeSymlink != 0) {
+		return true, false
+	}
 
 	parts := strings.Split(filepath.ToSlash(relPathInsideProfile), "/")
 	for i, part := range parts {

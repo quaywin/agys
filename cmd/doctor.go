@@ -96,6 +96,7 @@ func runDoctor(ctx context.Context) error {
 		fmt.Printf("\n\033[1;31m✗ Failed to list profiles: %v\033[0m\n", err)
 		issues++
 	} else {
+		_ = profile.SyncAllProfilesGitConfig()
 		currentProf, _ := profile.GetCurrent()
 		fmt.Printf("\n\033[1;34m● Sandboxed Profiles (%d configured)\033[0m\n", len(profiles))
 
@@ -166,6 +167,11 @@ func runDoctor(ctx context.Context) error {
 				if info, lErr := os.Lstat(profileKeychainsDir); lErr == nil && (info.Mode()&os.ModeSymlink != 0) {
 					fmt.Printf("    - macOS Keychain: Linked and isolated\n")
 				}
+			}
+
+			// Git configuration check
+			if _, statErr := os.Stat(filepath.Join(pDir, ".gitconfig")); statErr == nil {
+				fmt.Printf("    - Git Config: Linked (~/.gitconfig)\n")
 			}
 		}
 	}

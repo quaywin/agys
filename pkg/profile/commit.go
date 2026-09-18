@@ -28,6 +28,7 @@ type CommitCheckResult struct {
 // IsGitRepository checks whether the target directory is inside a git repository.
 func IsGitRepository(repoDir string) bool {
 	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -41,6 +42,7 @@ func IsGitRepository(repoDir string) bool {
 // StageTrackedFiles stages modified and deleted tracked files (equivalent to git add -u).
 func StageTrackedFiles(repoDir string) error {
 	cmd := exec.Command("git", "add", "-u")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -54,6 +56,7 @@ func StageTrackedFiles(repoDir string) error {
 // StageAllFiles stages all changes including new untracked files (equivalent to git add -A).
 func StageAllFiles(repoDir string) error {
 	cmd := exec.Command("git", "add", "-A")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -67,6 +70,7 @@ func StageAllFiles(repoDir string) error {
 // GetStagedFiles returns a list of relative file paths currently staged in git.
 func GetStagedFiles(repoDir string) ([]string, error) {
 	cmd := exec.Command("git", "diff", "--cached", "--name-only")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -89,6 +93,7 @@ func GetStagedFiles(repoDir string) ([]string, error) {
 // GetStagedNameStatus returns a map of staged file paths to their Git status (Added, Modified, Deleted, Renamed).
 func GetStagedNameStatus(repoDir string) (map[string]string, error) {
 	cmd := exec.Command("git", "diff", "--cached", "--name-status")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -128,6 +133,7 @@ func GetStagedNameStatus(repoDir string) (map[string]string, error) {
 // GetCompactStagedDiff returns a compact git diff with 1 context line (-U1) and ignored whitespace (-w).
 func GetCompactStagedDiff(repoDir string) (string, error) {
 	cmd := exec.Command("git", "diff", "--cached", "-U1", "-w", "--no-color")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -141,6 +147,7 @@ func GetCompactStagedDiff(repoDir string) (string, error) {
 // GetStagedDiff returns the raw git diff of all staged changes.
 func GetStagedDiff(repoDir string) (string, error) {
 	cmd := exec.Command("git", "diff", "--cached")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -154,6 +161,7 @@ func GetStagedDiff(repoDir string) (string, error) {
 // GetStagedDiffStat returns the high-level git diff --stat summary of staged changes.
 func GetStagedDiffStat(repoDir string) (string, error) {
 	cmd := exec.Command("git", "diff", "--cached", "--stat")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -167,6 +175,7 @@ func GetStagedDiffStat(repoDir string) (string, error) {
 // ExecuteGitCommit executes `git commit -m <message>` in repoDir.
 func ExecuteGitCommit(repoDir string, commitMessage string) error {
 	cmd := exec.Command("git", "commit", "-m", commitMessage)
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -183,6 +192,7 @@ func ExecuteGitCommit(repoDir string, commitMessage string) error {
 // GetCurrentBranch returns the active git branch name.
 func GetCurrentBranch(repoDir string) (string, error) {
 	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -199,6 +209,7 @@ func ExecuteGitPush(repoDir string) error {
 
 	var stderrBuf bytes.Buffer
 	cmd := exec.Command("git", "push")
+	cmd.Env = GetGitEnv()
 	if repoDir != "" {
 		cmd.Dir = repoDir
 	}
@@ -217,6 +228,7 @@ func ExecuteGitPush(repoDir string) error {
 		if branch != "" && (strings.Contains(errStr, "has no upstream branch") || strings.Contains(errStr, "set-upstream")) {
 			fmt.Fprintf(os.Stderr, "[agys] Setting upstream and pushing to origin %s...\n", branch)
 			setUpstreamCmd := exec.Command("git", "push", "-u", "origin", branch)
+			setUpstreamCmd.Env = GetGitEnv()
 			if repoDir != "" {
 				setUpstreamCmd.Dir = repoDir
 			}

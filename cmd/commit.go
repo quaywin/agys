@@ -101,6 +101,7 @@ var commitCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		_ = profile.EnsureGitConfig(profileDir)
 
 		// 5. Get compact staged diff & stat
 		stagedDiff, err := profile.GetCompactStagedDiff("")

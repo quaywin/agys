@@ -68,6 +68,8 @@ func updateSettingsTrustedWorkspaces(settingsPath string, allTrusted []string) e
 
 // SyncTrustedWorkspaces merges trustedWorkspaces across all profiles so any workspace trusted in one profile is trusted in all.
 func SyncTrustedWorkspaces() error {
+	_ = SyncAllProfilesGitConfig()
+
 	profiles, err := List()
 	if err != nil {
 		return err

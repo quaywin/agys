@@ -163,6 +163,7 @@ func Create(name string) (string, error) {
 	}
 	_ = EnsureKeychain(profileDir)
 	_ = SyncHerdrIntegration(profileDir)
+	_ = EnsureGitConfig(profileDir)
 	return profileDir, nil
 }
 
@@ -367,6 +368,7 @@ func GetAgyPath() string {
 func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *exec.Cmd {
 	_ = EnsureKeychain(profileDir)
 	_ = SyncHerdrIntegration(profileDir)
+	_ = EnsureGitConfig(profileDir)
 
 	agyPath := GetAgyPath()
 
@@ -391,11 +393,18 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 		"HERDR_CONFIG_PATH": GetHerdrConfigPath(),
 	}
 
+	profileGitConfig := filepath.Join(profileDir, ".gitconfig")
+	realGitConfig := filepath.Join(realUserHome, ".gitconfig")
+	if _, err := os.Stat(profileGitConfig); err == nil {
+		envMap["GIT_CONFIG_GLOBAL"] = profileGitConfig
+	} else if _, err := os.Stat(realGitConfig); err == nil {
+		envMap["GIT_CONFIG_GLOBAL"] = realGitConfig
+	}
+
 	CleanStaleProfileBinaries(profileDir)
 
 	// Ensure PATH retains real user binary locations and prevents stale profile binaries from shadowing agys
 	envMap["PATH"] = SanitizeProfilePath(os.Getenv("PATH"), realUserHome, profileDir)
-
 
 	cmd.Env = SanitizeAgyEnv(os.Environ(), envMap)
 	return cmd
