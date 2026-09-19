@@ -885,8 +885,8 @@ func ReportHerdrMetadataWithModel(ctx context.Context, profileName, modelName st
 
 // ReportHerdrQuotaOnly communicates with Herdr via its UNIX domain socket to update ONLY quota metrics (5H & Weekly) and reset countdowns,
 // explicitly preserving existing context window tokens and title state to prevent conflicts with live turn-by-turn stream hooks.
-func ReportHerdrQuotaOnly(ctx context.Context, profileName, modelName string) error {
-	return reportHerdrMetadataInternal(ctx, profileName, modelName, true)
+func ReportHerdrQuotaOnly(ctx context.Context, profileName, modelName string, preloadedDetails ...*ModelQuotaDetails) error {
+	return reportHerdrMetadataInternal(ctx, profileName, modelName, true, preloadedDetails...)
 }
 
 func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName string, isQuotaOnly bool, preloadedDetails ...*ModelQuotaDetails) error {
@@ -1067,7 +1067,7 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 
 		var details *ModelQuotaDetails
 		var err error
-		if len(preloadedDetails) > 0 && preloadedDetails[0] != nil {
+		if len(preloadedDetails) > 0 && preloadedDetails[0] != nil && (targetModel == modelName || targetModel == "" || modelName == "") {
 			details = preloadedDetails[0]
 		} else if !isQuotaOnly {
 			if fast, ok := GetProfileFullQuotaDetailsFast(profileName, targetModel); ok && fast != nil {

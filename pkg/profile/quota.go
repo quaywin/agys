@@ -55,6 +55,69 @@ func SaveCachedQuota(profileName string, summary *QuotaSummary) error {
 	return WriteFileAtomic(filepath.Join(profileDir, quotaCacheFilename), data, 0600)
 }
 
+// UpdateCachedQuotaFractions updates the cached quota summary with newly parsed real-time fractions.
+func UpdateCachedQuotaFractions(profileName, modelName string, details *ModelQuotaDetails) error {
+	if profileName == "" || details == nil {
+		return nil
+	}
+	summary, ok := GetCachedQuota(profileName, 0)
+	if !ok || summary == nil {
+		summary = &QuotaSummary{
+			Groups: []QuotaGroup{
+				{
+					DisplayName: "Gemini Models",
+					Buckets: []QuotaBucket{
+						{BucketID: "gemini-5h", Window: "5h"},
+						{BucketID: "gemini-weekly", Window: "weekly"},
+					},
+				},
+				{
+					DisplayName: "Claude and GPT models",
+					Buckets: []QuotaBucket{
+						{BucketID: "3p-5h", Window: "5h"},
+						{BucketID: "3p-weekly", Window: "weekly"},
+					},
+				},
+			},
+		}
+	}
+
+	mLower := strings.ToLower(strings.TrimSpace(modelName))
+	is3P := strings.Contains(mLower, "claude") || strings.Contains(mLower, "sonnet") || strings.Contains(mLower, "opus") ||
+		strings.Contains(mLower, "gpt") || strings.Contains(mLower, "openai") || strings.HasPrefix(mLower, "o1") || strings.HasPrefix(mLower, "o3")
+
+	for i := range summary.Groups {
+		group := &summary.Groups[i]
+		gName := strings.ToLower(group.DisplayName)
+		isGroup3P := strings.Contains(gName, "claude") || strings.Contains(gName, "gpt") || strings.Contains(gName, "3p")
+
+		if (is3P && isGroup3P) || (!is3P && !isGroup3P) {
+			for j := range group.Buckets {
+				b := &group.Buckets[j]
+				w := strings.ToLower(b.Window)
+				d := strings.ToLower(b.DisplayName)
+				id := strings.ToLower(b.BucketID)
+
+				if (strings.Contains(w, "5h") || strings.Contains(d, "5h") || strings.Contains(id, "5h")) && details.Fraction5H >= 0 {
+					b.RemainingFraction = details.Fraction5H
+					if !details.ResetTime5H.IsZero() {
+						b.ResetTime = details.ResetTime5H
+					}
+				}
+				if (strings.Contains(w, "week") || strings.Contains(d, "week") || strings.Contains(id, "week") || strings.Contains(w, "7d")) && details.FractionWeekly >= 0 {
+					b.RemainingFraction = details.FractionWeekly
+					if !details.ResetTimeWeekly.IsZero() {
+						b.ResetTime = details.ResetTimeWeekly
+					}
+				}
+			}
+			break
+		}
+	}
+
+	return SaveCachedQuota(profileName, summary)
+}
+
 // GetCachedQuota returns the cached quota summary if available. If maxAge > 0 and the cache is older than maxAge,
 // it returns (nil, false). If maxAge <= 0, it returns the summary regardless of age.
 func GetCachedQuota(profileName string, maxAge time.Duration) (*QuotaSummary, bool) {

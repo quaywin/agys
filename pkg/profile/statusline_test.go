@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -592,5 +594,287 @@ func TestSessionContextEquality_IgnoresTokenCounters(t *testing.T) {
 		t.Errorf("expected isSessionContextStateEqual to return false when UsedPercentage changes")
 	}
 }
+
+func TestParsePayloadQuota_ModelDisambiguation(t *testing.T) {
+	payload := &StatusLinePayload{
+		Quota: map[string]struct {
+			RemainingFraction    float64 `json:"remaining_fraction"`
+			RemainingFractionAlt float64 `json:"remainingFraction"`
+			ResetTime            string  `json:"reset_time"`
+			ResetTimeAlt         string  `json:"resetTime"`
+			ResetInSeconds       uint64  `json:"reset_in_seconds"`
+			ResetInSecondsAlt    uint64  `json:"resetInSeconds"`
+		}{
+			"3p-5h": {
+				RemainingFraction: 1.0,
+				ResetTime:         "2026-09-06T18:00:00Z",
+			},
+			"3p-weekly": {
+				RemainingFraction: 1.0,
+				ResetTime:         "2026-09-13T18:00:00Z",
+			},
+			"gemini-5h": {
+				RemainingFraction: 0.85,
+				ResetTime:         "2026-09-06T15:00:00Z",
+			},
+			"gemini-weekly": {
+				RemainingFraction: 0.65,
+				ResetInSeconds:    7200,
+			},
+		},
+	}
+
+	// 1. When Gemini model is active, must strictly pick gemini-5h (0.85) and gemini-weekly (0.65)
+	detailsGemini := parsePayloadQuota(payload.Quota, "gemini-3.8-flash")
+	if detailsGemini == nil {
+		t.Fatalf("expected detailsGemini to be parsed")
+	}
+	if detailsGemini.Fraction5H != 0.85 {
+		t.Errorf("expected Fraction5H=0.85 for Gemini, got %f", detailsGemini.Fraction5H)
+	}
+	if detailsGemini.FractionWeekly != 0.65 {
+		t.Errorf("expected FractionWeekly=0.65 for Gemini, got %f", detailsGemini.FractionWeekly)
+	}
+	if detailsGemini.GroupName != "Gemini Models" {
+		t.Errorf("expected GroupName 'Gemini Models', got: %s", detailsGemini.GroupName)
+	}
+
+	// 2. When Claude / 3P model is active, must strictly pick 3p-5h (1.0) and 3p-weekly (1.0)
+	detailsClaude := parsePayloadQuota(payload.Quota, "claude-3-7-sonnet")
+	if detailsClaude == nil {
+		t.Fatalf("expected detailsClaude to be parsed")
+	}
+	if detailsClaude.Fraction5H != 1.0 {
+		t.Errorf("expected Fraction5H=1.0 for Claude, got %f", detailsClaude.Fraction5H)
+	}
+	if detailsClaude.FractionWeekly != 1.0 {
+		t.Errorf("expected FractionWeekly=1.0 for Claude, got %f", detailsClaude.FractionWeekly)
+	}
+	if detailsClaude.GroupName != "Claude and GPT models" {
+		t.Errorf("expected GroupName 'Claude and GPT models', got: %s", detailsClaude.GroupName)
+	}
+}
+
+func TestUpdateCachedQuotaFractions(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+
+	pName := "test-cache-sync"
+	_, err := Create(pName)
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+
+	initialSummary := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Buckets: []QuotaBucket{
+					{
+						BucketID:          "gemini-5h",
+						Window:            "5h",
+						RemainingFraction: 0.99,
+					},
+					{
+						BucketID:          "gemini-weekly",
+						Window:            "weekly",
+						RemainingFraction: 0.80,
+					},
+				},
+			},
+			{
+				DisplayName: "Claude and GPT models",
+				Buckets: []QuotaBucket{
+					{
+						BucketID:          "3p-5h",
+						Window:            "5h",
+						RemainingFraction: 1.0,
+					},
+					{
+						BucketID:          "3p-weekly",
+						Window:            "weekly",
+						RemainingFraction: 1.0,
+					},
+				},
+			},
+		},
+	}
+	if err := SaveCachedQuota(pName, initialSummary); err != nil {
+		t.Fatalf("SaveCachedQuota error: %v", err)
+	}
+
+	// Update Gemini fractions
+	newGeminiDetails := &ModelQuotaDetails{
+		Fraction5H:     0.94,
+		FractionWeekly: 0.75,
+	}
+	if err := UpdateCachedQuotaFractions(pName, "gemini-3.8-flash", newGeminiDetails); err != nil {
+		t.Fatalf("UpdateCachedQuotaFractions error: %v", err)
+	}
+
+	updated, ok := GetCachedQuota(pName, 0)
+	if !ok || updated == nil {
+		t.Fatalf("failed to read updated cache")
+	}
+
+	var foundGemini5H, foundGeminiWk float64
+	for _, g := range updated.Groups {
+		if g.DisplayName == "Gemini Models" {
+			for _, b := range g.Buckets {
+				if b.BucketID == "gemini-5h" {
+					foundGemini5H = b.RemainingFraction
+				}
+				if b.BucketID == "gemini-weekly" {
+					foundGeminiWk = b.RemainingFraction
+				}
+			}
+		}
+	}
+
+	if foundGemini5H != 0.94 {
+		t.Errorf("expected updated gemini-5h fraction 0.94, got: %f", foundGemini5H)
+	}
+	if foundGeminiWk != 0.75 {
+		t.Errorf("expected updated gemini-weekly fraction 0.75, got: %f", foundGeminiWk)
+	}
+
+	// Test updating brand new profile without existing cache
+	pBrandNew := "test-cache-brand-new"
+	_, _ = Create(pBrandNew)
+	new3PDetails := &ModelQuotaDetails{
+		Fraction5H:     0.88,
+		FractionWeekly: 0.92,
+	}
+	if err := UpdateCachedQuotaFractions(pBrandNew, "claude-3-7-sonnet", new3PDetails); err != nil {
+		t.Fatalf("UpdateCachedQuotaFractions on uninitialized cache failed: %v", err)
+	}
+	newCached, ok := GetCachedQuota(pBrandNew, 0)
+	if !ok || newCached == nil {
+		t.Fatalf("expected cache to be auto-created for brand new profile")
+	}
+	var found3P5H float64
+	for _, g := range newCached.Groups {
+		if g.DisplayName == "Claude and GPT models" {
+			for _, b := range g.Buckets {
+				if b.BucketID == "3p-5h" {
+					found3P5H = b.RemainingFraction
+				}
+			}
+		}
+	}
+	if found3P5H != 0.88 {
+		t.Errorf("expected auto-initialized 3p-5h to be 0.88, got: %f", found3P5H)
+	}
+}
+
+func TestHandleStatusLine_HerdrSync(t *testing.T) {
+	sockPath := fmt.Sprintf("/tmp/herdr_sl_sync_%d.sock", time.Now().UnixNano())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to create mock unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	receivedMetadata := make(chan string, 10)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 4096)
+			n, _ := conn.Read(buf)
+			reqStr := string(buf[:n])
+			_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			if strings.Contains(reqStr, "pane.list") {
+				resp := `{"id":"agys:panes:1","result":{"panes":[{"pane_id":"w1:p1","agent":"agy","title":"agys: test","tokens":{"profile":"sync-prof","model":"gemini-3.8-flash"}}]}}`
+				_, _ = conn.Write([]byte(resp + "\n"))
+			} else {
+				_, _ = conn.Write([]byte(`{"id":"agys:metadata:1","result":"ok"}` + "\n"))
+				if strings.Contains(reqStr, "pane.report_metadata") {
+					receivedMetadata <- reqStr
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+
+	pName := "sync-prof"
+	pDir, err := Create(pName)
+	if err != nil {
+		t.Fatalf("Create profile error: %v", err)
+	}
+	_ = SetCurrent(pName)
+	t.Setenv("AGYS_PROFILE", pName)
+
+	_ = SaveCachedQuota(pName, &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Buckets: []QuotaBucket{
+					{
+						BucketID:          "gemini-5h",
+						Window:            "5h",
+						RemainingFraction: 0.92,
+					},
+					{
+						BucketID:          "gemini-weekly",
+						Window:            "weekly",
+						RemainingFraction: 0.78,
+					},
+				},
+			},
+		},
+	})
+
+	_ = SaveSessionContext(pDir, &SessionContextState{
+		ConversationTitle: "Live Task",
+		ModelID:           "gemini-3.8-flash",
+	})
+
+	payload := `{
+		"model": {"id": "gemini-3.8-flash", "display_name": "Gemini 3.8 Flash"},
+		"context_window": {"used_percentage": 12.0},
+		"quota": {
+			"gemini-5h": {"remaining_fraction": 0.91, "reset_time": "2026-09-19T10:00:00Z"},
+			"gemini-weekly": {"remaining_fraction": 0.77, "reset_time": "2026-09-26T10:00:00Z"}
+		}
+	}`
+
+	var stdout, stderr bytes.Buffer
+	if err := HandleStatusLine(context.Background(), strings.NewReader(payload), &stdout, &stderr); err != nil {
+		t.Fatalf("HandleStatusLine error: %v", err)
+	}
+
+	footerOutput := stdout.String()
+	if !strings.Contains(footerOutput, "91%") {
+		t.Errorf("Expected footer to contain live 91%% quota from payload, got: %s", footerOutput)
+	}
+
+	// Verify Herdr sidebar receives the synchronized metadata
+	select {
+	case metaPayload := <-receivedMetadata:
+		if !strings.Contains(metaPayload, `"quota_5h_normal":"91%`) {
+			t.Errorf("Expected Herdr metadata payload to contain '91%%', got: %s", metaPayload)
+		}
+		if !strings.Contains(metaPayload, `"quota_week_normal":"77%`) {
+			t.Errorf("Expected Herdr metadata payload to contain '77%%', got: %s", metaPayload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Timeout waiting for Herdr metadata report from HandleStatusLine")
+	}
+}
+
 
 

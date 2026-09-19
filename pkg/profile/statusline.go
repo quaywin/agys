@@ -375,10 +375,33 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		}
 	}
 
-	// 2. Fallback to quota in stdin payload ONLY if local cache was missing or empty
-	if (quotaDetails == nil || quotaDetails.Fraction5H < 0) && len(payload.Quota) > 0 {
+	// 2. Overlay or fallback to real-time quota provided in stdin payload by Antigravity CLI (0ms)
+	if len(payload.Quota) > 0 {
 		if fb := parsePayloadQuota(payload.Quota, activeModel); fb != nil {
-			quotaDetails = fb
+			if quotaDetails == nil {
+				quotaDetails = fb
+			} else {
+				if fb.Fraction5H >= 0 {
+					quotaDetails.Fraction5H = fb.Fraction5H
+					quotaDetails.ResetTime5H = fb.ResetTime5H
+					if fb.CompactReset5H != "" {
+						quotaDetails.CompactReset5H = fb.CompactReset5H
+					}
+				}
+				if fb.FractionWeekly >= 0 {
+					quotaDetails.FractionWeekly = fb.FractionWeekly
+					quotaDetails.ResetTimeWeekly = fb.ResetTimeWeekly
+					if fb.CompactResetWeekly != "" {
+						quotaDetails.CompactResetWeekly = fb.CompactResetWeekly
+					}
+				}
+				if fb.GroupName != "" {
+					quotaDetails.GroupName = fb.GroupName
+				}
+			}
+			if currentProfile != "" {
+				_ = UpdateCachedQuotaFractions(currentProfile, activeModel, quotaDetails)
+			}
 		}
 	}
 
@@ -391,12 +414,32 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		fmt.Fprintln(stdout, statusLineStr)
 	}
 
+	// Synchronize real-time metadata and quota to Herdr sidebar immediately
+	if IsInHerdrEnvironment() && currentProfile != "" {
+		reportCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+		_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel, quotaDetails)
+		_ = ReportHerdrQuotaOnly(reportCtx, currentProfile, activeModel, quotaDetails)
+		cancel()
+	}
+
 	// Chain previous statusLine command if one was preserved
 	if profileDir != "" {
 		chainPreviousStatusLine(ctx, profileDir, input, stdout, stderr)
 	}
 
 	return nil
+}
+
+func is3PQuotaKey(key string) bool {
+	k := strings.ToLower(key)
+	return strings.Contains(k, "3p") || strings.Contains(k, "claude") || strings.Contains(k, "sonnet") ||
+		strings.Contains(k, "opus") || strings.Contains(k, "gpt") || strings.Contains(k, "openai") ||
+		strings.Contains(k, "anthropic") || strings.HasPrefix(k, "o1") || strings.HasPrefix(k, "o3")
+}
+
+func isGeminiQuotaKey(key string) bool {
+	k := strings.ToLower(key)
+	return strings.Contains(k, "gemini")
 }
 
 func parsePayloadQuota(quotaMap map[string]struct {
@@ -422,6 +465,12 @@ func parsePayloadQuota(quotaMap map[string]struct {
 	is3P := strings.Contains(modelFilter, "claude") || strings.Contains(modelFilter, "sonnet") || strings.Contains(modelFilter, "opus") ||
 		strings.Contains(modelFilter, "gpt") || strings.Contains(modelFilter, "openai") || strings.HasPrefix(modelFilter, "o1") || strings.HasPrefix(modelFilter, "o3")
 
+	if is3P {
+		details.GroupName = "Claude and GPT models"
+	} else {
+		details.GroupName = "Gemini Models"
+	}
+
 	// Sort keys deterministically to avoid random Go map iteration order
 	keys := make([]string, 0, len(quotaMap))
 	for k := range quotaMap {
@@ -429,18 +478,9 @@ func parsePayloadQuota(quotaMap map[string]struct {
 	}
 	sort.Strings(keys)
 
-	for _, key := range keys {
+	processKey := func(key string) {
 		q := quotaMap[key]
 		k := strings.ToLower(key)
-
-		// When a 3P model is active, prefer 3P/claude/gpt keys over gemini keys
-		if is3P && strings.Contains(k, "gemini") && (details.Fraction5H >= 0 || details.FractionWeekly >= 0) {
-			continue
-		}
-		// When Gemini is active, prefer gemini keys over 3P keys
-		if !is3P && (strings.Contains(k, "3p") || strings.Contains(k, "claude") || strings.Contains(k, "gpt")) && (details.Fraction5H >= 0 || details.FractionWeekly >= 0) {
-			continue
-		}
 
 		frac := q.RemainingFraction
 		if frac == 0 && q.RemainingFractionAlt > 0 {
@@ -465,7 +505,7 @@ func parsePayloadQuota(quotaMap map[string]struct {
 			parsedReset = time.Now().Add(time.Duration(resetSec) * time.Second)
 		}
 		isWeekly := strings.Contains(k, "week") || strings.Contains(k, "7d")
-		is5H := strings.Contains(k, "5h") || (strings.Contains(k, "gemini") && !isWeekly)
+		is5H := strings.Contains(k, "5h") || (strings.Contains(k, "gemini") && !isWeekly) || (strings.Contains(k, "3p") && !isWeekly)
 
 		if isWeekly && details.FractionWeekly < 0 {
 			details.FractionWeekly = frac
@@ -477,6 +517,46 @@ func parsePayloadQuota(quotaMap map[string]struct {
 			details.CompactReset5H = FormatCompactResetTime(parsedReset, frac)
 		}
 	}
+
+	// Pass 1: Preferred matching keys (Gemini keys for Gemini models, 3P keys for 3P models)
+	for _, key := range keys {
+		if is3P {
+			if is3PQuotaKey(key) {
+				processKey(key)
+			}
+		} else {
+			if isGeminiQuotaKey(key) {
+				processKey(key)
+			}
+		}
+	}
+
+	// Pass 2: Fallback to remaining keys if 5H or Weekly is still missing
+	if details.Fraction5H < 0 || details.FractionWeekly < 0 {
+		for _, key := range keys {
+			if is3P {
+				if !is3PQuotaKey(key) {
+					processKey(key)
+				}
+			} else {
+				if !isGeminiQuotaKey(key) {
+					processKey(key)
+				}
+			}
+		}
+	}
+
+	// Pass 3: Cross-fallback if only one window exists
+	if details.Fraction5H < 0 && details.FractionWeekly >= 0 {
+		details.Fraction5H = details.FractionWeekly
+		details.ResetTime5H = details.ResetTimeWeekly
+		details.CompactReset5H = details.CompactResetWeekly
+	} else if details.FractionWeekly < 0 && details.Fraction5H >= 0 {
+		details.FractionWeekly = details.Fraction5H
+		details.ResetTimeWeekly = details.ResetTime5H
+		details.CompactResetWeekly = details.CompactReset5H
+	}
+
 	if details.Fraction5H >= 0 || details.FractionWeekly >= 0 {
 		return details
 	}
