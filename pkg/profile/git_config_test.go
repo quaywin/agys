@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,3 +158,120 @@ func TestGetGitEnv(t *testing.T) {
 		t.Errorf("expected GetGitEnv to preserve existing GIT_CONFIG_GLOBAL")
 	}
 }
+
+func TestEnsureGitConfig_CleansBrokenSymlink(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agys-test-gitconfig-broken-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	realHome := filepath.Join(tmpDir, "realuser")
+	profileDir := filepath.Join(tmpDir, "profiles", "prof")
+	_ = os.MkdirAll(realHome, 0755)
+	_ = os.MkdirAll(profileDir, 0755)
+
+	realGitConfig := filepath.Join(realHome, ".gitconfig")
+	_ = os.WriteFile(realGitConfig, []byte("[user]\n\tname = Working Host\n"), 0644)
+
+	// Create broken symlink in profile
+	profileGitConfig := filepath.Join(profileDir, ".gitconfig")
+	nonExistentTarget := filepath.Join(tmpDir, "does-not-exist.gitconfig")
+	if err := os.Symlink(nonExistentTarget, profileGitConfig); err != nil {
+		t.Skip("Symlink not supported on this filesystem")
+	}
+
+	t.Setenv("AGYS_REAL_HOME", realHome)
+
+	if err := EnsureGitConfig(profileDir); err != nil {
+		t.Fatalf("EnsureGitConfig failed: %v", err)
+	}
+
+	data, err := os.ReadFile(profileGitConfig)
+	if err != nil {
+		t.Fatalf("failed to read profileGitConfig after repair: %v", err)
+	}
+	if !strings.Contains(string(data), "Working Host") {
+		t.Errorf("broken symlink was not replaced with working gitconfig: got %q", string(data))
+	}
+}
+
+func TestEnsureGitConfig_CleansBrokenSymlink_WhenHostHasNone(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agys-test-gitconfig-broken-nohost-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	realHome := filepath.Join(tmpDir, "realuser")
+	profileDir := filepath.Join(tmpDir, "profiles", "prof")
+	_ = os.MkdirAll(realHome, 0755)
+	_ = os.MkdirAll(profileDir, 0755)
+
+	// Create broken symlink in profile
+	profileGitConfig := filepath.Join(profileDir, ".gitconfig")
+	nonExistentTarget := filepath.Join(tmpDir, "does-not-exist.gitconfig")
+	if err := os.Symlink(nonExistentTarget, profileGitConfig); err != nil {
+		t.Skip("Symlink not supported on this filesystem")
+	}
+
+	t.Setenv("AGYS_REAL_HOME", realHome)
+
+	if err := EnsureGitConfig(profileDir); err != nil {
+		t.Fatalf("EnsureGitConfig failed: %v", err)
+	}
+
+	// Broken symlink should be removed even when host has no .gitconfig
+	if _, err := os.Lstat(profileGitConfig); !os.IsNotExist(err) {
+		t.Errorf("expected broken symlink to be removed when host has no .gitconfig")
+	}
+}
+
+func TestBuildCmdContext_GitConfigGlobalPrecedence(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agys-test-buildcmd-git-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	realHome := filepath.Join(tmpDir, "realuser")
+	profileDir := filepath.Join(tmpDir, "profiles", "prof")
+	_ = os.MkdirAll(realHome, 0755)
+	_ = os.MkdirAll(profileDir, 0755)
+
+	_ = os.WriteFile(filepath.Join(realHome, ".gitconfig"), []byte("[user]\n\tname = Host\n"), 0644)
+	_ = os.WriteFile(filepath.Join(profileDir, ".gitconfig"), []byte("[user]\n\tname = Profile\n"), 0644)
+
+	t.Setenv("AGYS_REAL_HOME", realHome)
+
+	// Case 1: GIT_CONFIG_GLOBAL is empty -> BuildCmdContext injects profile .gitconfig
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	cmd1 := BuildCmdContext(context.Background(), profileDir, "test")
+	foundProfileGitConfig := false
+	expectedProf := "GIT_CONFIG_GLOBAL=" + filepath.Join(profileDir, ".gitconfig")
+	for _, env := range cmd1.Env {
+		if env == expectedProf {
+			foundProfileGitConfig = true
+			break
+		}
+	}
+	if !foundProfileGitConfig {
+		t.Errorf("expected BuildCmdContext to set %q when GIT_CONFIG_GLOBAL is empty, env: %v", expectedProf, cmd1.Env)
+	}
+
+	// Case 2: User explicitly exported custom GIT_CONFIG_GLOBAL -> BuildCmdContext preserves it
+	customPath := "/custom/user/gitconfig"
+	t.Setenv("GIT_CONFIG_GLOBAL", customPath)
+	cmd2 := BuildCmdContext(context.Background(), profileDir, "test")
+	foundCustom := false
+	for _, env := range cmd2.Env {
+		if env == "GIT_CONFIG_GLOBAL="+customPath {
+			foundCustom = true
+			break
+		}
+	}
+	if !foundCustom {
+		t.Errorf("expected BuildCmdContext to preserve explicit GIT_CONFIG_GLOBAL, env: %v", cmd2.Env)
+	}
+}
+

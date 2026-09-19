@@ -233,3 +233,83 @@ func TestExportExcludesCacheAndBloat(t *testing.T) {
 	}
 }
 
+func TestExportProfile_GitConfigExclusion(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+
+	profName := "gitconfig-prof"
+	dir, err := Create(profName)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// 1. Symlinked .gitconfig should be skipped
+	hostGitConfig := filepath.Join(tempHome, ".gitconfig")
+	_ = os.WriteFile(hostGitConfig, []byte("[user]\nname=Host\n"), 0644)
+	profGitConfig := filepath.Join(dir, ".gitconfig")
+	_ = os.Remove(profGitConfig)
+	if err := os.Symlink(hostGitConfig, profGitConfig); err == nil {
+		var buf bytes.Buffer
+		if err := ExportProfile(profName, &buf); err != nil {
+			t.Fatalf("ExportProfile failed: %v", err)
+		}
+
+		gr, err := gzip.NewReader(&buf)
+		if err != nil {
+			t.Fatalf("gzip reader failed: %v", err)
+		}
+		defer gr.Close()
+		tr := tar.NewReader(gr)
+		foundGitConfig := false
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("tar read error: %v", err)
+			}
+			if strings.HasSuffix(hdr.Name, ".gitconfig") {
+				foundGitConfig = true
+				break
+			}
+		}
+		if foundGitConfig {
+			t.Errorf("expected symlinked .gitconfig to be excluded from profile archive")
+		}
+	}
+
+	// 2. Regular (isolated) .gitconfig should be included
+	_ = os.Remove(profGitConfig)
+	_ = os.WriteFile(profGitConfig, []byte("[user]\nname=Isolated\n"), 0644)
+	var buf2 bytes.Buffer
+	if err := ExportProfile(profName, &buf2); err != nil {
+		t.Fatalf("ExportProfile failed: %v", err)
+	}
+	gr2, err := gzip.NewReader(&buf2)
+	if err != nil {
+		t.Fatalf("gzip reader failed: %v", err)
+	}
+	defer gr2.Close()
+	tr2 := tar.NewReader(gr2)
+	foundIsolatedGitConfig := false
+	for {
+		hdr, err := tr2.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar read error: %v", err)
+		}
+		if strings.HasSuffix(hdr.Name, ".gitconfig") {
+			foundIsolatedGitConfig = true
+			break
+		}
+	}
+	if !foundIsolatedGitConfig {
+		t.Errorf("expected regular (isolated) .gitconfig to be included in profile archive")
+	}
+}
+
+

@@ -15,9 +15,16 @@ func EnsureGitConfig(profileDir string) error {
 	}
 	profileGitConfig := filepath.Join(profileDir, ".gitconfig")
 
-	// If profile already has a .gitconfig (regular file or valid symlink), keep it
+	// If profile already has a valid .gitconfig (regular file or working symlink), keep it
 	if _, err := os.Stat(profileGitConfig); err == nil {
 		return nil
+	}
+
+	// Remove broken symlink if any exists
+	if info, lerr := os.Lstat(profileGitConfig); lerr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			_ = os.Remove(profileGitConfig)
+		}
 	}
 
 	realHome, err := GetRealUserHome()
@@ -28,13 +35,6 @@ func EnsureGitConfig(profileDir string) error {
 	if _, err := os.Stat(realGitConfig); err != nil {
 		// Real user has no .gitconfig, nothing to link
 		return nil
-	}
-
-	// Remove broken symlink if any exists
-	if info, lerr := os.Lstat(profileGitConfig); lerr == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			_ = os.Remove(profileGitConfig)
-		}
 	}
 
 	// Attempt symlink first for live synchronization with host ~/.gitconfig

@@ -170,8 +170,13 @@ func runDoctor(ctx context.Context) error {
 			}
 
 			// Git configuration check
-			if _, statErr := os.Stat(filepath.Join(pDir, ".gitconfig")); statErr == nil {
-				fmt.Printf("    - Git Config: Linked (~/.gitconfig)\n")
+			pGitConfig := filepath.Join(pDir, ".gitconfig")
+			if info, lErr := os.Lstat(pGitConfig); lErr == nil {
+				if info.Mode()&os.ModeSymlink != 0 {
+					fmt.Printf("    - Git Config: Linked (~/.gitconfig)\n")
+				} else {
+					fmt.Printf("    - Git Config: Present (isolated)\n")
+				}
 			}
 		}
 	}

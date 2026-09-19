@@ -393,12 +393,16 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 		"HERDR_CONFIG_PATH": GetHerdrConfigPath(),
 	}
 
-	profileGitConfig := filepath.Join(profileDir, ".gitconfig")
-	realGitConfig := filepath.Join(realUserHome, ".gitconfig")
-	if _, err := os.Stat(profileGitConfig); err == nil {
-		envMap["GIT_CONFIG_GLOBAL"] = profileGitConfig
-	} else if _, err := os.Stat(realGitConfig); err == nil {
-		envMap["GIT_CONFIG_GLOBAL"] = realGitConfig
+	if os.Getenv("GIT_CONFIG_GLOBAL") == "" {
+		profileGitConfig := filepath.Join(profileDir, ".gitconfig")
+		if _, err := os.Stat(profileGitConfig); err == nil {
+			envMap["GIT_CONFIG_GLOBAL"] = profileGitConfig
+		} else if realUserHome != "" {
+			realGitConfig := filepath.Join(realUserHome, ".gitconfig")
+			if _, err := os.Stat(realGitConfig); err == nil {
+				envMap["GIT_CONFIG_GLOBAL"] = realGitConfig
+			}
+		}
 	}
 
 	CleanStaleProfileBinaries(profileDir)
