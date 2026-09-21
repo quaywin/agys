@@ -15,6 +15,10 @@ const AutoProfileKeyword = "auto"
 // QuotaThresholdPreferred is the quota percentage threshold (50%) above which high-priority profiles are favored.
 const QuotaThresholdPreferred = 0.50
 
+// QuotaThresholdAbundant is the quota percentage threshold (90%) above which 5h quota is considered abundant.
+// When candidate profiles both have >= 90% 5h quota, weekly quota is prioritized to avoid exhausting weekly limits.
+const QuotaThresholdAbundant = 0.90
+
 // IsAuto checks if a profile name corresponds to the auto profile keyword.
 func IsAuto(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), AutoProfileKeyword)
@@ -85,29 +89,148 @@ func Calculate5HQuotaScore(summary *QuotaSummary) float64 {
 	return bestAnyFraction
 }
 
+// CalculateWeeklyQuotaScore extracts the highest remaining weekly quota fraction for Gemini models from a QuotaSummary.
+// It prioritizes Gemini model groups over non-Gemini model groups (e.g. Claude/GPT models).
+// Returns -1.0 if no valid weekly quota bucket is found.
+func CalculateWeeklyQuotaScore(summary *QuotaSummary) float64 {
+	if summary == nil || len(summary.Groups) == 0 {
+		return -1.0
+	}
+
+	bestGeminiFraction := -1.0
+	bestAnyFraction := -1.0
+
+	for _, group := range summary.Groups {
+		gName := strings.ToLower(strings.TrimSpace(group.DisplayName))
+		gDesc := strings.ToLower(strings.TrimSpace(group.Description))
+
+		for _, bucket := range group.Buckets {
+			w := strings.ToLower(strings.TrimSpace(bucket.Window))
+			d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
+			b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
+
+			if w == "weekly" || strings.Contains(w, "week") || strings.Contains(w, "7d") ||
+				strings.Contains(d, "week") || strings.Contains(b, "week") || strings.Contains(b, "7d") {
+				isGemini := strings.Contains(gName, "gemini") || strings.Contains(gDesc, "gemini") ||
+					strings.Contains(d, "gemini") || strings.Contains(b, "gemini")
+
+				if bucket.RemainingFraction > bestAnyFraction {
+					bestAnyFraction = bucket.RemainingFraction
+				}
+				if isGemini && bucket.RemainingFraction > bestGeminiFraction {
+					bestGeminiFraction = bucket.RemainingFraction
+				}
+			}
+		}
+	}
+
+	if bestGeminiFraction >= 0 {
+		return bestGeminiFraction
+	}
+	return bestAnyFraction
+}
+
 // ProfileScore holds quota scoring results for a profile.
 type ProfileScore struct {
 	ProfileName string
 	Priority    int
-	Score       float64
+	Score       float64 // 5-hour quota remaining fraction (0.0 - 1.0, or -1.0 if unavailable)
+	WeeklyScore float64 // Weekly quota remaining fraction (0.0 - 1.0, or -1.0 if unavailable)
 	Active      bool
 	Error       string
 }
 
-// SelectBestProfile queries all available profiles in parallel and selects the profile based on Priority & 50% Quota Threshold logic.
+// isQuotaAbundant returns true if quota fraction is at or above the abundant threshold (90%).
+func isQuotaAbundant(fraction float64) bool {
+	return fraction >= QuotaThresholdAbundant-1e-6
+}
+
+// effectiveWeeklyScore returns the weekly quota fraction if available,
+// falling back to the 5h quota fraction if no weekly bucket was reported.
+func effectiveWeeklyScore(p ProfileScore) float64 {
+	if p.WeeklyScore >= 0 {
+		return p.WeeklyScore
+	}
+	return p.Score
+}
+
+// compareProfileScores determines if candidate a should be ranked before candidate b.
+// When both candidates have abundant 5h quota (>= 90%), weekly quota is prioritized
+// so that profiles with healthier weekly limits are preferred to run.
+func compareProfileScores(a, b ProfileScore, currentDefault string) bool {
+	aAbundant := isQuotaAbundant(a.Score)
+	bAbundant := isQuotaAbundant(b.Score)
+
+	// Case 1: Both candidates have abundant 5h quota (>= 90%)
+	if aAbundant && bAbundant {
+		aW := effectiveWeeklyScore(a)
+		bW := effectiveWeeklyScore(b)
+		if aW != bW {
+			return aW > bW
+		}
+		if a.Score != b.Score {
+			return a.Score > b.Score
+		}
+		if a.ProfileName == currentDefault && b.ProfileName != currentDefault {
+			return true
+		}
+		if b.ProfileName == currentDefault && a.ProfileName != currentDefault {
+			return false
+		}
+		return a.ProfileName < b.ProfileName
+	}
+
+	// Case 2: One candidate is abundant (>= 90%) and the other is not (< 90%)
+	if aAbundant != bAbundant {
+		return aAbundant
+	}
+
+	// Case 3: Neither candidate is abundant (< 90%) - prioritize 5h quota
+	if a.Score != b.Score {
+		return a.Score > b.Score
+	}
+	aW := effectiveWeeklyScore(a)
+	bW := effectiveWeeklyScore(b)
+	if aW != bW {
+		return aW > bW
+	}
+	if a.ProfileName == currentDefault && b.ProfileName != currentDefault {
+		return true
+	}
+	if b.ProfileName == currentDefault && a.ProfileName != currentDefault {
+		return false
+	}
+	return a.ProfileName < b.ProfileName
+}
+
+// SelectBestProfile queries all available profiles in parallel and selects the profile based on Priority, 5h and Weekly Quota logic.
 func SelectBestProfile(ctx context.Context) (string, float64, error) {
 	return SelectBestProfileFiltered(ctx, nil)
 }
 
-// SelectBestProfileFiltered queries available profiles (filtered by filterFn if provided) in parallel and selects the profile based on Priority & 50% Quota Threshold logic.
+// SelectBestProfileFiltered queries available profiles (filtered by filterFn if provided) in parallel and selects the profile based on Priority, 5h and Weekly Quota logic.
 func SelectBestProfileFiltered(ctx context.Context, filterFn func(profileName string) bool) (string, float64, error) {
+	winner, err := SelectBestProfileFilteredDetailed(ctx, filterFn)
+	if err != nil {
+		return "", -1, err
+	}
+	return winner.ProfileName, winner.Score, nil
+}
+
+// SelectBestProfileDetailed queries all available profiles in parallel and returns the winning ProfileScore with detailed 5h and Weekly quota scores.
+func SelectBestProfileDetailed(ctx context.Context) (*ProfileScore, error) {
+	return SelectBestProfileFilteredDetailed(ctx, nil)
+}
+
+// SelectBestProfileFilteredDetailed queries available profiles (filtered by filterFn if provided) in parallel and returns the winning ProfileScore with detailed 5h and Weekly quota scores.
+func SelectBestProfileFilteredDetailed(ctx context.Context, filterFn func(profileName string) bool) (*ProfileScore, error) {
 	profiles, err := List()
 	if err != nil {
-		return "", -1, fmt.Errorf("failed to list profiles: %w", err)
+		return nil, fmt.Errorf("failed to list profiles: %w", err)
 	}
 
 	if len(profiles) == 0 {
-		return "", -1, fmt.Errorf("no profiles found. Create one with `agys add <profile_name>`")
+		return nil, fmt.Errorf("no profiles found. Create one with `agys add <profile_name>`")
 	}
 
 	// Filter out reserved keywords and apply custom filter function if provided
@@ -130,7 +253,7 @@ func SelectBestProfileFiltered(ctx context.Context, filterFn func(profileName st
 	}
 
 	if len(candidateProfiles) == 0 {
-		return "", -1, fmt.Errorf("no valid profiles available for auto-selection")
+		return nil, fmt.Errorf("no valid profiles available for auto-selection")
 	}
 
 	// Filter candidate profiles: prefer configured profiles with valid tokens on disk
@@ -179,14 +302,17 @@ func SelectBestProfileFiltered(ctx context.Context, filterFn func(profileName st
 					Active:      false,
 					Error:       err.Error(),
 					Score:       -1.0,
+					WeeklyScore: -1.0,
 				}
 			} else {
 				score := Calculate5HQuotaScore(summary)
+				weeklyScore := CalculateWeeklyQuotaScore(summary)
 				scores[index] = ProfileScore{
 					ProfileName: name,
 					Priority:    prio,
 					Active:      true,
 					Score:       score,
+					WeeklyScore: weeklyScore,
 				}
 			}
 		}(i, pName)
@@ -211,9 +337,9 @@ func SelectBestProfileFiltered(ctx context.Context, filterFn func(profileName st
 
 	if len(validScores) == 0 {
 		if len(errorMsgs) > 0 {
-			return "", -1, fmt.Errorf("failed to retrieve quota for profiles: %s", strings.Join(errorMsgs, "; "))
+			return nil, fmt.Errorf("failed to retrieve quota for profiles: %s", strings.Join(errorMsgs, "; "))
 		}
-		return "", -1, fmt.Errorf("no active profiles with valid 5h quota information found")
+		return nil, fmt.Errorf("no active profiles with valid 5h quota information found")
 	}
 
 	// 1. Group valid profiles by Priority tier
@@ -240,20 +366,14 @@ func SelectBestProfileFiltered(ctx context.Context, filterFn func(profileName st
 		}
 
 		if len(healthyCandidates) > 0 {
-			// Sort healthy candidates within tier: max score -> current profile -> alphabetical
+			// Sort healthy candidates within tier:
+			// If both candidates have abundant 5h quota (>= 90%), prioritize weekly quota
+			// Otherwise prioritize 5h quota.
 			sort.SliceStable(healthyCandidates, func(i, j int) bool {
-				if healthyCandidates[i].Score != healthyCandidates[j].Score {
-					return healthyCandidates[i].Score > healthyCandidates[j].Score
-				}
-				if healthyCandidates[i].ProfileName == currentDefault {
-					return true
-				}
-				if healthyCandidates[j].ProfileName == currentDefault {
-					return false
-				}
-				return healthyCandidates[i].ProfileName < healthyCandidates[j].ProfileName
+				return compareProfileScores(healthyCandidates[i], healthyCandidates[j], currentDefault)
 			})
-			return healthyCandidates[0].ProfileName, healthyCandidates[0].Score, nil
+			winner := healthyCandidates[0]
+			return &winner, nil
 		}
 	}
 
@@ -261,6 +381,11 @@ func SelectBestProfileFiltered(ctx context.Context, filterFn func(profileName st
 	sort.SliceStable(validScores, func(i, j int) bool {
 		if validScores[i].Score != validScores[j].Score {
 			return validScores[i].Score > validScores[j].Score
+		}
+		iW := effectiveWeeklyScore(validScores[i])
+		jW := effectiveWeeklyScore(validScores[j])
+		if iW != jW {
+			return iW > jW
 		}
 		if validScores[i].Priority != validScores[j].Priority {
 			return validScores[i].Priority > validScores[j].Priority
@@ -275,5 +400,5 @@ func SelectBestProfileFiltered(ctx context.Context, filterFn func(profileName st
 	})
 
 	winner := validScores[0]
-	return winner.ProfileName, winner.Score, nil
+	return &winner, nil
 }

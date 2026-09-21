@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -199,6 +200,281 @@ func TestHasProfileToken(t *testing.T) {
 	}
 	if HasProfileToken("profile-empty") {
 		t.Errorf("expected profile-empty to still be false")
+	}
+}
+
+func TestCalculateWeeklyQuotaScore(t *testing.T) {
+	t.Run("nil summary", func(t *testing.T) {
+		if score := CalculateWeeklyQuotaScore(nil); score != -1.0 {
+			t.Errorf("expected -1.0, got %f", score)
+		}
+	})
+
+	t.Run("empty groups", func(t *testing.T) {
+		summary := &QuotaSummary{Groups: []QuotaGroup{}}
+		if score := CalculateWeeklyQuotaScore(summary); score != -1.0 {
+			t.Errorf("expected -1.0, got %f", score)
+		}
+	})
+
+	t.Run("valid weekly window bucket", func(t *testing.T) {
+		summary := &QuotaSummary{
+			Groups: []QuotaGroup{
+				{
+					DisplayName: "Gemini 2.5 Flash",
+					Buckets: []QuotaBucket{
+						{Window: "5h", RemainingFraction: 0.95},
+						{Window: "weekly", RemainingFraction: 0.88},
+					},
+				},
+			},
+		}
+
+		score := CalculateWeeklyQuotaScore(summary)
+		if score != 0.88 {
+			t.Errorf("expected weekly score 0.88, got %f", score)
+		}
+	})
+
+	t.Run("prioritize Gemini weekly over Claude/GPT weekly", func(t *testing.T) {
+		summary := &QuotaSummary{
+			Groups: []QuotaGroup{
+				{
+					DisplayName: "Gemini Models",
+					Buckets: []QuotaBucket{
+						{Window: "5h", RemainingFraction: 0.90},
+						{Window: "weekly", RemainingFraction: 0.75},
+					},
+				},
+				{
+					DisplayName: "Claude and GPT models",
+					Buckets: []QuotaBucket{
+						{Window: "5h", RemainingFraction: 1.0},
+						{Window: "weekly", RemainingFraction: 0.99},
+					},
+				},
+			},
+		}
+
+		score := CalculateWeeklyQuotaScore(summary)
+		if score != 0.75 {
+			t.Errorf("expected Gemini weekly score 0.75, got %f", score)
+		}
+	})
+
+	t.Run("fallback to any weekly bucket when no Gemini group", func(t *testing.T) {
+		summary := &QuotaSummary{
+			Groups: []QuotaGroup{
+				{
+					DisplayName: "Other AI Models",
+					Buckets: []QuotaBucket{
+						{Window: "weekly", RemainingFraction: 0.82},
+					},
+				},
+			},
+		}
+
+		score := CalculateWeeklyQuotaScore(summary)
+		if score != 0.82 {
+			t.Errorf("expected fallback weekly score 0.82, got %f", score)
+		}
+	})
+
+	t.Run("no weekly bucket returns -1.0", func(t *testing.T) {
+		summary := &QuotaSummary{
+			Groups: []QuotaGroup{
+				{
+					DisplayName: "Gemini Models",
+					Buckets: []QuotaBucket{
+						{Window: "5h", RemainingFraction: 0.90},
+					},
+				},
+			},
+		}
+
+		score := CalculateWeeklyQuotaScore(summary)
+		if score != -1.0 {
+			t.Errorf("expected -1.0, got %f", score)
+		}
+	})
+}
+
+func TestCompareProfileScores(t *testing.T) {
+	t.Run("both 5h >= 90%: prioritize higher weekly quota", func(t *testing.T) {
+		p1 := ProfileScore{ProfileName: "prof1", Score: 0.98, WeeklyScore: 0.30}
+		p2 := ProfileScore{ProfileName: "prof2", Score: 0.92, WeeklyScore: 0.85}
+
+		// prof2 has lower 5h (92% vs 98%) but higher weekly (85% vs 30%).
+		// Because both are >= 90%, prof2 should be preferred over prof1.
+		if !compareProfileScores(p2, p1, "") {
+			t.Errorf("expected prof2 (weekly 85%%) to beat prof1 (weekly 30%%) when both 5h >= 90%%")
+		}
+		if compareProfileScores(p1, p2, "") {
+			t.Errorf("expected prof1 NOT to beat prof2")
+		}
+	})
+
+	t.Run("both 5h >= 90% and weekly equal: tie-break by higher 5h quota", func(t *testing.T) {
+		p1 := ProfileScore{ProfileName: "prof1", Score: 0.98, WeeklyScore: 0.80}
+		p2 := ProfileScore{ProfileName: "prof2", Score: 0.92, WeeklyScore: 0.80}
+
+		if !compareProfileScores(p1, p2, "") {
+			t.Errorf("expected prof1 (5h 98%%) to beat prof2 (5h 92%%) when weekly is equal")
+		}
+		if compareProfileScores(p2, p1, "") {
+			t.Errorf("expected prof2 NOT to beat prof1")
+		}
+	})
+
+	t.Run("one 5h >= 90% and one < 90%: profile with 5h >= 90% wins", func(t *testing.T) {
+		p1 := ProfileScore{ProfileName: "prof1", Score: 0.92, WeeklyScore: 0.20}
+		p2 := ProfileScore{ProfileName: "prof2", Score: 0.85, WeeklyScore: 0.95}
+
+		// prof1 has 5h >= 90%, prof2 has 5h < 90%.
+		// prof1 should win even though prof2 has higher weekly quota.
+		if !compareProfileScores(p1, p2, "") {
+			t.Errorf("expected prof1 (5h 92%% >= 90%%) to beat prof2 (5h 85%% < 90%%)")
+		}
+		if compareProfileScores(p2, p1, "") {
+			t.Errorf("expected prof2 NOT to beat prof1")
+		}
+	})
+
+	t.Run("both 5h < 90%: prioritize higher 5h quota", func(t *testing.T) {
+		p1 := ProfileScore{ProfileName: "prof1", Score: 0.85, WeeklyScore: 0.20}
+		p2 := ProfileScore{ProfileName: "prof2", Score: 0.70, WeeklyScore: 0.95}
+
+		if !compareProfileScores(p1, p2, "") {
+			t.Errorf("expected prof1 (5h 85%%) to beat prof2 (5h 70%%)")
+		}
+		if compareProfileScores(p2, p1, "") {
+			t.Errorf("expected prof2 NOT to beat prof1")
+		}
+	})
+
+	t.Run("both 5h < 90% and 5h equal: tie-break by higher weekly quota", func(t *testing.T) {
+		p1 := ProfileScore{ProfileName: "prof1", Score: 0.75, WeeklyScore: 0.90}
+		p2 := ProfileScore{ProfileName: "prof2", Score: 0.75, WeeklyScore: 0.50}
+
+		if !compareProfileScores(p1, p2, "") {
+			t.Errorf("expected prof1 (weekly 90%%) to beat prof2 (weekly 50%%) when 5h is tied")
+		}
+		if compareProfileScores(p2, p1, "") {
+			t.Errorf("expected prof2 NOT to beat prof1")
+		}
+	})
+
+	t.Run("all quotas equal: prefer currentDefault profile", func(t *testing.T) {
+		p1 := ProfileScore{ProfileName: "active-prof", Score: 0.95, WeeklyScore: 0.80}
+		p2 := ProfileScore{ProfileName: "other-prof", Score: 0.95, WeeklyScore: 0.80}
+
+		if !compareProfileScores(p1, p2, "active-prof") {
+			t.Errorf("expected currentDefault profile active-prof to win when quotas are equal")
+		}
+		if compareProfileScores(p2, p1, "active-prof") {
+			t.Errorf("expected other-prof NOT to beat currentDefault active-prof")
+		}
+	})
+
+	t.Run("all quotas equal and no currentDefault: alphabetical tie-break", func(t *testing.T) {
+		p1 := ProfileScore{ProfileName: "alpha", Score: 0.95, WeeklyScore: 0.80}
+		p2 := ProfileScore{ProfileName: "beta", Score: 0.95, WeeklyScore: 0.80}
+
+		if !compareProfileScores(p1, p2, "") {
+			t.Errorf("expected alphabetical order: alpha should beat beta")
+		}
+		if compareProfileScores(p2, p1, "") {
+			t.Errorf("expected beta NOT to beat alpha")
+		}
+	})
+
+	t.Run("missing weekly quota (-1.0) falls back to 5h quota cleanly", func(t *testing.T) {
+		// prof1 has 5h = 95%, no weekly bucket (-1.0) -> effectiveWeekly = 95%
+		// prof2 has 5h = 92%, weekly = 80% -> effectiveWeekly = 80%
+		p1 := ProfileScore{ProfileName: "prof1", Score: 0.95, WeeklyScore: -1.0}
+		p2 := ProfileScore{ProfileName: "prof2", Score: 0.92, WeeklyScore: 0.80}
+
+		if !compareProfileScores(p1, p2, "") {
+			t.Errorf("expected prof1 with no weekly bucket (effective 95%%) to beat prof2 (80%%)")
+		}
+		if compareProfileScores(p2, p1, "") {
+			t.Errorf("expected prof2 NOT to beat prof1")
+		}
+	})
+}
+
+func TestSelectBestProfileWeeklyPreference(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+
+	// Create two profiles with tokens and mock cached quotas
+	p1Dir, err := Create("profile-heavy-week")
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	p2Dir, err := Create("profile-fresh-week")
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Write tokens
+	tokenData := []byte(`{"token":{"access_token":"mock-token","expiry":"2030-01-01T00:00:00Z"}}`)
+	t1Path := filepath.Join(p1Dir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	_ = os.MkdirAll(filepath.Dir(t1Path), 0700)
+	_ = os.WriteFile(t1Path, tokenData, 0600)
+	t2Path := filepath.Join(p2Dir, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	_ = os.MkdirAll(filepath.Dir(t2Path), 0700)
+	_ = os.WriteFile(t2Path, tokenData, 0600)
+
+	// Save cached quotas:
+	// profile-heavy-week: 5h = 98%, weekly = 20%
+	// profile-fresh-week: 5h = 92%, weekly = 85%
+	q1 := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Buckets: []QuotaBucket{
+					{Window: "5h", RemainingFraction: 0.98},
+					{Window: "weekly", RemainingFraction: 0.20},
+				},
+			},
+		},
+	}
+	q2 := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Buckets: []QuotaBucket{
+					{Window: "5h", RemainingFraction: 0.92},
+					{Window: "weekly", RemainingFraction: 0.85},
+				},
+			},
+		},
+	}
+
+	if err := SaveCachedQuota("profile-heavy-week", q1); err != nil {
+		t.Fatalf("SaveCachedQuota failed: %v", err)
+	}
+	if err := SaveCachedQuota("profile-fresh-week", q2); err != nil {
+		t.Fatalf("SaveCachedQuota failed: %v", err)
+	}
+
+	ctx := context.Background()
+	best, err := SelectBestProfileDetailed(ctx)
+	if err != nil {
+		t.Fatalf("SelectBestProfileDetailed failed: %v", err)
+	}
+
+	if best.ProfileName != "profile-fresh-week" {
+		t.Errorf("expected 'profile-fresh-week' (weekly 85%%) to be selected, got %q (score: %f, weekly: %f)",
+			best.ProfileName, best.Score, best.WeeklyScore)
+	}
+	if best.Score != 0.92 {
+		t.Errorf("expected score 0.92, got %f", best.Score)
+	}
+	if best.WeeklyScore != 0.85 {
+		t.Errorf("expected weekly score 0.85, got %f", best.WeeklyScore)
 	}
 }
 

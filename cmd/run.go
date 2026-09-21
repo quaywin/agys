@@ -151,16 +151,20 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 
 	var targetProfile string
 	if profile.IsAuto(profileName) {
-		selected, score, err := profile.SelectBestProfile(cmd.Context())
+		best, err := profile.SelectBestProfileDetailed(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("auto profile selection failed: %w", err)
 		}
-		targetProfile = selected
-		scoreStr := fmt.Sprintf("%.1f%%", score*100)
-		if score < 0 {
+		targetProfile = best.ProfileName
+		scoreStr := fmt.Sprintf("%.1f%%", best.Score*100)
+		if best.Score < 0 {
 			scoreStr = "N/A"
 		}
-		fmt.Fprintf(os.Stderr, "[agys] Auto-selected profile %q (5h Gemini quota: %s)\n", targetProfile, scoreStr)
+		var weeklyStr string
+		if best.WeeklyScore >= 0 {
+			weeklyStr = fmt.Sprintf(", weekly: %.1f%%", best.WeeklyScore*100)
+		}
+		fmt.Fprintf(os.Stderr, "[agys] Auto-selected profile %q (5h Gemini quota: %s%s)\n", targetProfile, scoreStr, weeklyStr)
 	} else {
 		targetProfile = profileName
 	}
