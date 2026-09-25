@@ -708,30 +708,6 @@ func ExtractModelQuotaDetails(summary *QuotaSummary, modelName string) *ModelQuo
 		}
 	}
 
-	// 5. Ultimate fallback if neither 5H nor weekly was found
-	if details.Fraction5H < 0 && details.FractionWeekly >= 0 {
-		details.Fraction5H = details.FractionWeekly
-		details.ResetTime5H = details.ResetTimeWeekly
-		details.ResetStr5H = details.ResetStrWeekly
-	} else if details.Fraction5H < 0 {
-		for _, group := range summary.Groups {
-			for _, bucket := range group.Buckets {
-				if bucket.RemainingFraction >= 0 {
-					details.Fraction5H = bucket.RemainingFraction
-					details.ResetTime5H = bucket.ResetTime
-					details.ResetStr5H = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
-					if details.GroupName == "" {
-						details.GroupName = group.DisplayName
-					}
-					break
-				}
-			}
-			if details.Fraction5H >= 0 {
-				break
-			}
-		}
-	}
-
 	if details.Fraction5H < 0 && details.FractionWeekly < 0 {
 		return nil
 	}
@@ -753,7 +729,7 @@ func GetProfileFullQuotaDetailsForModel(ctx context.Context, profileName, modelN
 	}
 
 	details := ExtractModelQuotaDetails(summary, modelName)
-	if details == nil || details.Fraction5H < 0 {
+	if details == nil || (details.Fraction5H < 0 && details.FractionWeekly < 0) {
 		return nil, fmt.Errorf("no quota bucket found in summary")
 	}
 
@@ -771,14 +747,14 @@ func GetProfileFullQuotaDetailsFast(profileName, modelName string) (*ModelQuotaD
 
 	// 1. Fresh cache check (< 45s) -> instant 0ms
 	if cached, fresh := GetCachedQuota(profileName, 45*time.Second); fresh && cached != nil {
-		if details := ExtractModelQuotaDetails(cached, modelName); details != nil && details.Fraction5H >= 0 {
+		if details := ExtractModelQuotaDetails(cached, modelName); details != nil && (details.Fraction5H >= 0 || details.FractionWeekly >= 0) {
 			return details, true
 		}
 	}
 
 	// 2. Stale cache check (< 4 hours) -> instant 0ms fallback
 	if stale, ok := GetCachedQuota(profileName, 4*time.Hour); ok && stale != nil {
-		if details := ExtractModelQuotaDetails(stale, modelName); details != nil && details.Fraction5H >= 0 {
+		if details := ExtractModelQuotaDetails(stale, modelName); details != nil && (details.Fraction5H >= 0 || details.FractionWeekly >= 0) {
 			return details, true
 		}
 	}

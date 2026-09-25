@@ -418,8 +418,14 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	if IsInHerdrEnvironment() && currentProfile != "" {
 		reportCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 		_ = ReportHerdrMetadataWithModel(reportCtx, currentProfile, activeModel, quotaDetails)
-		_ = ReportHerdrQuotaOnly(reportCtx, currentProfile, activeModel, quotaDetails)
 		cancel()
+
+		// Asynchronously broadcast fresh quota to any other panes sharing this profile
+		go func() {
+			bgCtx, bgCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer bgCancel()
+			_ = ReportHerdrQuotaOnly(bgCtx, currentProfile, activeModel, quotaDetails)
+		}()
 	}
 
 	// Chain previous statusLine command if one was preserved
@@ -531,30 +537,13 @@ func parsePayloadQuota(quotaMap map[string]struct {
 		}
 	}
 
-	// Pass 2: Fallback to remaining keys if 5H or Weekly is still missing
+	// Pass 2: Fallback to neutral/generic keys (e.g. "5h", "weekly") if missing in group-specific keys
 	if details.Fraction5H < 0 || details.FractionWeekly < 0 {
 		for _, key := range keys {
-			if is3P {
-				if !is3PQuotaKey(key) {
-					processKey(key)
-				}
-			} else {
-				if !isGeminiQuotaKey(key) {
-					processKey(key)
-				}
+			if !is3PQuotaKey(key) && !isGeminiQuotaKey(key) {
+				processKey(key)
 			}
 		}
-	}
-
-	// Pass 3: Cross-fallback if only one window exists
-	if details.Fraction5H < 0 && details.FractionWeekly >= 0 {
-		details.Fraction5H = details.FractionWeekly
-		details.ResetTime5H = details.ResetTimeWeekly
-		details.CompactReset5H = details.CompactResetWeekly
-	} else if details.FractionWeekly < 0 && details.Fraction5H >= 0 {
-		details.FractionWeekly = details.Fraction5H
-		details.ResetTimeWeekly = details.ResetTime5H
-		details.CompactResetWeekly = details.CompactReset5H
 	}
 
 	if details.Fraction5H >= 0 || details.FractionWeekly >= 0 {

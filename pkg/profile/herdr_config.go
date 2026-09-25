@@ -1,12 +1,15 @@
 package profile
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var herdrAgentsSectionRegex = regexp.MustCompile(`(?m)^[ \t]*\[[ \t]*ui\.sidebar\.agents[ \t]*\][ \t]*(?:#.*)?(?:\r?\n)?`)
@@ -58,6 +61,86 @@ rows = [
   ]
 ] # herdr-agys-managed
 `
+
+const AgysAgentDetectionTOML = `id = "agy"
+version = "2026.09.25.3"
+min_engine_version = 1
+updated_at = "2026-09-25T00:00:00Z"
+aliases = ["antigravity", "antigravity-cli"]
+
+[[rules]]
+id = "permission_prompt"
+state = "blocked"
+priority = 1000
+region = "whole_recent"
+visible_blocker = true
+contains = ["requesting permission for:"]
+any = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["tab amend", "edit command"] },
+]
+
+[[rules]]
+id = "prompt_box_idle"
+state = "idle"
+priority = 900
+region = "prompt_box_body"
+visible_idle = true
+line_regex = ['^\s*>\s*']
+
+[[rules]]
+id = "spinner_working"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(6)"
+visible_working = true
+line_regex = ['^\s*[\u2800-\u28FF]+\s+\p{Alphabetic}+\w*ing\b']
+
+[[rules]]
+id = "background_tasks_working"
+state = "working"
+priority = 750
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+line_regex = ['(?i)·\s*[1-9][0-9]*\s+task']
+
+[[rules]]
+id = "prompt_idle_fallback"
+state = "idle"
+priority = 700
+region = "bottom_non_empty_lines(3)"
+visible_idle = true
+line_regex = ['^\s*>\s*']
+`
+
+// EnsureHerdrAgentDetectionManifest ensures Herdr has a local override manifest for agy
+// that includes an explicit prompt_idle rule and restricts spinner detection to recent bottom lines,
+// preventing historical spinners from falsely reporting "working" status while idle.
+func EnsureHerdrAgentDetectionManifest() error {
+	configDir := filepath.Dir(GetHerdrConfigPath())
+	targetDir := filepath.Join(configDir, "agent-detection")
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return err
+	}
+	targetFile := filepath.Join(targetDir, "agy.toml")
+	existing, err := os.ReadFile(targetFile)
+	if err == nil && string(existing) == AgysAgentDetectionTOML {
+		return nil
+	}
+	if err := WriteFileAtomic(targetFile, []byte(AgysAgentDetectionTOML), 0644); err != nil {
+		return err
+	}
+	// Reload agent manifests via Herdr socket if running in Herdr
+	if socketPath := os.Getenv("HERDR_SOCKET_PATH"); socketPath != "" {
+		req, _ := json.Marshal(map[string]interface{}{
+			"id":     fmt.Sprintf("agys:manifest_reload:%d", time.Now().UnixNano()),
+			"method": "server.reload_agent_manifests",
+			"params": map[string]interface{}{},
+		})
+		_ = sendHerdrSocketRPC(context.Background(), socketPath, req)
+	}
+	return nil
+}
 
 // IsHerdrConfiguredForAgys checks if Herdr's config.toml contains the agys 2-row sidebar configuration with conversation title.
 func IsHerdrConfiguredForAgys(configPath string) bool {

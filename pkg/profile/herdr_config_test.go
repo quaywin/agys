@@ -134,3 +134,32 @@ func TestIsTOMLTableHeader(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureHerdrAgentDetectionManifest(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	configPath := filepath.Join(tempHome, ".config", "herdr", "config.toml")
+	t.Setenv("HERDR_CONFIG_PATH", configPath)
+	t.Setenv("HERDR_CONFIG_FILE", configPath)
+
+	err := EnsureHerdrAgentDetectionManifest()
+	if err != nil {
+		t.Fatalf("EnsureHerdrAgentDetectionManifest failed: %v", err)
+	}
+
+	manifestPath := filepath.Join(tempHome, ".config", "herdr", "agent-detection", "agy.toml")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("failed to read created manifest: %v", err)
+	}
+
+	if string(data) != AgysAgentDetectionTOML {
+		t.Errorf("manifest content mismatch, got:\n%s", string(data))
+	}
+
+	// Calling again should succeed cleanly without error
+	if err := EnsureHerdrAgentDetectionManifest(); err != nil {
+		t.Fatalf("subsequent EnsureHerdrAgentDetectionManifest call failed: %v", err)
+	}
+}
+

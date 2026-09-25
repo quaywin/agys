@@ -272,11 +272,12 @@ func HandleHerdrHook(ctx context.Context, action string, stdin io.Reader) error 
 		}
 	}
 
-	// Auto-ensure Herdr 2-row sidebar config is applied
+	// Auto-ensure Herdr 2-row sidebar config and agent detection manifest are applied
 	configPath := GetHerdrConfigPath()
 	if !IsHerdrConfiguredForAgys(configPath) {
 		_ = ApplyHerdr2RowConfig(configPath)
 	}
+	_ = EnsureHerdrAgentDetectionManifest()
 
 	currentProfile, _ := ResolveProfileFromEnv()
 	currentProfile, profileDir := resolveHerdrProfile(ctx, currentProfile, paneID, panes)
@@ -429,11 +430,12 @@ func SyncHerdrIntegration(profileDir string) error {
 		return nil
 	}
 
-	// Auto-ensure Herdr 2-row sidebar config is applied
+	// Auto-ensure Herdr 2-row sidebar config and agent detection manifest are applied
 	configPath := GetHerdrConfigPath()
 	if !IsHerdrConfiguredForAgys(configPath) {
 		_ = ApplyHerdr2RowConfig(configPath)
 	}
+	_ = EnsureHerdrAgentDetectionManifest()
 
 	// Remove any shadowed legacy .config/herdr in profileDir to ensure global config is always respected
 	_ = os.RemoveAll(filepath.Join(profileDir, ".config", "herdr"))
@@ -747,7 +749,7 @@ func createPaneMatch(p HerdrRawPane, profileName, currentModel string) HerdrPane
 func getHerdrCurrentPaneFromList(panes []HerdrRawPane, paneID, profileName, currentModel string) HerdrPaneMatch {
 	for _, p := range panes {
 		if p.PaneID == paneID {
-			if IsPaneNonAgys(p) || !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped, p.Tokens) {
+			if IsPaneNonAgys(p) {
 				return HerdrPaneMatch{}
 			}
 			return createPaneMatch(p, profileName, currentModel)
@@ -908,7 +910,7 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 	// pane, agys must neither overwrite its sidebar row nor leave stale telemetry.
 	if paneID != "" && socketPath != "" && len(panes) > 0 {
 		for _, p := range panes {
-			if p.PaneID == paneID && (IsPaneNonAgys(p) || !isPaneActiveAgys(p.Agent, p.Title, p.TerminalTitle, p.TerminalTitleStripped, p.Tokens)) {
+			if p.PaneID == paneID && IsPaneNonAgys(p) {
 				_ = clearHerdrPaneMetadata(ctx, socketPath, paneID)
 				return nil
 			}
@@ -1067,16 +1069,24 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 
 		var details *ModelQuotaDetails
 		var err error
-		if len(preloadedDetails) > 0 && preloadedDetails[0] != nil && (targetModel == modelName || targetModel == "" || modelName == "") {
+		matchesModel := false
+		if len(preloadedDetails) > 0 && preloadedDetails[0] != nil {
+			normTarget := NormalizeModelName(targetModel)
+			normPreload := NormalizeModelName(modelName)
+			if normTarget == normPreload {
+				matchesModel = true
+			} else if (normTarget == "" || strings.Contains(normTarget, "gemini")) && (normPreload == "" || strings.Contains(normPreload, "gemini")) {
+				matchesModel = true
+			}
+		}
+		if matchesModel {
 			details = preloadedDetails[0]
-		} else if !isQuotaOnly {
+		} else {
 			if fast, ok := GetProfileFullQuotaDetailsFast(profileName, targetModel); ok && fast != nil {
 				details = fast
 			} else {
 				details, err = GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
 			}
-		} else {
-			details, err = GetProfileFullQuotaDetailsForModel(quotaCtx, profileName, targetModel)
 		}
 		if err == nil && details != nil && details.Fraction5H >= 0 {
 			pct5h := int(details.Fraction5H*100 + 0.5)
@@ -1088,24 +1098,13 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 				tokens["group"] = details.GroupName
 			}
 			setQuotaTierTokens(tokens, "quota_5h", quota5hStr, pct5h)
-
-			if details.FractionWeekly >= 0 {
-				pctWk := int(details.FractionWeekly*100 + 0.5)
-				quotaWkStr := fmt.Sprintf("%d%%", pctWk)
-				if details.CompactResetWeekly != "" {
-					quotaWkStr = fmt.Sprintf("%s %s", quotaWkStr, details.CompactResetWeekly)
-				}
-				setQuotaTierTokens(tokens, "quota_week", quotaWkStr, pctWk)
-			} else {
-				setQuotaTierTokens(tokens, "quota_week", "", 0)
-			}
-		} else {
-			// Details unavailable: preserve existing quota tokens from pane if available so Row 3 does not vanish and flicker
-			hasExistingQuota := false
+		} else if err != nil || details == nil {
+			// Details unavailable (fetch failed): preserve existing 5H tokens to prevent flicker
+			hasExisting5H := false
 			if target.Tokens != nil {
 				for _, k := range quotaTierKeys {
-					if target.Tokens[k] != "" {
-						hasExistingQuota = true
+					if strings.HasPrefix(k, "quota_5h") && target.Tokens[k] != "" {
+						hasExisting5H = true
 						tokens[k] = target.Tokens[k]
 					}
 				}
@@ -1113,10 +1112,41 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 					tokens["group"] = target.Tokens["group"]
 				}
 			}
-			if !hasExistingQuota {
+			if !hasExisting5H {
 				setQuotaTierTokens(tokens, "quota_5h", "", 0)
+			}
+		} else {
+			// Fresh details available, but model has no 5H bucket: clear stale 5H tokens
+			setQuotaTierTokens(tokens, "quota_5h", "", 0)
+		}
+
+		if err == nil && details != nil && details.FractionWeekly >= 0 {
+			pctWk := int(details.FractionWeekly*100 + 0.5)
+			quotaWkStr := fmt.Sprintf("%d%%", pctWk)
+			if details.CompactResetWeekly != "" {
+				quotaWkStr = fmt.Sprintf("%s %s", quotaWkStr, details.CompactResetWeekly)
+			}
+			if details.GroupName != "" {
+				tokens["group"] = details.GroupName
+			}
+			setQuotaTierTokens(tokens, "quota_week", quotaWkStr, pctWk)
+		} else if err != nil || details == nil {
+			// Details unavailable (fetch failed): preserve existing weekly tokens
+			hasExistingWeekly := false
+			if target.Tokens != nil {
+				for _, k := range quotaTierKeys {
+					if strings.HasPrefix(k, "quota_week") && target.Tokens[k] != "" {
+						hasExistingWeekly = true
+						tokens[k] = target.Tokens[k]
+					}
+				}
+			}
+			if !hasExistingWeekly {
 				setQuotaTierTokens(tokens, "quota_week", "", 0)
 			}
+		} else {
+			// Fresh details available, but model has no weekly bucket: clear stale weekly tokens
+			setQuotaTierTokens(tokens, "quota_week", "", 0)
 		}
 
 
