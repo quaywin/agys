@@ -63,7 +63,7 @@ rows = [
 `
 
 const AgysAgentDetectionTOML = `id = "agy"
-version = "2026.09.25.3"
+version = "2026.09.25.4"
 min_engine_version = 1
 updated_at = "2026-09-25T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
@@ -81,6 +81,14 @@ any = [
 ]
 
 [[rules]]
+id = "spinner_working"
+state = "working"
+priority = 950
+region = "bottom_non_empty_lines(6)"
+visible_working = true
+line_regex = ['^\s*[\u2800-\u28FF]+\s+\p{Alphabetic}+\w*ing\b']
+
+[[rules]]
 id = "prompt_box_idle"
 state = "idle"
 priority = 900
@@ -89,17 +97,9 @@ visible_idle = true
 line_regex = ['^\s*>\s*']
 
 [[rules]]
-id = "spinner_working"
-state = "working"
-priority = 800
-region = "bottom_non_empty_lines(6)"
-visible_working = true
-line_regex = ['^\s*[\u2800-\u28FF]+\s+\p{Alphabetic}+\w*ing\b']
-
-[[rules]]
 id = "background_tasks_working"
 state = "working"
-priority = 750
+priority = 850
 region = "bottom_non_empty_lines(5)"
 visible_working = true
 line_regex = ['(?i)·\s*[1-9][0-9]*\s+task']
