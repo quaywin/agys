@@ -274,4 +274,131 @@ func TestResolveResumeProfile(t *testing.T) {
 			t.Errorf("expected conversation owner after migration to be %q, got %q (err: %v)", p2, owner, err)
 		}
 	})
+
+	t.Run("Same explicit profile with -r or --resume normalizes to canonical flag", func(t *testing.T) {
+		resProf, resArgs, err := resolveResumeProfile(p1, []string{"-r"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resProf != p1 {
+			t.Errorf("expected %q, got %q", p1, resProf)
+		}
+		expectedArg := "--conversation=" + convID
+		if len(resArgs) != 1 || resArgs[0] != expectedArg {
+			t.Errorf("expected -r to be replaced by %q, got %v", expectedArg, resArgs)
+		}
+	})
+}
+
+func TestNormalizeAgyArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "empty args",
+			input:    []string{},
+			expected: []string{},
+		},
+		{
+			name:     "version subcommand normalized to --version flag",
+			input:    []string{"version"},
+			expected: []string{"--version"},
+		},
+		{
+			name:     "login normalized to empty args",
+			input:    []string{"login"},
+			expected: []string{},
+		},
+		{
+			name:     "auth login normalized to empty args",
+			input:    []string{"auth", "login"},
+			expected: []string{},
+		},
+		{
+			name:     "models subcommand untouched",
+			input:    []string{"models"},
+			expected: []string{"models"},
+		},
+		{
+			name:     "arbitrary prompt args untouched",
+			input:    []string{"-p", "hello world"},
+			expected: []string{"-p", "hello world"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := normalizeAgyArgs(tc.input)
+			if len(result) != len(tc.expected) {
+				t.Fatalf("expected length %d, got %d (result: %v)", len(tc.expected), len(result), result)
+			}
+			for i := range result {
+				if result[i] != tc.expected[i] {
+					t.Errorf("at index %d: expected %q, got %q", i, tc.expected[i], result[i])
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeResumeArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		convID   string
+		expected []string
+	}{
+		{
+			name:     "-r with convID",
+			input:    []string{"-r"},
+			convID:   "c-123",
+			expected: []string{"--conversation=c-123"},
+		},
+		{
+			name:     "-r without convID",
+			input:    []string{"-r"},
+			convID:   "",
+			expected: []string{"--continue"},
+		},
+		{
+			name:     "--resume with convID",
+			input:    []string{"--resume"},
+			convID:   "c-123",
+			expected: []string{"--conversation=c-123"},
+		},
+		{
+			name:     "--resume without convID",
+			input:    []string{"--resume"},
+			convID:   "",
+			expected: []string{"--continue"},
+		},
+		{
+			name:     "--resume=explicitID",
+			input:    []string{"--resume=custom-456"},
+			convID:   "ignored",
+			expected: []string{"--conversation=custom-456"},
+		},
+		{
+			name:     "--resume explicitID positional",
+			input:    []string{"--resume", "custom-789"},
+			convID:   "ignored",
+			expected: []string{"--conversation", "custom-789"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := normalizeResumeArgs(tc.input, tc.convID)
+			if len(result) != len(tc.expected) {
+				t.Fatalf("expected length %d, got %d (result: %v)", len(tc.expected), len(result), result)
+			}
+			for i := range result {
+				if result[i] != tc.expected[i] {
+					t.Errorf("at index %d: expected %q, got %q", i, tc.expected[i], result[i])
+				}
+			}
+		})
+	}
 }

@@ -142,6 +142,9 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 
 	agyArgs, _, _ = profile.EnsureAvailableHubPort(agyArgs)
 
+	// Normalize arguments (e.g. login, auth login, version) to canonical agy syntax
+	agyArgs = normalizeAgyArgs(agyArgs)
+
 	// Detect if the user is resuming a conversation and handle profile routing or migration
 	var resumeErr error
 	profileName, agyArgs, resumeErr = resolveResumeProfile(profileName, agyArgs, workingDir)
@@ -603,7 +606,7 @@ func resolveResumeProfile(profileName string, agyArgs []string, workingDir ...st
 	}
 
 	if detectErr != nil || detectedProfile == "" {
-		return profileName, agyArgs, nil
+		return profileName, normalizeResumeArgs(agyArgs, ""), nil
 	}
 
 	if profile.IsAuto(profileName) {
@@ -612,7 +615,7 @@ func resolveResumeProfile(profileName string, agyArgs []string, workingDir ...st
 			fmt.Fprintf(os.Stderr, "[agys] Resumed conversation detected. Auto-switching profile %q -> %q\n", profileName, detectedProfile)
 			profileName = detectedProfile
 		}
-		return profileName, agyArgs, nil
+		return profileName, normalizeResumeArgs(agyArgs, detectedConvID), nil
 	}
 
 	if profileName != detectedProfile {
@@ -622,13 +625,55 @@ func resolveResumeProfile(profileName string, agyArgs []string, workingDir ...st
 		if err := profile.MigrateConversation(detectedConvID, detectedProfile, profileName); err != nil {
 			return profileName, agyArgs, fmt.Errorf("failed to migrate conversation %s from %s to %s: %w", detectedConvID, detectedProfile, profileName, err)
 		}
-		// Replace shorthand resume flags (-c, --continue, -r, --resume) in agyArgs with explicit --conversation=<detectedConvID>
-		for i := 0; i < len(agyArgs); i++ {
-			if agyArgs[i] == "-c" || agyArgs[i] == "--continue" || agyArgs[i] == "-r" || agyArgs[i] == "--resume" {
-				agyArgs[i] = "--conversation=" + detectedConvID
-			}
-		}
 	}
 
-	return profileName, agyArgs, nil
+	return profileName, normalizeResumeArgs(agyArgs, detectedConvID), nil
+}
+
+func normalizeResumeArgs(args []string, convID string) []string {
+	normalized := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "--resume=") {
+			id := strings.TrimPrefix(arg, "--resume=")
+			normalized = append(normalized, "--conversation="+id)
+		} else if arg == "--resume" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			normalized = append(normalized, "--conversation", args[i+1])
+			i++
+		} else if arg == "-r" || arg == "--resume" {
+			if convID != "" {
+				normalized = append(normalized, "--conversation="+convID)
+			} else {
+				normalized = append(normalized, "--continue")
+			}
+		} else if arg == "-c" || arg == "--continue" {
+			if convID != "" {
+				normalized = append(normalized, "--conversation="+convID)
+			} else {
+				normalized = append(normalized, arg)
+			}
+		} else {
+			normalized = append(normalized, arg)
+		}
+	}
+	return normalized
+}
+
+func normalizeAgyArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+
+	// 1. Normalize "auth login" or "login" to empty args so agy runs interactively to initiate login
+	if (len(args) == 1 && args[0] == "login") ||
+		(len(args) == 2 && args[0] == "auth" && args[1] == "login") {
+		return []string{}
+	}
+
+	// 2. Normalize "version" to "--version" since agy has flag --version instead of subcommand version
+	if len(args) == 1 && args[0] == "version" {
+		return []string{"--version"}
+	}
+
+	return args
 }

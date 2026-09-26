@@ -29,7 +29,7 @@ func TestRunCmdWithSignals_ContextCancel(t *testing.T) {
 	start := time.Now()
 	// Run command with mock profile directory
 	// Note: 'agy' might fail to find binary, but context cancellation logic should execute
-	_ = RunCmdWithSignals(ctx, profileDir, "version")
+	_ = RunCmdWithSignals(ctx, profileDir, "--version")
 	duration := time.Since(start)
 
 	if duration > 3*time.Second {
