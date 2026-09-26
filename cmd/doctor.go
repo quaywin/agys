@@ -119,7 +119,7 @@ func runDoctor(ctx context.Context) error {
 			if tokenErr != nil || token == nil {
 				fmt.Printf("  \033[1;33m!\033[0m Profile '%s'%s: Not authenticated or token missing\n", p, suffix)
 				fmt.Printf("    - Sandbox: %s\n", pDir)
-				fmt.Printf("    - Tip: Run 'agys run %s -- auth login' to authenticate\n", p)
+				fmt.Printf("    - Tip: Run 'agys add %s' or 'agys run %s' to authenticate\n", p, p)
 				warnings++
 				continue
 			}

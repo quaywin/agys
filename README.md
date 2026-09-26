@@ -119,7 +119,7 @@ mv agys ~/.local/bin/
 ## 🚀 Quick Start & Core Workflows
 
 ### 1. Add & Authenticate a Profile
-Create a new isolated sandbox and log in via `agy login`:
+Create a new isolated sandbox and authenticate via `agy`:
 
 ```bash
 agys add work
@@ -486,7 +486,7 @@ Usage:
   agys [command]
 
 Available Commands:
-  add              Create a new profile and perform agy login
+  add              Create a new profile and authenticate via agy
   alias            Generate shell aliases for configured profiles
   auto             Execute agy command automatically using profile with the best 5h Gemini quota
   clone            Clone an existing profile to a new profile (alias: cp)

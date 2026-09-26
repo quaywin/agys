@@ -164,6 +164,7 @@ func Create(name string) (string, error) {
 	_ = EnsureKeychain(profileDir)
 	_ = SyncHerdrIntegration(profileDir)
 	_ = EnsureGitConfig(profileDir)
+	_ = EnsureOnboardingCompleted(profileDir)
 	return profileDir, nil
 }
 

@@ -13,7 +13,7 @@
 - `agys add <profile_name>`:
   - Validates profile name (alphanumeric, dashes, underscores).
   - Creates directory `~/.agys/profiles/<profile_name>`.
-  - Runs `HOME=~/.agys/profiles/<profile_name> agy login` attached to `os.Stdin`, `os.Stdout`, `os.Stderr`.
+  - Runs `HOME=~/.agys/profiles/<profile_name> agy` attached to `os.Stdin`, `os.Stdout`, `os.Stderr`.
 - `agys list` (alias `ls`):
   - Scans `~/.agys/profiles/`.
   - Displays list of configured profile directories.
