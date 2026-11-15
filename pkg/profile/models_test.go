@@ -63,6 +63,7 @@ func TestParseAgyModelsOutput_OrderIndependent(t *testing.T) {
 gemini-3.7-flash-high	Gemini 3.7 Flash (High)
 gemini-2.5-flash-high	Gemini 2.5 Flash (High)
 gemini-4.0-flash-high	Gemini 4.0 Flash (High)
+gemini-4-hydrogen-xhigh	Gemini 4 Hydrogen (XHigh)
 gemini-3.8-flash-high	Gemini 3.8 Flash (High)
 gemini-3.1-pro-high	Gemini 3.1 Pro (High)
 claude-sonnet-4-6	Claude Sonnet 4.6 (Thinking)
@@ -85,6 +86,8 @@ func TestModelSupportsEffort(t *testing.T) {
 		{"gemini-3.8-flash", true},
 		{"gemini-3.7-flash", true},
 		{"gemini-3.1-pro", true},
+		{"gemini-4-hydrogen", true},
+		{"gemini-4-carbon", true},
 		{"flash", true},
 		{"", true},
 		{"gemini-2.5-pro", false},

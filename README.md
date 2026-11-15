@@ -253,7 +253,45 @@ agys ide auto /path/to/my-project
 
 > **First-Time Setup**: When launching `agys ide <profile>` for the first time, log in once via the IDE prompt. The IDE permanently saves that profile's session in `~/.agys/profiles/<profile>/ide-data/`, enabling instant multi-window launches.
 
-### 8. Antigravity Desktop App GUI (`agys gui`)
+### 8. Agent Client Protocol Server (`agys acp`)
+Start the **Agent Client Protocol (ACP)** stdio JSON-RPC server to integrate Antigravity directly into modern code editors and IDEs (such as **Zed**, **JetBrains AI Assistant**, **Neovim** via `avante.nvim` / `CodeCompanion.nvim`, etc.).
+
+Supports multi-profile isolation and **dynamic quota auto-selection (`auto`)** so your IDE never gets blocked by rate limits:
+
+```bash
+# Start ACP stdio server with auto quota profile selection (recommended for IDEs)
+agys acp auto
+
+# Start ACP server for a specific profile
+agys acp work
+
+# Pass ACP flags directly (e.g. auto-approve tool execution permissions)
+agys acp auto --dangerously-skip-permissions
+```
+
+#### Editor Configuration Examples
+
+##### Zed (`~/.config/zed/settings.json`)
+```json
+{
+  "agent_servers": {
+    "antigravity": {
+      "type": "custom",
+      "command": "agys",
+      "args": ["acp", "auto"]
+    }
+  }
+}
+```
+
+##### JetBrains IDEs (IntelliJ, WebStorm, PyCharm, GoLand)
+Go to `Settings | Tools | AI Assistant | Agents` -> Add External ACP Agent:
+* **Command**: `agys`
+* **Arguments**: `acp auto`
+
+---
+
+### 9. Antigravity Desktop App GUI (`agys gui`)
 Launch the Antigravity 2.0 Desktop App GUI with isolated profile settings and automatic macOS Keychain OAuth token synchronization:
 
 ```bash
@@ -267,7 +305,7 @@ agys gui work
 agys gui work --force
 ```
 
-### 9. Headless Remote Control Daemon (`agys remote`)
+### 10. Headless Remote Control Daemon (`agys remote`)
 Launch and manage background Antigravity Remote Control daemons across profiles without occupying your terminal. Supports auto-port collision resolution, credential sync, and web/cloud portal access (`antigravity.google`):
 
 ```bash
@@ -290,7 +328,7 @@ agys remote stop work
 agys remote stop --all
 ```
 
-### 10. Remote SSH Execution & Geo-Bypass (`agys ssh`)
+### 11. Remote SSH Execution & Geo-Bypass (`agys ssh`)
 Run `agy` natively on any remote Linux server over SSH using local profile credentials:
 
 ```bash
@@ -308,7 +346,7 @@ agys ssh user@remote-server /var/www/myproject work -- --dangerously-skip-permis
 * **Geo-Block Bypass**: Tunnels Gemini API calls through an SSH reverse tunnel (`-R <port>`) back to your local machine, allowing full access from datacenter IPs.
 * **Zero Orphan Processes**: Direct process replacement (`exec`) cleanly terminates remote processes upon SSH disconnect.
 
-### 11. AI-Powered Staged Git Commit (`agys commit`)
+### 12. AI-Powered Staged Git Commit (`agys commit`)
 Inspect staged git changes with AI (auto-selecting the best-quota profile), perform code review checks, and commit with an AI-generated conventional commit message:
 
 ```bash
@@ -332,7 +370,7 @@ agys commit --dry-run
 
 ## ⚙️ Profile & Ecosystem Management
 
-### 12. Fast Plugin Management (`agys plugin`)
+### 13. Fast Plugin Management (`agys plugin`)
 Install, list, or uninstall `agy` plugins directly with optional `--all` (`-a`) support across all profiles without session overhead:
 
 ```bash
@@ -351,7 +389,7 @@ agys plugin list --all
 agys plugin uninstall superpowers --all
 ```
 
-### 13. Multi-Profile MCP Management (`agys mcp`)
+### 14. Multi-Profile MCP Management (`agys mcp`)
 Inspect configured Model Context Protocol servers and synchronize `mcp_config.json` definitions across profiles or swarms:
 
 ```bash
@@ -368,7 +406,7 @@ agys mcp sync work personal
 agys mcp sync work --all
 ```
 
-### 14. System Environment Health Check (`agys doctor`)
+### 15. System Environment Health Check (`agys doctor`)
 Perform a comprehensive diagnostic audit of the entire Antigravity & Herdr environment:
 
 ```bash
@@ -384,7 +422,7 @@ agys health
 * ⚡ **Model Discovery**: Validates cached Flash & Pro models and cache freshness.
 * 📡 **Herdr Connectivity**: Verifies active pane context and test-pings UNIX domain socket RPC when running inside Herdr.
 
-### 15. Profile Utilities: Clone, Export, Import, Rename, Delete
+### 16. Profile Utilities: Clone, Export, Import, Rename, Delete
 
 ```bash
 # Duplicate an existing profile (credentials and config)
@@ -408,7 +446,7 @@ agys delete work --force
 # or alias: agys rm work --force
 ```
 
-### 16. Shell Aliases & Auto-Completions
+### 17. Shell Aliases & Auto-Completions
 
 ```bash
 # Generate shell aliases for configured profiles (e.g. alias agy-work="agys run work --")
@@ -419,7 +457,7 @@ source <(agys completion zsh)
 source <(agys completion bash)
 ```
 
-### 17. Self-Upgrade & Background Auto-Updater (`agys upgrade`)
+### 18. Self-Upgrade & Background Auto-Updater (`agys upgrade`)
 
 `agys` includes an **automatic silent background updater** modeled directly after `agy`'s internal architecture:
 - **Fast-Path Throttling**: Checks `last_check.timestamp` (<0.1ms overhead) on everyday commands with a 6-hour interval.
@@ -445,7 +483,7 @@ agys upgrade --force
 - `AGYS_UPDATE_INTERVAL=12h`: Override default check interval (default: `6h`).
 - `AGYS_DEBUG=1`: Log background updater activity to `~/.agys/updater/updater.log`.
 
-### 18. AI Model Discovery & Auto-Detection (`agys models`)
+### 19. AI Model Discovery & Auto-Detection (`agys models`)
 
 `agys` automatically discovers and selects the highest version in the Gemini Flash model series from `agy` without requiring code updates when Google releases new versions:
 

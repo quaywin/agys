@@ -383,6 +383,7 @@ func init() {
 }
 
 var agySubcommands = map[string]bool{
+	"acp":            true,
 	"agent":          true,
 	"agents":         true,
 	"auth":           true,
@@ -405,8 +406,13 @@ var agyBoolFlags = map[string]bool{
 	"--continue":                     true,
 	"--dangerously-skip-permissions": true,
 	"--disable-slash-commands":       true,
+	"--disable-telemetry":            true,
+	"--include-default-customizations": true,
+	"--login":                        true,
 	"--new-project":                  true,
+	"--process-per-session":          true,
 	"--sandbox":                      true,
+	"--stdio":                        true,
 	"-h":                             true,
 	"--help":                         true,
 	"-v":                             true,

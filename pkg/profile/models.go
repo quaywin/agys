@@ -107,9 +107,9 @@ func ParseAgyModelsOutput(output string) *DiscoveredModels {
 			continue
 		}
 
-		// Strip -high, -medium, -low suffixes for base model ID
+		// Strip -xhigh, -high, -medium, -low suffixes for base model ID
 		baseModel := modelID
-		for _, suffix := range []string{"-high", "-medium", "-low"} {
+		for _, suffix := range []string{"-xhigh", "-high", "-medium", "-low"} {
 			if strings.HasSuffix(baseModel, suffix) {
 				baseModel = strings.TrimSuffix(baseModel, suffix)
 				break
@@ -316,7 +316,7 @@ func GetLatestGeminiModel() string {
 	return DefaultGeminiModel
 }
 
-// ModelSupportsEffort returns true if the specified model supports reasoning effort (e.g. Gemini 3.x Flash/Pro, Gemini Flash).
+// ModelSupportsEffort returns true if the specified model supports reasoning effort (e.g. Gemini 3.x Flash/Pro, Gemini 4.x Hydrogen/Carbon, Gemini Flash).
 func ModelSupportsEffort(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
@@ -325,7 +325,7 @@ func ModelSupportsEffort(model string) bool {
 	if strings.Contains(m, "claude") || strings.Contains(m, "gpt") || strings.Contains(m, "deepseek") || strings.Contains(m, "qwen") {
 		return false
 	}
-	if strings.Contains(m, "flash") {
+	if strings.Contains(m, "flash") || strings.Contains(m, "hydrogen") || strings.Contains(m, "carbon") {
 		return true
 	}
 	if v, ok := ExtractGeminiVersion(m); ok && v.Major >= 3 {

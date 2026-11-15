@@ -112,8 +112,8 @@ func TestEnsureDefaultModelAndEffort(t *testing.T) {
 		}
 	})
 
-	t.Run("Ignores subcommands like models, agents, help, mcp, mic-serve, remote-control", func(t *testing.T) {
-		subcmds := []string{"models", "agents", "help", "version", "mcp", "mic-serve", "remote-control"}
+	t.Run("Ignores subcommands like models, agents, help, mcp, mic-serve, remote-control, acp", func(t *testing.T) {
+		subcmds := []string{"models", "agents", "help", "version", "mcp", "mic-serve", "remote-control", "acp"}
 		for _, sc := range subcmds {
 			args := []string{sc}
 			res := EnsureDefaultModelAndEffort(args)
@@ -320,6 +320,11 @@ func TestNormalizeAgyArgs(t *testing.T) {
 			name:     "models subcommand untouched",
 			input:    []string{"models"},
 			expected: []string{"models"},
+		},
+		{
+			name:     "acp subcommand untouched",
+			input:    []string{"acp"},
+			expected: []string{"acp"},
 		},
 		{
 			name:     "arbitrary prompt args untouched",

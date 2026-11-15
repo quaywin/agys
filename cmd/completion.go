@@ -107,6 +107,8 @@ func CompleteAgyArgs(args []string, toComplete string) ([]string, cobra.ShellCom
 				"gemini-3.7-flash\tGemini 3.7 Flash (Fast & Capable Reasoning)",
 				"gemini-3.6-flash\tGemini 3.6 Flash (Fast & Capable)",
 				"gemini-3.1-pro\tGemini 3.1 Pro (High Reasoning)",
+				"gemini-4-hydrogen\tGemini 4 Hydrogen (Advanced Reasoning)",
+				"gemini-4-carbon\tGemini 4 Carbon (High Performance)",
 				"claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)",
 				"claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)",
 				"gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
@@ -145,6 +147,7 @@ func CompleteAgyArgs(args []string, toComplete string) ([]string, cobra.ShellCom
 	}
 
 	subcmds := []string{
+		"acp\tStart Agent Client Protocol (ACP) stdio server",
 		"models\tList available AI models",
 		"agents\tList active subagents",
 		"changelog\tView recent release notes",
