@@ -195,6 +195,7 @@ func runDoctor(ctx context.Context) error {
 
 	// 5. Herdr Multi-Agent Environment Check
 	profile.CleanStaleHooksInProfiles()
+	_ = profile.CleanStaleHerdrAgentDetectionManifest()
 	fmt.Printf("\n\033[1;34m● Herdr Integration\033[0m\n")
 	if profile.IsInHerdrEnvironment() {
 		paneID := os.Getenv("HERDR_PANE_ID")

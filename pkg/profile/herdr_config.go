@@ -62,7 +62,9 @@ rows = [
 ] # herdr-agys-managed
 `
 
-const AgysAgentDetectionTOML = `id = "agy"
+// LegacyAgysAgentDetectionTOML is the deprecated manifest that previously contained the flawed prompt_box_idle rule.
+// Retained only for test assertions and reference.
+const LegacyAgysAgentDetectionTOML = `id = "agy"
 version = "2026.09.25.4"
 min_engine_version = 1
 updated_at = "2026-09-25T00:00:00Z"
@@ -113,33 +115,46 @@ visible_idle = true
 line_regex = ['^\s*>\s*']
 `
 
-// EnsureHerdrAgentDetectionManifest ensures Herdr has a local override manifest for agy
-// that includes an explicit prompt_idle rule and restricts spinner detection to recent bottom lines,
-// preventing historical spinners from falsely reporting "working" status while idle.
-func EnsureHerdrAgentDetectionManifest() error {
+// Deprecated: AgysAgentDetectionTOML alias for backwards compatibility.
+const AgysAgentDetectionTOML = LegacyAgysAgentDetectionTOML
+
+// CleanStaleHerdrAgentDetectionManifest removes legacy local override manifests for agy
+// that contain the flawed prompt_box_idle rule (which caused premature "finished" notifications
+// between tool invocations and during response streaming), allowing Herdr to use its native,
+// upstream-maintained agent detection manifest (version 2026.10.05.1+) with proper debounce and settled-state lifecycle.
+func CleanStaleHerdrAgentDetectionManifest() error {
 	configDir := filepath.Dir(GetHerdrConfigPath())
-	targetDir := filepath.Join(configDir, "agent-detection")
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
+	targetFile := filepath.Join(configDir, "agent-detection", "agy.toml")
+	data, err := os.ReadFile(targetFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
-	targetFile := filepath.Join(targetDir, "agy.toml")
-	existing, err := os.ReadFile(targetFile)
-	if err == nil && string(existing) == AgysAgentDetectionTOML {
-		return nil
-	}
-	if err := WriteFileAtomic(targetFile, []byte(AgysAgentDetectionTOML), 0644); err != nil {
-		return err
-	}
-	// Reload agent manifests via Herdr socket if running in Herdr
-	if socketPath := os.Getenv("HERDR_SOCKET_PATH"); socketPath != "" {
-		req, _ := json.Marshal(map[string]interface{}{
-			"id":     fmt.Sprintf("agys:manifest_reload:%d", time.Now().UnixNano()),
-			"method": "server.reload_agent_manifests",
-			"params": map[string]interface{}{},
-		})
-		_ = sendHerdrSocketRPC(context.Background(), socketPath, req)
+
+	content := string(data)
+	if strings.Contains(content, "prompt_box_idle") || strings.Contains(content, "2026.09.25") {
+		if err := os.Remove(targetFile); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		// Reload agent manifests via Herdr socket if running in Herdr
+		if socketPath := os.Getenv("HERDR_SOCKET_PATH"); socketPath != "" {
+			req, _ := json.Marshal(map[string]interface{}{
+				"id":     fmt.Sprintf("agys:manifest_reload:%d", time.Now().UnixNano()),
+				"method": "server.reload_agent_manifests",
+				"params": map[string]interface{}{},
+			})
+			_ = sendHerdrSocketRPC(context.Background(), socketPath, req)
+		}
 	}
 	return nil
+}
+
+// EnsureHerdrAgentDetectionManifest ensures Herdr uses its native upstream-maintained agent detection manifest,
+// removing any legacy buggy local overrides that falsely reported early finish on tool calls.
+func EnsureHerdrAgentDetectionManifest() error {
+	return CleanStaleHerdrAgentDetectionManifest()
 }
 
 // IsHerdrConfiguredForAgys checks if Herdr's config.toml contains the agys 2-row sidebar configuration with conversation title.

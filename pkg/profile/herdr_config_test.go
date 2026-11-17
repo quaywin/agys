@@ -142,24 +142,47 @@ func TestEnsureHerdrAgentDetectionManifest(t *testing.T) {
 	t.Setenv("HERDR_CONFIG_PATH", configPath)
 	t.Setenv("HERDR_CONFIG_FILE", configPath)
 
+	targetDir := filepath.Join(tempHome, ".config", "herdr", "agent-detection")
+	_ = os.MkdirAll(targetDir, 0755)
+	manifestPath := filepath.Join(targetDir, "agy.toml")
+
+	// 1. Populate with legacy buggy manifest containing prompt_box_idle
+	if err := os.WriteFile(manifestPath, []byte(LegacyAgysAgentDetectionTOML), 0644); err != nil {
+		t.Fatalf("failed to seed legacy manifest: %v", err)
+	}
+
+	// 2. EnsureHerdrAgentDetectionManifest should clean it up to restore native upstream manifest
 	err := EnsureHerdrAgentDetectionManifest()
 	if err != nil {
 		t.Fatalf("EnsureHerdrAgentDetectionManifest failed: %v", err)
 	}
 
-	manifestPath := filepath.Join(tempHome, ".config", "herdr", "agent-detection", "agy.toml")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatalf("failed to read created manifest: %v", err)
+	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
+		t.Errorf("expected legacy manifest with prompt_box_idle to be removed, but it still exists")
 	}
 
-	if string(data) != AgysAgentDetectionTOML {
-		t.Errorf("manifest content mismatch, got:\n%s", string(data))
-	}
-
-	// Calling again should succeed cleanly without error
+	// 3. Calling again when absent should succeed cleanly without re-creating it
 	if err := EnsureHerdrAgentDetectionManifest(); err != nil {
 		t.Fatalf("subsequent EnsureHerdrAgentDetectionManifest call failed: %v", err)
+	}
+	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
+		t.Errorf("manifest should not be re-created")
+	}
+
+	// 4. Custom user manifest without prompt_box_idle should be preserved
+	customContent := `id = "agy"` + "\n" + `version = "2026.11.01.1"`
+	if err := os.WriteFile(manifestPath, []byte(customContent), 0644); err != nil {
+		t.Fatalf("failed to write custom manifest: %v", err)
+	}
+	if err := CleanStaleHerdrAgentDetectionManifest(); err != nil {
+		t.Fatalf("CleanStaleHerdrAgentDetectionManifest failed on custom manifest: %v", err)
+	}
+	customRead, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("custom manifest was unexpectedly deleted: %v", err)
+	}
+	if string(customRead) != customContent {
+		t.Errorf("custom manifest content changed: %s", string(customRead))
 	}
 }
 
