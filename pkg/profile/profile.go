@@ -365,6 +365,24 @@ func GetAgyPath() string {
 	return "agy"
 }
 
+// LinuxNoKeyringBus is a D-Bus address that can never be dialed.
+const LinuxNoKeyringBus = "unix:path=/nonexistent/agys-no-keyring"
+
+// LinuxKeyringIsolationBus returns the D-Bus address agy should see on Linux.
+//
+// On Linux agy stores its OAuth token in a single Secret Service (keyring)
+// entry that does not depend on $HOME, so every agys profile would load the
+// same account and the last login would overwrite the others. When the
+// session bus is unreachable, agy falls back to a token file under $HOME,
+// which agys already isolates per profile. Set AGYS_LINUX_KEYRING=shared to
+// keep the shared keyring.
+func LinuxKeyringIsolationBus(goos string, getenv func(string) string) (string, bool) {
+	if goos != "linux" || getenv("AGYS_LINUX_KEYRING") == "shared" {
+		return "", false
+	}
+	return LinuxNoKeyringBus, true
+}
+
 // BuildCmdContext constructs an exec.Cmd with context cancellation for running `agy` with isolated profile environment variables.
 func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *exec.Cmd {
 	_ = EnsureKeychain(profileDir)
@@ -404,6 +422,10 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 				envMap["GIT_CONFIG_GLOBAL"] = realGitConfig
 			}
 		}
+	}
+
+	if bus, ok := LinuxKeyringIsolationBus(runtime.GOOS, os.Getenv); ok {
+		envMap["DBUS_SESSION_BUS_ADDRESS"] = bus
 	}
 
 	CleanStaleProfileBinaries(profileDir)
