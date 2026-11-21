@@ -76,7 +76,7 @@ herdr plugin install quaywin/agys
 - **System Health Doctor (`agys doctor`)**: Diagnostic audit of `agy` binaries, OAuth tokens, expiry, Keychain isolation, model discovery, and Herdr socket RPC.
 - **Multi-Profile MCP Management (`agys mcp`)**: Inspect and synchronize Model Context Protocol servers across profiles (`agys mcp sync`).
 - **Session History & Resume (`agys resume`)**: Search, inspect, and resume past conversation sessions with real-time prompt search (`/`), workspace grouping (`Ctrl+F`), and workspace-aware fallback.
-- **Cross-Platform Native (macOS & Linux)**: 100% pure Go static binary with zero CGO dependencies; safe token file sandboxing on Linux and seamless Keychain synchronization on macOS.
+- **Cross-Platform Native (macOS & Linux)**: 100% pure Go static binary with zero CGO dependencies; safe token file sandboxing on Linux and seamless Keychain synchronization on macOS. On Linux, `agy` runs with an unreachable `DBUS_SESSION_BUS_ADDRESS` so it stores its OAuth token in the profile's own `$HOME` instead of the single machine-wide Secret Service entry that every profile would otherwise share (set `AGYS_LINUX_KEYRING=shared` to opt out). Profiles that were signed in through the keyring need one `/login` after upgrading.
 - **Robust Path & Environment Preservation**: Bulletproof `$HOME` and `$PATH` routing (`~/.local/bin`, `~/go/bin`, Homebrew) guaranteeing child hooks and tools run without `command not found` or config shadowing.
 - **Herdr Multi-Agent Integration**: Native 3-row sidebar telemetry, rich terminal tab titles, and live reset countdowns.
 - **Fast Plugin Management (`agys plugin`)**: Install, list, and uninstall plugins across single or all profiles (`--all`) without session overhead.

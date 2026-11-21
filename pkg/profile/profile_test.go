@@ -887,3 +887,37 @@ func TestSanitizeAgyEnv(t *testing.T) {
 		}
 	})
 }
+
+func TestLinuxKeyringIsolationBus(t *testing.T) {
+	env := func(vals map[string]string) func(string) string {
+		return func(k string) string { return vals[k] }
+	}
+
+	if bus, ok := LinuxKeyringIsolationBus("linux", env(nil)); !ok || bus != LinuxNoKeyringBus {
+		t.Fatalf("linux: got (%q, %v), want (%q, true)", bus, ok, LinuxNoKeyringBus)
+	}
+	if _, ok := LinuxKeyringIsolationBus("linux", env(map[string]string{"AGYS_LINUX_KEYRING": "shared"})); ok {
+		t.Fatal("AGYS_LINUX_KEYRING=shared must keep the shared keyring")
+	}
+	if _, ok := LinuxKeyringIsolationBus("darwin", env(nil)); ok {
+		t.Fatal("darwin must not override the D-Bus address")
+	}
+}
+
+func TestBuildCmdSetsNoKeyringBusOnLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux only")
+	}
+	t.Setenv("AGYS_LINUX_KEYRING", "")
+	t.Setenv("HERDR_SOCKET_PATH", "") // keep BuildCmd from touching a real Herdr config
+	cmd := BuildCmd(t.TempDir(), "--version")
+	found := ""
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "DBUS_SESSION_BUS_ADDRESS=") {
+			found = strings.TrimPrefix(e, "DBUS_SESSION_BUS_ADDRESS=")
+		}
+	}
+	if found != LinuxNoKeyringBus {
+		t.Fatalf("DBUS_SESSION_BUS_ADDRESS = %q, want %q", found, LinuxNoKeyringBus)
+	}
+}
