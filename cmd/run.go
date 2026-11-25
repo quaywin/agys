@@ -116,30 +116,75 @@ func runWithProfile(cmd *cobra.Command, profileName string, agyArgs []string) er
 	return runWithProfileAndDir(cmd, profileName, agyArgs, "")
 }
 
-func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []string, workingDir string) error {
-	// Extract explicit model if specified in agyArgs before defaults
-	var explicitModel string
-	hasExplicitModel := false
-	for i := 0; i < len(agyArgs); i++ {
-		if agyArgs[i] == "--model" || agyArgs[i] == "-m" {
-			hasExplicitModel = true
-			if i+1 < len(agyArgs) {
-				explicitModel = agyArgs[i+1]
+func extractModelAndEffortFlags(args []string) (explicitModel string, hasModel bool, explicitEffort string, hasEffort bool) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--model" || arg == "-m" {
+			hasModel = true
+			if i+1 < len(args) {
+				explicitModel = args[i+1]
 			}
-			break
+		} else if strings.HasPrefix(arg, "--model=") {
+			hasModel = true
+			explicitModel = strings.TrimPrefix(arg, "--model=")
+		} else if strings.HasPrefix(arg, "-m=") {
+			hasModel = true
+			explicitModel = strings.TrimPrefix(arg, "-m=")
+		} else if arg == "--effort" {
+			hasEffort = true
+			if i+1 < len(args) {
+				explicitEffort = args[i+1]
+			}
+		} else if strings.HasPrefix(arg, "--effort=") {
+			hasEffort = true
+			explicitEffort = strings.TrimPrefix(arg, "--effort=")
 		}
-		if strings.HasPrefix(agyArgs[i], "--model=") {
-			hasExplicitModel = true
-			explicitModel = strings.TrimPrefix(agyArgs[i], "--model=")
-			break
+	}
+	return explicitModel, hasModel, explicitEffort, hasEffort
+}
+
+func prepareRunModelAndEffortArgs(profileDir string, agyArgs []string) ([]string, string) {
+	explicitModel, hasExplicitModel, explicitEffort, hasExplicitEffort := extractModelAndEffortFlags(agyArgs)
+
+	activeModel, activeEffort := profile.ResolveActiveModelAndEffort(profileDir, explicitModel, explicitEffort)
+	if activeModel == "" || activeModel == "gemini" {
+		activeModel = profile.GetLatestGeminiModel()
+	}
+
+	preparedArgs := EnsureDefaultModelAndEffortWithOptions(agyArgs, activeModel, activeEffort)
+
+	effectiveModel, _, effectiveEffort, _ := extractModelAndEffortFlags(preparedArgs)
+	if effectiveModel == "" {
+		effectiveModel = activeModel
+	}
+	if effectiveEffort == "" {
+		_, embeddedEff := profile.SplitModelAndEffort(effectiveModel)
+		effectiveEffort = embeddedEff
+	}
+
+	if profileDir != "" {
+		// Persist both .active_model and settings.json whenever either model or effort was explicitly specified,
+		// preventing stale variant suffixes in .active_model (e.g. "(XHigh)") from overriding `--effort low`.
+		if hasExplicitModel || hasExplicitEffort {
+			settingsTarget := profile.FormatModelWithEffort(effectiveModel, effectiveEffort)
+			if settingsTarget == "" {
+				settingsTarget = effectiveModel
+			}
+			_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(settingsTarget), 0600)
+			profile.SyncModelToSettings(profileDir, settingsTarget)
 		}
-		if strings.HasPrefix(agyArgs[i], "-m=") {
-			hasExplicitModel = true
-			explicitModel = strings.TrimPrefix(agyArgs[i], "-m=")
-			break
+
+		if effectiveEffort != "" {
+			_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_effort"), []byte(effectiveEffort+"\n"), 0600)
+		} else {
+			_ = os.Remove(filepath.Join(profileDir, ".active_effort"))
 		}
 	}
 
+	return preparedArgs, activeModel
+}
+
+func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []string, workingDir string) error {
 	agyArgs, _, _ = profile.EnsureAvailableHubPort(agyArgs)
 
 	// Normalize arguments (e.g. login, auth login, version) to canonical agy syntax
@@ -195,66 +240,14 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 	// Merge trusted workspaces across all profiles prior to execution
 	_ = profile.SyncTrustedWorkspaces()
 
-	// Resolve active model following priority: explicit CLI flag > .active_model cache > settings.json > default Gemini (gemini-3.8-flash)
-	activeModel := profile.ResolveActiveModel(profileDir, explicitModel)
-	if activeModel == "" || activeModel == "gemini" {
-		activeModel = profile.GetLatestGeminiModel()
-	}
-
-	// If explicit model was provided on CLI, persist it to .active_model and sync to settings.json
-	if hasExplicitModel {
-		_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(activeModel), 0600)
-		profile.SyncModelToSettings(profileDir, activeModel)
-	}
-
 	// Keep copy of original user args before model/effort injection for flag preservation and session detection
 	originalUserArgs := append([]string(nil), agyArgs...)
 
-	// Apply default model and effort to agyArgs using resolved activeModel
-	agyArgs = EnsureDefaultModelAndEffortWithModel(agyArgs, activeModel)
-
-	// Persist active reasoning effort to profile cache
-	activeEffort := ""
-	for i := 0; i < len(agyArgs); i++ {
-		if agyArgs[i] == "--effort" && i+1 < len(agyArgs) {
-			activeEffort = agyArgs[i+1]
-			break
-		} else if strings.HasPrefix(agyArgs[i], "--effort=") {
-			activeEffort = strings.TrimPrefix(agyArgs[i], "--effort=")
-			break
-		}
-	}
-	if activeEffort != "" {
-		_ = profile.WriteFileAtomic(filepath.Join(profileDir, ".active_effort"), []byte(activeEffort+"\n"), 0600)
-	} else {
-		_ = os.Remove(filepath.Join(profileDir, ".active_effort"))
-	}
+	// Resolve, apply, and persist active model and reasoning effort
+	agyArgs, activeModel := prepareRunModelAndEffortArgs(profileDir, agyArgs)
 
 	// Clean up stale session context on fresh new interactive session start (not a resume)
-	isResume := false
-	resumeConvID := ""
-	for i := 0; i < len(originalUserArgs); i++ {
-		a := originalUserArgs[i]
-		if a == "-c" || a == "--continue" || a == "-r" || a == "--resume" {
-			isResume = true
-			break
-		}
-		if strings.HasPrefix(a, "--conversation=") {
-			isResume = true
-			resumeConvID = strings.TrimPrefix(a, "--conversation=")
-			break
-		}
-		if strings.HasPrefix(a, "--resume=") {
-			isResume = true
-			resumeConvID = strings.TrimPrefix(a, "--resume=")
-			break
-		}
-		if (a == "--conversation" || a == "--resume") && i+1 < len(originalUserArgs) {
-			isResume = true
-			resumeConvID = originalUserArgs[i+1]
-			break
-		}
-	}
+	isResume, resumeConvID := extractResumeFlag(originalUserArgs)
 	if !isResume && isInteractiveSession(originalUserArgs) {
 		_ = profile.ResetSessionContext(profileDir)
 	} else if isResume && resumeConvID != "" {
@@ -312,22 +305,7 @@ func runWithProfileAndDir(cmd *cobra.Command, profileName string, agyArgs []stri
 		_ = profile.SaveLastConversation(idAfter)
 
 		// Filter out conversation-triggering arguments from original args to preserve other flags
-		var preservedFlags []string
-		for i := 0; i < len(originalUserArgs); i++ {
-			arg := originalUserArgs[i]
-			if arg == "--conversation" {
-				i++ // Skip the value
-				continue
-			}
-			if strings.HasPrefix(arg, "--conversation=") {
-				continue
-			}
-			if arg == "-c" || arg == "--continue" {
-				continue
-			}
-			// Keep all other flags (like --dangerously-skip-permissions, --model, --sandbox, etc.)
-			preservedFlags = append(preservedFlags, arg)
-		}
+		preservedFlags := filterPreservedSessionFlags(originalUserArgs)
 
 		var extraFlags string
 		if len(preservedFlags) > 0 {
@@ -402,29 +380,41 @@ var agySubcommands = map[string]bool{
 }
 
 var agyBoolFlags = map[string]bool{
-	"-c":                             true,
-	"--continue":                     true,
-	"--dangerously-skip-permissions": true,
-	"--disable-slash-commands":       true,
-	"--disable-telemetry":            true,
+	"-c":                               true,
+	"--continue":                       true,
+	"--dangerously-skip-permissions":   true,
+	"--disable-slash-commands":         true,
+	"--disable-telemetry":              true,
 	"--include-default-customizations": true,
-	"--login":                        true,
-	"--new-project":                  true,
-	"--process-per-session":          true,
-	"--sandbox":                      true,
-	"--stdio":                        true,
-	"-h":                             true,
-	"--help":                         true,
-	"-v":                             true,
-	"--version":                      true,
+	"--json":                           true,
+	"--login":                          true,
+	"--new-project":                    true,
+	"--process-per-session":            true,
+	"--remote-agent":                   true,
+	"--remote-control":                 true,
+	"--sandbox":                        true,
+	"--skip-aliases":                   true,
+	"--skip-path":                      true,
+	"--stdio":                          true,
+	"--strict":                         true,
+	"--worker":                         true,
+	"-h":                               true,
+	"--help":                           true,
+	"-v":                               true,
+	"--version":                        true,
+}
+
+var pluginSubcommandVerbs = map[string]bool{
+	"list": true, "import": true, "install": true, "uninstall": true,
+	"enable": true, "disable": true, "validate": true, "link": true, "help": true,
 }
 
 var agySubcommandVerbs = map[string]map[string]bool{
 	"auth":           {"login": true, "logout": true, "status": true, "token": true, "refresh": true},
 	"config":         {"get": true, "set": true, "list": true, "path": true},
 	"mcp":            {"list": true, "add": true, "remove": true, "enable": true, "disable": true, "status": true},
-	"plugin":         {"list": true, "install": true, "uninstall": true, "enable": true, "disable": true},
-	"plugins":        {"list": true, "install": true, "uninstall": true, "enable": true, "disable": true},
+	"plugin":         pluginSubcommandVerbs,
+	"plugins":        pluginSubcommandVerbs,
 	"agent":          {"list": true, "create": true, "delete": true, "show": true},
 	"agents":         {"list": true},
 	"remote-control": {"status": true, "start": true, "stop": true},
@@ -499,12 +489,19 @@ func isInteractiveSession(agyArgs []string) bool {
 // EnsureDefaultModelAndEffort ensures agyArgs has a default model (gemini-3.8-flash)
 // and reasoning effort (high) if not explicitly provided by the user or subcommand.
 func EnsureDefaultModelAndEffort(args []string) []string {
-	return EnsureDefaultModelAndEffortWithModel(args, profile.GetLatestGeminiModel())
+	return EnsureDefaultModelAndEffortWithOptions(args, profile.GetLatestGeminiModel(), profile.DefaultGeminiEffort)
 }
 
 // EnsureDefaultModelAndEffortWithModel ensures agyArgs has the specified model
 // and reasoning effort (high) if not explicitly provided by the user or subcommand.
 func EnsureDefaultModelAndEffortWithModel(args []string, defaultModel string) []string {
+	return EnsureDefaultModelAndEffortWithOptions(args, defaultModel, profile.DefaultGeminiEffort)
+}
+
+// EnsureDefaultModelAndEffortWithOptions ensures agyArgs has the specified default model and effort
+// while resolving aliases (auto/latest/flash/hydrogen/pro), preventing `--effort` conflicts when a
+// variant-suffixed model ID (e.g. "gemini-4-hydrogen-xhigh") is supplied, and clamping effort to model capabilities.
+func EnsureDefaultModelAndEffortWithOptions(args []string, defaultModel, defaultEffort string) []string {
 	if defaultModel == "" {
 		defaultModel = profile.GetLatestGeminiModel()
 	}
@@ -542,29 +539,38 @@ func EnsureDefaultModelAndEffortWithModel(args []string, defaultModel string) []
 	if !hasModel {
 		finalArgs = append(finalArgs, "--model", defaultModel)
 		modelValue = defaultModel
-	} else if modelValue == "auto" || modelValue == "latest" {
-		targetModel := profile.GetLatestGeminiModel()
+	} else if resolvedAlias := profile.ResolveModelAlias(modelValue); resolvedAlias != "" {
 		for i := 0; i < len(finalArgs); i++ {
 			if (finalArgs[i] == "-m" || finalArgs[i] == "--model") && i+1 < len(finalArgs) {
 				finalArgs[i] = "--model"
-				finalArgs[i+1] = targetModel
-				modelValue = targetModel
+				finalArgs[i+1] = resolvedAlias
+				modelValue = resolvedAlias
 				break
 			} else if strings.HasPrefix(finalArgs[i], "--model=") {
-				finalArgs[i] = "--model=" + targetModel
-				modelValue = targetModel
+				finalArgs[i] = "--model=" + resolvedAlias
+				modelValue = resolvedAlias
 				break
 			} else if strings.HasPrefix(finalArgs[i], "-m=") {
-				finalArgs[i] = "--model=" + targetModel
-				modelValue = targetModel
+				finalArgs[i] = "--model=" + resolvedAlias
+				modelValue = resolvedAlias
 				break
 			}
 		}
 	}
 
 	if !hasEffort {
-		if profile.ModelSupportsEffort(modelValue) {
-			finalArgs = append(finalArgs, "--effort", "high")
+		baseModel, embeddedEffort := profile.SplitModelAndEffort(modelValue)
+		// Never inject --effort when the model ID/name already encodes an effort variant (e.g. gemini-4-hydrogen-xhigh),
+		// since agy rejects `--model <variant> --effort <other>` as a conflict.
+		if embeddedEffort == "" && profile.ModelSupportsEffort(baseModel) {
+			targetEffort := strings.TrimSpace(defaultEffort)
+			if targetEffort == "" {
+				targetEffort = profile.DefaultGeminiEffort
+			}
+			targetEffort = profile.ClampEffortForModel(baseModel, targetEffort)
+			if targetEffort != "" {
+				finalArgs = append(finalArgs, "--effort", targetEffort)
+			}
 		}
 	}
 
@@ -580,26 +586,63 @@ func EnsureDefaultModelAndEffortWithModel(args []string, defaultModel string) []
 	return finalArgs
 }
 
+func extractResumeFlag(args []string) (isResume bool, explicitConvID string) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		if strings.HasPrefix(arg, "--conversation=") {
+			return true, strings.TrimPrefix(arg, "--conversation=")
+		}
+		if strings.HasPrefix(arg, "--resume=") {
+			return true, strings.TrimPrefix(arg, "--resume=")
+		}
+		if strings.HasPrefix(arg, "-r=") {
+			return true, strings.TrimPrefix(arg, "-r=")
+		}
+		if (arg == "--conversation" || arg == "--resume" || arg == "-r") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			return true, args[i+1]
+		}
+		if arg == "-c" || arg == "--continue" || arg == "-r" || arg == "--resume" {
+			return true, ""
+		}
+	}
+	return false, ""
+}
+
+func filterPreservedSessionFlags(args []string) []string {
+	var preserved []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "--conversation=") || strings.HasPrefix(arg, "--resume=") || strings.HasPrefix(arg, "-r=") {
+			continue
+		}
+		if arg == "--conversation" || arg == "--resume" || arg == "-r" {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++ // skip conversation ID
+			}
+			continue
+		}
+		if arg == "-c" || arg == "--continue" {
+			continue
+		}
+		preserved = append(preserved, arg)
+	}
+	return preserved
+}
+
 func resolveResumeProfile(profileName string, agyArgs []string, workingDir ...string) (string, []string, error) {
 	var detectedProfile string
 	var detectedConvID string
 	var detectErr error
 
-	for i := 0; i < len(agyArgs); i++ {
-		arg := agyArgs[i]
-		if (arg == "--conversation" || arg == "--resume") && i+1 < len(agyArgs) {
-			detectedConvID = agyArgs[i+1]
+	isResume, explicitConvID := extractResumeFlag(agyArgs)
+	if isResume {
+		if explicitConvID != "" {
+			detectedConvID = explicitConvID
 			detectedProfile, detectErr = profile.FindProfileByConversation(detectedConvID)
-			break
-		} else if strings.HasPrefix(arg, "--conversation=") {
-			detectedConvID = strings.TrimPrefix(arg, "--conversation=")
-			detectedProfile, detectErr = profile.FindProfileByConversation(detectedConvID)
-			break
-		} else if strings.HasPrefix(arg, "--resume=") {
-			detectedConvID = strings.TrimPrefix(arg, "--resume=")
-			detectedProfile, detectErr = profile.FindProfileByConversation(detectedConvID)
-			break
-		} else if arg == "-c" || arg == "--continue" || arg == "-r" || arg == "--resume" {
+		} else {
 			targetDir := ""
 			if len(workingDir) > 0 && workingDir[0] != "" {
 				targetDir = workingDir[0]
@@ -607,7 +650,6 @@ func resolveResumeProfile(profileName string, agyArgs []string, workingDir ...st
 				targetDir, _ = os.Getwd()
 			}
 			detectedProfile, detectedConvID, detectErr = profile.FindProfileAndConvByLatestConversationInWorkspace(targetDir)
-			break
 		}
 	}
 
@@ -643,7 +685,10 @@ func normalizeResumeArgs(args []string, convID string) []string {
 		if strings.HasPrefix(arg, "--resume=") {
 			id := strings.TrimPrefix(arg, "--resume=")
 			normalized = append(normalized, "--conversation="+id)
-		} else if arg == "--resume" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+		} else if strings.HasPrefix(arg, "-r=") {
+			id := strings.TrimPrefix(arg, "-r=")
+			normalized = append(normalized, "--conversation="+id)
+		} else if (arg == "--resume" || arg == "-r") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 			normalized = append(normalized, "--conversation", args[i+1])
 			i++
 		} else if arg == "-r" || arg == "--resume" {

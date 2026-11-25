@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/quaywin/agys/pkg/profile"
@@ -13,7 +14,7 @@ var refreshModelsFlag bool
 var modelsCmd = &cobra.Command{
 	Use:   "models",
 	Short: "List and auto-detect available AI models from agy",
-	Long:  "Query agy models, detect the highest Flash and Pro models, and display the cached discovery state.",
+	Long:  "Query agy models, detect the highest Flash, Hydrogen flagship, and Pro models along with supported reasoning efforts, and display the cached discovery state.",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var dm *profile.DiscoveredModels
@@ -35,11 +36,14 @@ var modelsCmd = &cobra.Command{
 		}
 
 		fmt.Fprintf(out, "Detected Highest Models:\n")
-		fmt.Fprintf(out, "  • Flash (Default): \033[1;32m%s\033[0m\n", dm.LatestFlash)
-		if dm.LatestPro != "" {
-			fmt.Fprintf(out, "  • Pro:             \033[1;36m%s\033[0m\n", dm.LatestPro)
+		fmt.Fprintf(out, "  • Flash (Default):     \033[1;32m%s\033[0m\n", dm.LatestFlash)
+		if dm.LatestHydrogen != "" {
+			fmt.Fprintf(out, "  • Flagship (Hydrogen): \033[1;35m%s\033[0m\n", dm.LatestHydrogen)
 		}
-		fmt.Fprintf(out, "  • Cache Updated:   %s\n\n", dm.FetchedAt.Format(time.RFC3339))
+		if dm.LatestPro != "" {
+			fmt.Fprintf(out, "  • Pro:                 \033[1;36m%s\033[0m\n", dm.LatestPro)
+		}
+		fmt.Fprintf(out, "  • Cache Updated:       %s\n\n", dm.FetchedAt.Format(time.RFC3339))
 
 		if len(dm.AllModels) > 0 {
 			fmt.Fprintln(out, "Available Base Models:")
@@ -47,10 +51,20 @@ var modelsCmd = &cobra.Command{
 				tag := ""
 				if m == dm.LatestFlash {
 					tag = " \033[1;32m(Highest Flash / Default)\033[0m"
-				} else if m == dm.LatestPro {
+				} else if m == dm.LatestHydrogen && dm.LatestHydrogen != "" {
+					tag = " \033[1;35m(Highest Flagship / Hydrogen)\033[0m"
+				} else if m == dm.LatestPro && dm.LatestPro != "" {
 					tag = " \033[1;36m(Highest Pro)\033[0m"
 				}
-				fmt.Fprintf(out, "  ● %-24s%s\n", m, tag)
+				effortsStr := ""
+				if efforts := dm.ModelEfforts[m]; len(efforts) > 0 {
+					effortsStr = fmt.Sprintf(" \033[90m[%s]\033[0m", strings.Join(efforts, ", "))
+				}
+				if effortsStr == "" && tag == "" {
+					fmt.Fprintf(out, "  ● %s\n", m)
+				} else {
+					fmt.Fprintf(out, "  ● %-24s%s%s\n", m, effortsStr, tag)
+				}
 			}
 		}
 

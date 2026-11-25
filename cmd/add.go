@@ -34,6 +34,7 @@ var addCmd = &cobra.Command{
 			_ = profile.EnsureKeychain(createdDir)
 			_ = profile.SyncHerdrIntegration(createdDir)
 			_ = profile.EnsureGitConfig(createdDir)
+			_ = profile.EnsureGlobalSkills(createdDir)
 			_ = profile.EnsureOnboardingCompleted(createdDir)
 		} else {
 			var createErr error

@@ -97,6 +97,7 @@ func runDoctor(ctx context.Context) error {
 		issues++
 	} else {
 		_ = profile.SyncAllProfilesGitConfig()
+		_ = profile.SyncAllProfilesGlobalSkills()
 		currentProf, _ := profile.GetCurrent()
 		fmt.Printf("\n\033[1;34m● Sandboxed Profiles (%d configured)\033[0m\n", len(profiles))
 
@@ -178,16 +179,37 @@ func runDoctor(ctx context.Context) error {
 					fmt.Printf("    - Git Config: Present (isolated)\n")
 				}
 			}
+
+			// Global cross-tool skills (~/.agents/skills) check
+			pGlobalSkills := filepath.Join(pDir, ".agents", "skills")
+			if info, lErr := os.Lstat(pGlobalSkills); lErr == nil {
+				if info.Mode()&os.ModeSymlink != 0 {
+					fmt.Printf("    - Global Skills: Linked (~/.agents/skills)\n")
+				} else {
+					fmt.Printf("    - Global Skills: Present (isolated)\n")
+				}
+			}
 		}
 	}
 
 	// 4. Customizations & Model Discovery Check
 	fmt.Printf("\n\033[1;34m● Model Catalog & Discovery\033[0m\n")
 	dm := profile.GetOrRefreshModels()
-	if dm != nil && (dm.LatestFlash != "" || dm.LatestPro != "") {
-		fmt.Printf("  \033[1;32m✓\033[0m Discovered Flash: %s\n", dm.LatestFlash)
-		fmt.Printf("  \033[1;32m✓\033[0m Discovered Pro:   %s\n", dm.LatestPro)
-		fmt.Printf("  \033[1;32m✓\033[0m Cache timestamp:  %s\n", dm.FetchedAt.Format(time.RFC3339))
+	if dm != nil && (dm.LatestFlash != "" || dm.LatestHydrogen != "" || dm.LatestPro != "") {
+		if dm.LatestFlash != "" {
+			fmt.Printf("  \033[1;32m✓\033[0m Discovered Flash:    %s\n", dm.LatestFlash)
+		}
+		if dm.LatestHydrogen != "" {
+			effSuffix := ""
+			if effs := dm.ModelEfforts[dm.LatestHydrogen]; len(effs) > 0 {
+				effSuffix = fmt.Sprintf(" [%s]", strings.Join(effs, ", "))
+			}
+			fmt.Printf("  \033[1;32m✓\033[0m Discovered Flagship: %s%s\n", dm.LatestHydrogen, effSuffix)
+		}
+		if dm.LatestPro != "" {
+			fmt.Printf("  \033[1;32m✓\033[0m Discovered Pro:      %s\n", dm.LatestPro)
+		}
+		fmt.Printf("  \033[1;32m✓\033[0m Cache timestamp:     %s\n", dm.FetchedAt.Format(time.RFC3339))
 	} else {
 		fmt.Printf("  \033[1;33m!\033[0m Model cache empty. Run 'agys models -r' to discover available models from agy.\n")
 		warnings++

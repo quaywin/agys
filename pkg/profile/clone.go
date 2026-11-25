@@ -44,6 +44,7 @@ func Clone(srcName, dstName string) error {
 	_ = os.Remove(filepath.Join(dstDir, projectIDFilename))
 	_ = SyncHerdrIntegration(dstDir)
 	_ = EnsureGitConfig(dstDir)
+	_ = EnsureGlobalSkills(dstDir)
 	return nil
 }
 

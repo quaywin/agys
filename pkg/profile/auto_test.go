@@ -115,6 +115,33 @@ func TestCalculate5HQuotaScore(t *testing.T) {
 		}
 	})
 
+	t.Run("fallback to Gemini weekly before 3P 5h when Gemini has no 5h bucket", func(t *testing.T) {
+		summary := &QuotaSummary{
+			Groups: []QuotaGroup{
+				{
+					DisplayName: "Gemini Models",
+					Description: "Models within this group: Gemini 3.8 Flash",
+					Buckets: []QuotaBucket{
+						{BucketID: "gemini-weekly", Window: "weekly", RemainingFraction: 1.0},
+					},
+				},
+				{
+					DisplayName: "Claude and GPT models",
+					Description: "Models within this group: Claude Sonnet 4.6",
+					Buckets: []QuotaBucket{
+						{BucketID: "3p-5h", Window: "5h", RemainingFraction: 0.20},
+						{BucketID: "3p-weekly", Window: "weekly", RemainingFraction: 0.30},
+					},
+				},
+			},
+		}
+
+		score := Calculate5HQuotaScore(summary)
+		if score != 1.0 {
+			t.Errorf("expected Gemini weekly fallback score 1.0 instead of Claude 3p-5h 0.20, got %f", score)
+		}
+	})
+
 	t.Run("empty buckets across all groups", func(t *testing.T) {
 		summary := &QuotaSummary{
 			Groups: []QuotaGroup{

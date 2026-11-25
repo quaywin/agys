@@ -11,9 +11,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 )
@@ -23,11 +26,102 @@ var httpClient = &http.Client{
 }
 
 const (
-	projectIDFilename  = "project_id"
-	emailFilename      = "email"
-	quotaCacheFilename = "quota_cache.json"
-	oauthTokenURL      = "https://oauth2.googleapis.com/token"
+	projectIDFilename               = "project_id"
+	emailFilename                   = "email"
+	quotaCacheFilename              = "quota_cache.json"
+	oauthTokenURL                   = "https://oauth2.googleapis.com/token"
+	minAntigravityQuotaClientVer    = "2.35.0"
 )
+
+var (
+	antigravityUAOnce sync.Once
+	antigravityUA     string
+)
+
+// compareSimpleVersions compares dotted numeric version strings (e.g. "2.35.0" vs "2.34.0").
+// Returns 1 if a > b, -1 if a < b, 0 if equal.
+func compareSimpleVersions(a, b string) int {
+	pa := strings.Split(strings.TrimPrefix(strings.TrimSpace(a), "v"), ".")
+	pb := strings.Split(strings.TrimPrefix(strings.TrimSpace(b), "v"), ".")
+	n := len(pa)
+	if len(pb) > n {
+		n = len(pb)
+	}
+	for i := 0; i < n; i++ {
+		var va, vb int
+		if i < len(pa) {
+			va, _ = strconv.Atoi(strings.SplitN(pa[i], "-", 2)[0])
+		}
+		if i < len(pb) {
+			vb, _ = strconv.Atoi(strings.SplitN(pb[i], "-", 2)[0])
+		}
+		if va > vb {
+			return 1
+		}
+		if va < vb {
+			return -1
+		}
+	}
+	return 0
+}
+
+// getAntigravityUserAgent returns an Antigravity client User-Agent >= 2.35.0 so that
+// Cloud Code's retrieveUserQuotaSummary returns all quota groups including Gemini Models.
+func getAntigravityUserAgent() string {
+	antigravityUAOnce.Do(func() {
+		ver := minAntigravityQuotaClientVer
+		if runtime.GOOS == "darwin" {
+			for _, plist := range []string{
+				"/Applications/Antigravity.app/Contents/Info.plist",
+				"/Applications/Antigravity IDE.app/Contents/Info.plist",
+			} {
+				if _, err := os.Stat(plist); err == nil {
+					if out, err := exec.Command("defaults", "read", plist, "CFBundleShortVersionString").Output(); err == nil {
+						installed := strings.TrimSpace(string(out))
+						if installed != "" && compareSimpleVersions(installed, ver) > 0 {
+							ver = installed
+						}
+					}
+				}
+			}
+		}
+		antigravityUA = fmt.Sprintf("antigravity/%s %s/%s", ver, runtime.GOOS, runtime.GOARCH)
+	})
+	return antigravityUA
+}
+
+// classifyQuotaKeyWindow classifies an identifier/label/window string into 5h or weekly quota window.
+func classifyQuotaKeyWindow(fields ...string) (is5H bool, isWeekly bool) {
+	for _, f := range fields {
+		s := strings.ToLower(strings.TrimSpace(f))
+		if s == "" {
+			continue
+		}
+		if strings.Contains(s, "week") || strings.Contains(s, "7d") {
+			isWeekly = true
+		}
+		if strings.Contains(s, "5h") || strings.Contains(s, "5-hour") || strings.Contains(s, "5_hour") ||
+			strings.Contains(s, "five_hour") || strings.Contains(s, "five-hour") || strings.Contains(s, "five hour") {
+			is5H = true
+		}
+	}
+	if isWeekly {
+		is5H = false
+	}
+	return is5H, isWeekly
+}
+
+// classifyQuotaGroup determines whether a QuotaGroup tracks 3P (Claude/GPT) or Gemini quota.
+func classifyQuotaGroup(group *QuotaGroup) (isGroup3P bool, isGroupGemini bool) {
+	if group == nil {
+		return false, false
+	}
+	gName := strings.ToLower(strings.TrimSpace(group.DisplayName))
+	gDesc := strings.ToLower(strings.TrimSpace(group.Description))
+	isGroup3P = Is3PModel(gName) || Is3PModel(gDesc) || strings.Contains(gName, "3p") || strings.Contains(gDesc, "3p")
+	isGroupGemini = !isGroup3P && (IsGeminiModel(gName) || IsGeminiModel(gDesc))
+	return isGroup3P, isGroupGemini
+}
 
 // CachedProfileQuota stores cached user quota summary with a timestamp.
 type CachedProfileQuota struct {
@@ -82,37 +176,72 @@ func UpdateCachedQuotaFractions(profileName, modelName string, details *ModelQuo
 		}
 	}
 
-	mLower := strings.ToLower(strings.TrimSpace(modelName))
-	is3P := strings.Contains(mLower, "claude") || strings.Contains(mLower, "sonnet") || strings.Contains(mLower, "opus") ||
-		strings.Contains(mLower, "gpt") || strings.Contains(mLower, "openai") || strings.HasPrefix(mLower, "o1") || strings.HasPrefix(mLower, "o3")
-
+	is3P := Is3PModel(modelName)
+	targetIdx := -1
 	for i := range summary.Groups {
-		group := &summary.Groups[i]
-		gName := strings.ToLower(group.DisplayName)
-		isGroup3P := strings.Contains(gName, "claude") || strings.Contains(gName, "gpt") || strings.Contains(gName, "3p")
-
-		if (is3P && isGroup3P) || (!is3P && !isGroup3P) {
-			for j := range group.Buckets {
-				b := &group.Buckets[j]
-				w := strings.ToLower(b.Window)
-				d := strings.ToLower(b.DisplayName)
-				id := strings.ToLower(b.BucketID)
-
-				if (strings.Contains(w, "5h") || strings.Contains(d, "5h") || strings.Contains(id, "5h")) && details.Fraction5H >= 0 {
-					b.RemainingFraction = details.Fraction5H
-					if !details.ResetTime5H.IsZero() {
-						b.ResetTime = details.ResetTime5H
-					}
-				}
-				if (strings.Contains(w, "week") || strings.Contains(d, "week") || strings.Contains(id, "week") || strings.Contains(w, "7d")) && details.FractionWeekly >= 0 {
-					b.RemainingFraction = details.FractionWeekly
-					if !details.ResetTimeWeekly.IsZero() {
-						b.ResetTime = details.ResetTimeWeekly
-					}
-				}
+		isGroup3P, _ := classifyQuotaGroup(&summary.Groups[i])
+		if is3P == isGroup3P {
+			targetIdx = i
+			if details.GroupName != "" && strings.EqualFold(summary.Groups[i].DisplayName, details.GroupName) {
+				break
 			}
-			break
 		}
+	}
+
+	if targetIdx == -1 {
+		dispName := "Gemini Models"
+		if is3P {
+			dispName = "Claude and GPT models"
+		}
+		summary.Groups = append(summary.Groups, QuotaGroup{
+			DisplayName: dispName,
+		})
+		targetIdx = len(summary.Groups) - 1
+	}
+
+	group := &summary.Groups[targetIdx]
+	updated5H, updatedWeekly := false, false
+	for j := range group.Buckets {
+		b := &group.Buckets[j]
+		is5H, isWeekly := classifyQuotaKeyWindow(b.Window, b.DisplayName, b.BucketID)
+		if is5H && details.Fraction5H >= 0 {
+			b.RemainingFraction = details.Fraction5H
+			if !details.ResetTime5H.IsZero() {
+				b.ResetTime = details.ResetTime5H
+			}
+			updated5H = true
+		}
+		if isWeekly && details.FractionWeekly >= 0 {
+			b.RemainingFraction = details.FractionWeekly
+			if !details.ResetTimeWeekly.IsZero() {
+				b.ResetTime = details.ResetTimeWeekly
+			}
+			updatedWeekly = true
+		}
+	}
+	if !updated5H && details.Fraction5H >= 0 {
+		prefix := "gemini"
+		if is3P {
+			prefix = "3p"
+		}
+		group.Buckets = append(group.Buckets, QuotaBucket{
+			BucketID:          prefix + "-5h",
+			Window:            "5h",
+			RemainingFraction: details.Fraction5H,
+			ResetTime:         details.ResetTime5H,
+		})
+	}
+	if !updatedWeekly && details.FractionWeekly >= 0 {
+		prefix := "gemini"
+		if is3P {
+			prefix = "3p"
+		}
+		group.Buckets = append(group.Buckets, QuotaBucket{
+			BucketID:          prefix + "-weekly",
+			Window:            "weekly",
+			RemainingFraction: details.FractionWeekly,
+			ResetTime:         details.ResetTimeWeekly,
+		})
 	}
 
 	return SaveCachedQuota(profileName, summary)
@@ -239,7 +368,7 @@ func FetchProfileEmail(ctx context.Context, profileName string) (string, error) 
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+token.Token.AccessToken)
-	req.Header.Set("User-Agent", "antigravity/1.11.9 darwin/arm64")
+	req.Header.Set("User-Agent", getAntigravityUserAgent())
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -591,54 +720,83 @@ func ExtractModelQuotaDetails(summary *QuotaSummary, modelName string) *ModelQuo
 		return nil
 	}
 
-	mLower := strings.ToLower(strings.TrimSpace(modelName))
+	mBase, _ := SplitModelAndEffort(modelName)
+	mLower := strings.ToLower(strings.TrimSpace(mBase))
+	if mLower == "" {
+		mLower = strings.ToLower(strings.TrimSpace(modelName))
+	}
 
 	details := &ModelQuotaDetails{
 		Fraction5H:     -1.0,
 		FractionWeekly: -1.0,
 	}
 
-	// 1. Dynamic pass: find the best matching group
+	is3P := Is3PModel(mLower)
+	isExplicitGemini := !is3P && (IsGeminiModel(mLower) || IsOrchestratorModel(mLower))
+
+	// 1. Dynamic pass: score groups by specificity within the requested model family
+	// so dedicated model groups beat generic matches and 3P vs Gemini quotas never cross-bleed.
 	var matchedGroup *QuotaGroup
+	bestScore := 0
+	ambiguous := map[string]bool{"pro": true, "max": true, "api": true, "all": true, "new": true, "old": true}
 	for i := range summary.Groups {
 		group := &summary.Groups[i]
 		gName := strings.ToLower(strings.TrimSpace(group.DisplayName))
 		gDesc := strings.ToLower(strings.TrimSpace(group.Description))
+		groupIs3P, groupIsGemini := classifyQuotaGroup(group)
 
-		isGroupMatch := false
+		score := 0
 		if mLower != "" && mLower != "auto" {
-			isOpenAI := strings.Contains(mLower, "gpt") || strings.Contains(mLower, "openai") || strings.HasPrefix(mLower, "o1") || strings.HasPrefix(mLower, "o3") || strings.HasPrefix(mLower, "o4")
-			isClaude := strings.Contains(mLower, "claude") || strings.Contains(mLower, "sonnet") || strings.Contains(mLower, "opus") || strings.Contains(mLower, "haiku") || strings.Contains(mLower, "anthropic")
+			if is3P && !groupIs3P {
+				continue
+			}
+			if isExplicitGemini && groupIs3P {
+				continue
+			}
 
-			if isClaude && (strings.Contains(gName, "claude") || strings.Contains(gDesc, "claude") || strings.Contains(gName, "3p")) {
-				isGroupMatch = true
-			} else if isOpenAI && (strings.Contains(gName, "gpt") || strings.Contains(gDesc, "gpt") || strings.Contains(gName, "openai") || strings.Contains(gName, "3p")) {
-				isGroupMatch = true
-			} else if strings.Contains(gDesc, mLower) || strings.Contains(gName, mLower) {
-				isGroupMatch = true
+			if is3P && groupIs3P {
+				score = 60
+			} else if isExplicitGemini {
+				if groupIsGemini {
+					score = 50
+					if IsOrchestratorModel(mLower) && (strings.Contains(gName, "hydrogen") || strings.Contains(gDesc, "hydrogen")) {
+						score = 60
+					}
+				} else if !groupIs3P {
+					score = 20
+				}
+			}
+
+			if strings.Contains(gDesc, mLower) || strings.Contains(gName, mLower) {
+				if 100 > score {
+					score = 100
+				}
 			} else {
-				// Ambiguous short tokens that appear in many unrelated quota group descriptions
-				ambiguous := map[string]bool{"pro": true, "max": true, "api": true, "all": true, "new": true, "old": true}
 				words := strings.FieldsFunc(mLower, func(r rune) bool {
 					return r == '-' || r == '_' || r == '.' || r == ' ' || r == '/'
 				})
 				for _, w := range words {
 					if len(w) >= 5 && !ambiguous[w] && (strings.Contains(gDesc, w) || strings.Contains(gName, w)) {
-						isGroupMatch = true
-						break
+						tokenScore := 80
+						if w == "gemini" {
+							tokenScore = 50
+						}
+						if tokenScore > score {
+							score = tokenScore
+						}
 					}
 				}
 			}
 		} else {
 			// If no model or "auto" specified, match default Gemini group
-			if strings.Contains(gName, "gemini") || strings.Contains(gDesc, "gemini") {
-				isGroupMatch = true
+			if groupIsGemini {
+				score = 50
 			}
 		}
 
-		if isGroupMatch {
+		if score > bestScore {
+			bestScore = score
 			matchedGroup = group
-			break
 		}
 	}
 
@@ -646,16 +804,14 @@ func ExtractModelQuotaDetails(summary *QuotaSummary, modelName string) *ModelQuo
 	if matchedGroup != nil {
 		details.GroupName = matchedGroup.DisplayName
 		for _, bucket := range matchedGroup.Buckets {
-			w := strings.ToLower(strings.TrimSpace(bucket.Window))
-			d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
-			b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
+			is5H, isWeekly := classifyQuotaKeyWindow(bucket.Window, bucket.DisplayName, bucket.BucketID)
 
-			if details.Fraction5H < 0 && (w == "5h" || strings.Contains(w, "5h") || strings.Contains(d, "5h") || strings.Contains(b, "5h")) {
+			if details.Fraction5H < 0 && is5H {
 				details.Fraction5H = bucket.RemainingFraction
 				details.ResetTime5H = bucket.ResetTime
 				details.ResetStr5H = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
 			}
-			if details.FractionWeekly < 0 && (strings.Contains(w, "week") || strings.Contains(w, "7d") || strings.Contains(d, "week") || strings.Contains(b, "week")) {
+			if details.FractionWeekly < 0 && isWeekly {
 				details.FractionWeekly = bucket.RemainingFraction
 				details.ResetTimeWeekly = bucket.ResetTime
 				details.ResetStrWeekly = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
@@ -663,49 +819,58 @@ func ExtractModelQuotaDetails(summary *QuotaSummary, modelName string) *ModelQuo
 		}
 	}
 
-	// 3. Fallbacks for 5H if missing in matched group
-	if details.Fraction5H < 0 {
-		for _, group := range summary.Groups {
-			for _, bucket := range group.Buckets {
-				w := strings.ToLower(strings.TrimSpace(bucket.Window))
-				d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
-				b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
+	groupAllowed := func(group *QuotaGroup) bool {
+		groupIs3P, _ := classifyQuotaGroup(group)
+		if is3P {
+			return groupIs3P
+		}
+		if isExplicitGemini {
+			return !groupIs3P
+		}
+		return true
+	}
 
-				if w == "5h" || strings.Contains(w, "5h") || strings.Contains(d, "5h") || strings.Contains(b, "5h") {
+	// 3. Family-scoped fallbacks if a window is missing in the primary matched group
+	fillMissingFromGroups := func(onlyFamily bool) {
+		for i := range summary.Groups {
+			group := &summary.Groups[i]
+			if onlyFamily && !groupAllowed(group) {
+				continue
+			}
+			for _, bucket := range group.Buckets {
+				is5H, isWeekly := classifyQuotaKeyWindow(bucket.Window, bucket.DisplayName, bucket.BucketID)
+				if details.Fraction5H < 0 && is5H {
 					details.Fraction5H = bucket.RemainingFraction
 					details.ResetTime5H = bucket.ResetTime
 					details.ResetStr5H = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
 					if details.GroupName == "" {
 						details.GroupName = group.DisplayName
 					}
-					break
 				}
-			}
-			if details.Fraction5H >= 0 {
-				break
+				if details.FractionWeekly < 0 && isWeekly {
+					details.FractionWeekly = bucket.RemainingFraction
+					details.ResetTimeWeekly = bucket.ResetTime
+					details.ResetStrWeekly = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
+					if details.GroupName == "" {
+						details.GroupName = group.DisplayName
+					}
+				}
 			}
 		}
 	}
 
-	// 4. Fallbacks for Weekly if missing in matched group
-	if details.FractionWeekly < 0 {
-		for _, group := range summary.Groups {
-			for _, bucket := range group.Buckets {
-				w := strings.ToLower(strings.TrimSpace(bucket.Window))
-				d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
-				b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
-
-				if strings.Contains(w, "week") || strings.Contains(w, "7d") || strings.Contains(d, "week") || strings.Contains(b, "week") {
-					details.FractionWeekly = bucket.RemainingFraction
-					details.ResetTimeWeekly = bucket.ResetTime
-					details.ResetStrWeekly = FormatResetTime(bucket.ResetTime, bucket.RemainingFraction)
-					break
-				}
-			}
-			if details.FractionWeekly >= 0 {
-				break
-			}
-		}
+	if details.Fraction5H < 0 || details.FractionWeekly < 0 {
+		fillMissingFromGroups(true)
+	}
+	// Only fall back across families when caller gave no explicit/auto model family
+	if details.Fraction5H < 0 && details.FractionWeekly < 0 && !is3P && !isExplicitGemini {
+		fillMissingFromGroups(false)
+	}
+	// When an account reports full 100% weekly quota without a separate 5h bucket yet
+	// (e.g. fresh Gemini profiles before first 5h consumption), reflect 100% 5H with no reset timer.
+	if details.Fraction5H < 0 && details.FractionWeekly >= 1.0 {
+		details.Fraction5H = 1.0
+		details.ResetStr5H = "-"
 	}
 
 	if details.Fraction5H < 0 && details.FractionWeekly < 0 {
@@ -782,7 +947,7 @@ func loadCodeAssist(ctx context.Context, accessToken string) (string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/1.11.9 darwin/arm64")
+	req.Header.Set("User-Agent", getAntigravityUserAgent())
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -826,7 +991,7 @@ func retrieveUserQuotaSummary(ctx context.Context, accessToken, projectID string
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/1.11.9 darwin/arm64")
+	req.Header.Set("User-Agent", getAntigravityUserAgent())
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -998,15 +1163,15 @@ func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile st
 				}
 			}
 
-			// Second pass: substring match
+			// Second pass: semantic match across Window, DisplayName, and BucketID
 			if b5h == nil || bWeekly == nil {
 				for i := range group.Buckets {
 					b := &group.Buckets[i]
-					winLower := strings.ToLower(b.Window)
-					if b5h == nil && (strings.Contains(winLower, "5h") || strings.Contains(winLower, "5-hour")) {
+					is5H, isWeekly := classifyQuotaKeyWindow(b.Window, b.DisplayName, b.BucketID)
+					if b5h == nil && is5H {
 						b5h = b
 					}
-					if bWeekly == nil && strings.Contains(winLower, "week") {
+					if bWeekly == nil && isWeekly {
 						bWeekly = b
 					}
 				}
@@ -1020,13 +1185,14 @@ func RenderQuotaTable(w io.Writer, results []ProfileQuotaInfo, currentProfile st
 				}
 			}
 
-			// Fourth pass: cross-fallback if only one window type is available (e.g. brand new account with only weekly limit)
+			// Fourth pass: only mirror a missing window when the available bucket is 100% full
+			// (e.g. fresh accounts with only weekly=1.0), avoiding misleading non-100% cross-window values.
 			isFallback5h := false
 			isFallbackWeekly := false
-			if b5h == nil && bWeekly != nil {
+			if b5h == nil && bWeekly != nil && bWeekly.RemainingFraction >= 1.0 {
 				b5h = bWeekly
 				isFallback5h = true
-			} else if bWeekly == nil && b5h != nil {
+			} else if bWeekly == nil && b5h != nil && b5h.RemainingFraction >= 1.0 {
 				bWeekly = b5h
 				isFallbackWeekly = true
 			}

@@ -88,12 +88,13 @@ func ReadSettingsModel(profileDir string) string {
 	return latestModel
 }
 
-// SyncModelToSettings updates the "model" field in settings.json to match the active model,
-// preventing startup flicker where the previous model is shown for a few seconds.
+// SyncModelToSettings updates the "model" field in settings.json to match the active model (and effort variant),
+// preventing startup flicker and avoiding stale downgrades such as overwriting XHigh with base IDs.
 func SyncModelToSettings(profileDir, modelName string) {
 	if profileDir == "" || modelName == "" {
 		return
 	}
+	targetBase, targetEffort := SplitModelAndEffort(modelName)
 	candidatePaths := []string{
 		filepath.Join(profileDir, ".gemini", "antigravity-cli", "settings.json"),
 		filepath.Join(profileDir, ".gemini", "antigravity", "settings.json"),
@@ -109,8 +110,12 @@ func SyncModelToSettings(profileDir, modelName string) {
 			continue
 		}
 		currModel, _ := settings["model"].(string)
-		if NormalizeModelName(currModel) == NormalizeModelName(modelName) {
-			continue
+		currBase, currEffort := SplitModelAndEffort(currModel)
+		if currBase == targetBase {
+			// Skip if effort matches, or if incoming modelName has no explicit effort and current settings already tracks one
+			if currEffort == targetEffort || (targetEffort == "" && currEffort != "") {
+				continue
+			}
 		}
 		settings["model"] = modelName
 		out, err := json.MarshalIndent(settings, "", "  ")
@@ -120,102 +125,90 @@ func SyncModelToSettings(profileDir, modelName string) {
 	}
 }
 
-// NormalizeModelName converts a display name (e.g. "Claude Opus 4.6 (Thinking)", "Gemini 2.5 Pro")
-// into a lowercase, hyphenated API-style ID (e.g. "claude-opus-4", "gemini-2.5-pro").
-// If the name is already in API format, it is returned as-is (lowercased).
+// NormalizeModelName converts a display name (e.g. "Claude Opus 4.6 (Thinking)", "Gemini 4 Hydrogen (XHigh)")
+// or effort-suffixed API ID (e.g. "gemini-4-hydrogen-xhigh") into a lowercase, hyphenated base API ID
+// (e.g. "claude-opus-4-6-thinking", "gemini-4-hydrogen").
 func NormalizeModelName(displayName string) string {
-	name := strings.TrimSpace(displayName)
-	if name == "" {
-		return ""
-	}
-
-	// Direct map for known special agy models
-	lowerRaw := strings.ToLower(displayName)
-	if strings.Contains(lowerRaw, "claude") {
-		if strings.Contains(lowerRaw, "opus") && (strings.Contains(lowerRaw, "4.6") || strings.Contains(lowerRaw, "4-6")) {
-			return "claude-opus-4-6-thinking"
-		}
-		if strings.Contains(lowerRaw, "sonnet") && (strings.Contains(lowerRaw, "4.6") || strings.Contains(lowerRaw, "4-6")) {
-			return "claude-sonnet-4-6"
-		}
-	}
-	if strings.Contains(lowerRaw, "gpt-oss") || strings.Contains(lowerRaw, "gpt oss") {
-		return "gpt-oss-120b"
-	}
-
-	// Strip parenthetical suffixes like "(Thinking)", "(Preview)", "(High)", "(Medium)", "(Low)", etc.
-	if idx := strings.Index(name, "("); idx > 0 {
-		name = strings.TrimSpace(name[:idx])
-	}
-
-	// Already looks like an API ID (lowercase with hyphens, no spaces)
-	lower := strings.ToLower(name)
-	if !strings.Contains(lower, " ") {
-		return lower
-	}
-
-	// Convert "Claude Opus 4" -> "claude-opus-4"
-	// Convert "Gemini 2.5 Pro" -> "gemini-2.5-pro"
-	parts := strings.Fields(lower)
-	result := strings.Join(parts, "-")
-
-	// Trim trailing minor version from model names (e.g. "4.0" -> "4") for cleaner matching
-	// but keep major.minor for models like "2.5" where it's part of the identity
-	// Heuristic: if the last part is a version like X.Y where X >= 3, drop .Y
-	if len(parts) > 0 {
-		last := parts[len(parts)-1]
-		if dotIdx := strings.Index(last, "."); dotIdx > 0 {
-			major := last[:dotIdx]
-			if len(major) > 0 && major[0] >= '3' && major[0] <= '9' {
-				result = strings.Join(parts[:len(parts)-1], "-") + "-" + major
-			}
-		}
-	}
-
-	return result
+	base, _ := SplitModelAndEffort(displayName)
+	return base
 }
 
-// ResolveActiveModel returns the active model for a profile: explicit arg > .active_model > settings.json > default latest Gemini.
-func ResolveActiveModel(profileDir, modelName string) string {
-	if modelName == "latest" || modelName == "auto" {
-		return GetLatestGeminiModel()
-	}
-	if modelName != "" && modelName != "gemini" {
-		return NormalizeModelName(modelName)
-	}
+// ResolveActiveModelAndEffort resolves both the canonical base model and effective reasoning effort for a profile.
+// Precedence: explicit CLI args > .active_model / .active_effort caches > settings.json > default latest Gemini.
+func ResolveActiveModelAndEffort(profileDir, explicitModel, explicitEffort string) (string, string) {
+	resolvedModel := ""
+	embeddedEffort := ""
 
-	var cachedModel string
-	if data, err := os.ReadFile(filepath.Join(profileDir, ".active_model")); err == nil {
-		if m := strings.TrimSpace(string(data)); m != "" && m != "auto" && m != "latest" && m != "gemini" {
-			cachedModel = NormalizeModelName(m)
+	trimmedModel := strings.TrimSpace(explicitModel)
+	if trimmedModel != "" && trimmedModel != "gemini" {
+		if aliasTarget := ResolveModelAlias(trimmedModel); aliasTarget != "" {
+			resolvedModel = aliasTarget
+		} else {
+			resolvedModel, embeddedEffort = SplitModelAndEffort(trimmedModel)
 		}
 	}
-	if cachedModel == "" {
-		if sModel := ReadSettingsModel(profileDir); sModel != "" && sModel != "auto" && sModel != "latest" && sModel != "gemini" {
-			cachedModel = NormalizeModelName(sModel)
+
+	if resolvedModel == "" && profileDir != "" {
+		if data, err := os.ReadFile(filepath.Join(profileDir, ".active_model")); err == nil {
+			if m := strings.TrimSpace(string(data)); m != "" && m != "auto" && m != "latest" && m != "gemini" {
+				resolvedModel, embeddedEffort = SplitModelAndEffort(m)
+			}
+		}
+		if resolvedModel == "" {
+			if sModel := ReadSettingsModel(profileDir); sModel != "" && sModel != "auto" && sModel != "latest" && sModel != "gemini" {
+				resolvedModel, embeddedEffort = SplitModelAndEffort(sModel)
+			}
+		} else if embeddedEffort == "" {
+			// If .active_model only stored the base ID, check if settings.json carries an effort variant (e.g. "(XHigh)") for the same model
+			if sModel := ReadSettingsModel(profileDir); sModel != "" {
+				sBase, sEff := SplitModelAndEffort(sModel)
+				if sBase == resolvedModel && sEff != "" {
+					embeddedEffort = sEff
+				}
+			}
 		}
 	}
 
 	latestFlash := GetLatestGeminiModel()
-	if cachedModel != "" && cachedModel != "gemini" {
-		// If cached model is a Gemini Flash model (e.g. gemini-3.7-flash, gemini-3.6-flash),
-		// check if it is older than the discovered latest Flash model.
-		// If it is older, automatically upgrade it so profiles don't stay stuck on superseded models.
-		if vCached, ok := ExtractGeminiVersion(cachedModel); ok && strings.Contains(cachedModel, "flash") {
-			if vLatest, okLatest := ExtractGeminiVersion(latestFlash); okLatest {
-				if vLatest.GreaterThan(vCached) {
-					if profileDir != "" {
-						_ = WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(latestFlash), 0600)
-						SyncModelToSettings(profileDir, latestFlash)
+	if resolvedModel != "" && resolvedModel != "gemini" {
+		// Auto-upgrade superseded Gemini Flash models only when no explicit non-alias model was requested
+		if trimmedModel == "" || trimmedModel == "auto" || trimmedModel == "latest" || trimmedModel == "gemini" {
+			if vCached, ok := ExtractGeminiVersion(resolvedModel); ok && strings.Contains(resolvedModel, "flash") {
+				if vLatest, okLatest := ExtractGeminiVersion(latestFlash); okLatest {
+					if vLatest.GreaterThan(vCached) {
+						if profileDir != "" {
+							_ = WriteFileAtomic(filepath.Join(profileDir, ".active_model"), []byte(latestFlash), 0600)
+							SyncModelToSettings(profileDir, latestFlash)
+						}
+						resolvedModel = latestFlash
 					}
-					return latestFlash
 				}
 			}
 		}
-		return cachedModel
+	} else {
+		resolvedModel = latestFlash
 	}
 
-	return latestFlash
+	var resolvedEffort string
+	if strings.TrimSpace(explicitEffort) != "" {
+		resolvedEffort = strings.ToLower(strings.TrimSpace(explicitEffort))
+	} else {
+		modelInputForEffort := resolvedModel
+		if trimmedModel != "" && trimmedModel != "auto" && trimmedModel != "latest" && trimmedModel != "gemini" && trimmedModel != "flash" && trimmedModel != "hydrogen" && trimmedModel != "pro" {
+			modelInputForEffort = trimmedModel
+		} else if embeddedEffort != "" {
+			modelInputForEffort = FormatModelWithEffort(resolvedModel, embeddedEffort)
+		}
+		resolvedEffort = ResolveActiveEffort(profileDir, modelInputForEffort, "")
+	}
+
+	return resolvedModel, resolvedEffort
+}
+
+// ResolveActiveModel returns the active base model for a profile: explicit arg > .active_model > settings.json > default latest Gemini.
+func ResolveActiveModel(profileDir, modelName string) string {
+	model, _ := ResolveActiveModelAndEffort(profileDir, modelName, "")
+	return model
 }
 
 // resolveHerdrProfile resolves the active profile and its directory with pane and auto fallbacks.
@@ -381,10 +374,10 @@ func FormatModelAbbreviation(modelName, groupName string) string {
 		return false
 	}
 
-	if strings.Contains(m, "claude") || strings.Contains(m, "sonnet") || strings.Contains(m, "opus") || strings.Contains(m, "haiku") || strings.Contains(m, "anthropic") {
+	if IsClaudeModel(m) {
 		return "cld"
 	}
-	if strings.Contains(m, "gpt") || strings.Contains(m, "openai") || hasToken("o1") || hasToken("o3") || hasToken("o4") {
+	if IsOpenAIModel(m) {
 		return "gpt"
 	}
 	if strings.Contains(m, "deepseek") {
@@ -393,7 +386,10 @@ func FormatModelAbbreviation(modelName, groupName string) string {
 	if strings.Contains(m, "qwen") {
 		return "qwn"
 	}
-	if strings.Contains(m, "gemini") || hasToken("flash") || hasToken("pro") {
+	if IsOrchestratorModel(m) {
+		return "orc"
+	}
+	if IsGeminiModel(m) || hasToken("pro") {
 		return "gem"
 	}
 
@@ -401,7 +397,7 @@ func FormatModelAbbreviation(modelName, groupName string) string {
 	if strings.Contains(g, "claude") || strings.Contains(g, "3p") {
 		return "cld"
 	}
-	if strings.Contains(g, "gemini") {
+	if IsGeminiModel(g) {
 		return "gem"
 	}
 	if strings.Contains(g, "gpt") {
@@ -1075,7 +1071,8 @@ func reportHerdrMetadataInternal(ctx context.Context, profileName, modelName str
 			normPreload := NormalizeModelName(modelName)
 			if normTarget == normPreload {
 				matchesModel = true
-			} else if (normTarget == "" || strings.Contains(normTarget, "gemini")) && (normPreload == "" || strings.Contains(normPreload, "gemini")) {
+			} else if (normTarget == "" || IsGeminiModel(normTarget) || IsOrchestratorModel(normTarget)) &&
+				(normPreload == "" || IsGeminiModel(normPreload) || IsOrchestratorModel(normPreload)) {
 				matchesModel = true
 			}
 		}

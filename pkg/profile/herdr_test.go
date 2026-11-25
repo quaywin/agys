@@ -369,6 +369,11 @@ func TestFormatModelAbbreviation(t *testing.T) {
 	}{
 		{"gemini-2.5-pro", "Gemini Models", "gem"},
 		{"gemini-2.5-flash", "Gemini Models", "gem"},
+		{"gemini-4-hydrogen-xhigh", "Gemini Models", "gem"},
+		{"hydrogen", "", "gem"},
+		{"gemini-4-neon", "", "gem"},
+		{"Orchestrator", "Gemini Models", "orc"},
+		{"Orchestrator (Carbon)", "", "orc"},
 		{"claude-3-7-sonnet", "Claude and GPT models", "cld"},
 		{"claude-opus-4", "Claude and GPT models", "cld"},
 		{"gpt-4o", "Claude and GPT models", "gpt"},
@@ -403,6 +408,9 @@ func TestNormalizeModelName(t *testing.T) {
 		{"Gemini 3.8 Flash", "gemini-3.8-flash"},
 		{"Gemini 3.8 Flash (High)", "gemini-3.8-flash"},
 		{"Gemini 3.1 Pro (High)", "gemini-3.1-pro"},
+		{"Gemini 4 Hydrogen (XHigh)", "gemini-4-hydrogen"},
+		{"gemini-4-hydrogen-xhigh", "gemini-4-hydrogen"},
+		{"Orchestrator (Neon)", "orchestrator-neon"},
 		{"GPT 4o", "gpt-4o"},
 		{"GPT-OSS 120B (Medium)", "gpt-oss-120b"},
 		// Already API-style IDs
@@ -524,6 +532,18 @@ func TestResolveActiveModel(t *testing.T) {
 	upgradedData, _ := os.ReadFile(filepath.Join(tmpDir4, ".active_model"))
 	if string(upgradedData) != DefaultGeminiModel {
 		t.Errorf("Expected .active_model on disk to be upgraded to %q, got %q", DefaultGeminiModel, string(upgradedData))
+	}
+
+	// 8. Preserves Gemini 4 Hydrogen (XHigh) from settings.json even if .active_effort holds stale "high"
+	tmpDir5 := t.TempDir()
+	settingsDir5 := filepath.Join(tmpDir5, ".gemini", "antigravity-cli")
+	_ = os.MkdirAll(settingsDir5, 0700)
+	_ = os.WriteFile(filepath.Join(settingsDir5, "settings.json"), []byte(`{"model": "Gemini 4 Hydrogen (XHigh)"}`), 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir5, ".active_model"), []byte("Gemini 4 Hydrogen (XHigh)\n"), 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir5, ".active_effort"), []byte("high\n"), 0600)
+	gotModel5, gotEffort5 := ResolveActiveModelAndEffort(tmpDir5, "", "")
+	if gotModel5 != "gemini-4-hydrogen" || gotEffort5 != "xhigh" {
+		t.Errorf("Expected ('gemini-4-hydrogen', 'xhigh'), got (%q, %q)", gotModel5, gotEffort5)
 	}
 }
 
@@ -869,6 +889,21 @@ func TestSyncModelToSettings(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"model": "gemini-3.7-flash"`) {
 		t.Errorf("Expected model in settings.json to be updated to gemini-3.7-flash, got: %s", string(data))
+	}
+
+	// Should not overwrite display format "Gemini 4 Hydrogen (XHigh)" when incoming matches ("gemini-4-hydrogen", "xhigh")
+	_ = os.WriteFile(sPath, []byte(`{"model": "Gemini 4 Hydrogen (XHigh)"}`), 0600)
+	SyncModelToSettings(tmpDir, "gemini-4-hydrogen-xhigh")
+	data2, _ := os.ReadFile(sPath)
+	if !strings.Contains(string(data2), `"Gemini 4 Hydrogen (XHigh)"`) {
+		t.Errorf("Expected equivalent (XHigh) display name to be preserved, got: %s", string(data2))
+	}
+
+	// Should update when effort changes from XHigh to High
+	SyncModelToSettings(tmpDir, "gemini-4-hydrogen-high")
+	data3, _ := os.ReadFile(sPath)
+	if !strings.Contains(string(data3), `"gemini-4-hydrogen-high"`) {
+		t.Errorf("Expected settings.json to update when effort changes to high, got: %s", string(data3))
 	}
 }
 

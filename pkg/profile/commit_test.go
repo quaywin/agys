@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsIgnoredOrLockFile(t *testing.T) {
@@ -67,6 +68,57 @@ func TestDefaultCommitConstants(t *testing.T) {
 	}
 	if DefaultCommitEffort != "low" {
 		t.Errorf("expected DefaultCommitEffort to be 'low', got %q", DefaultCommitEffort)
+	}
+}
+
+func TestBuildCommitCheckArgs(t *testing.T) {
+	t.Setenv("AGYS_DIR", t.TempDir())
+	t.Cleanup(func() {
+		modelCacheLock.Lock()
+		cachedModels = nil
+		cachedModelsPath = ""
+		modelCacheLock.Unlock()
+	})
+
+	if err := SaveCachedDiscoveredModels(&DiscoveredModels{
+		SchemaVersion:  ModelCacheSchemaVersion,
+		FetchedAt:      time.Now(),
+		LatestFlash:    "gemini-3.8-flash",
+		LatestHydrogen: "gemini-4-hydrogen",
+		AllModels:      []string{"gemini-4-hydrogen", "gemini-3.8-flash"},
+		ModelEfforts: map[string][]string{
+			"gemini-4-hydrogen": {"low", "medium", "high", "xhigh"},
+			"gemini-3.8-flash":  {"low", "medium", "high"},
+		},
+	}); err != nil {
+		t.Fatalf("failed to seed model cache: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		model  string
+		effort string
+		want   []string
+	}{
+		{"default flash and low", "", "", []string{"--model", "gemini-3.8-flash", "--effort", "low"}},
+		{"hydrogen alias defaults to low", "hydrogen", "", []string{"--model", "gemini-4-hydrogen", "--effort", "low"}},
+		{"hydrogen with xhigh", "gemini-4-hydrogen", "xhigh", []string{"--model", "gemini-4-hydrogen", "--effort", "xhigh"}},
+		{"variant suffixed avoids conflict", "gemini-4-hydrogen-xhigh", "", []string{"--model", "gemini-4-hydrogen-xhigh"}},
+		{"claude omits effort", "claude-sonnet-4-6", "", []string{"--model", "claude-sonnet-4-6"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := BuildCommitCheckArgs(tc.model, tc.effort)
+			if len(got) != len(tc.want) {
+				t.Fatalf("BuildCommitCheckArgs(%q, %q) = %v, want %v", tc.model, tc.effort, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("arg[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
 	}
 }
 

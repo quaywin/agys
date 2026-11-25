@@ -766,6 +766,64 @@ func TestUpdateCachedQuotaFractions(t *testing.T) {
 	if found3P5H != 0.88 {
 		t.Errorf("expected auto-initialized 3p-5h to be 0.88, got: %f", found3P5H)
 	}
+
+	// Verify appending missing Gemini Models group when cache previously had only 3P models
+	if err := UpdateCachedQuotaFractions(pBrandNew, "gemini-4-hydrogen", &ModelQuotaDetails{
+		Fraction5H:     0.45,
+		FractionWeekly: 0.85,
+		ResetTime5H:    time.Now().Add(2*time.Hour + 15*time.Minute),
+	}); err != nil {
+		t.Fatalf("UpdateCachedQuotaFractions appending Gemini group failed: %v", err)
+	}
+	afterGemini, _ := GetCachedQuota(pBrandNew, 0)
+	if afterGemini == nil || len(afterGemini.Groups) < 2 {
+		t.Fatalf("expected Gemini group appended alongside 3P, got %+v", afterGemini)
+	}
+	geminiExtracted := ExtractModelQuotaDetails(afterGemini, "gemini-4-hydrogen")
+	if geminiExtracted == nil || geminiExtracted.Fraction5H != 0.45 || geminiExtracted.FractionWeekly != 0.85 {
+		t.Errorf("expected appended Gemini quota 0.45/0.85, got %+v", geminiExtracted)
+	}
+}
+
+func TestHandleStatusLine_PreservesResetTimeWhenPayloadOmitsIt(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("AGYS_INTERNAL_EXEC", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	t.Setenv("HERDR_PANE_ID", "")
+	t.Setenv("NO_COLOR", "1")
+
+	pName := "sl-preserve-reset"
+	if _, err := Create(pName); err != nil {
+		t.Fatalf("Create profile failed: %v", err)
+	}
+	t.Setenv("AGYS_PROFILE", pName)
+
+	resetAt := time.Now().Add(2*time.Hour + 20*time.Minute)
+	if err := SaveCachedQuota(pName, &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Buckets: []QuotaBucket{
+					{BucketID: "gemini-5h", Window: "5h", RemainingFraction: 0.60, ResetTime: resetAt},
+					{BucketID: "gemini-weekly", Window: "weekly", RemainingFraction: 0.90, ResetTime: resetAt.Add(72 * time.Hour)},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveCachedQuota failed: %v", err)
+	}
+
+	stdinPayload := `{"model":{"id":"gemini-4-hydrogen"},"quota":{"gemini-5h":{"remaining_fraction":0.45}}}`
+	var out, errBuf bytes.Buffer
+	if err := HandleStatusLine(context.Background(), strings.NewReader(stdinPayload), &out, &errBuf); err != nil {
+		t.Fatalf("HandleStatusLine failed: %v", err)
+	}
+	line := out.String()
+	if !strings.Contains(line, "45% (2h") {
+		t.Errorf("expected updated 45%% with preserved cached reset timer (2h..), got: %q", line)
+	}
 }
 
 func TestHandleStatusLine_HerdrSync(t *testing.T) {
@@ -873,6 +931,55 @@ func TestHandleStatusLine_HerdrSync(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("Timeout waiting for Herdr metadata report from HandleStatusLine")
+	}
+}
+
+func TestHandleStatusLine_Gemini4HydrogenXHigh_NoEffortDuplication(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("AGYS_DIR", filepath.Join(tempHome, ".agys"))
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_PANE_ID", "")
+
+	pDir, err := Create("hydrogen-xhigh-profile")
+	if err != nil {
+		t.Fatalf("Create profile failed: %v", err)
+	}
+	_ = SetCurrent("hydrogen-xhigh-profile")
+	t.Setenv("HOME", pDir)
+	t.Setenv("AGYS_PROFILE", "hydrogen-xhigh-profile")
+
+	// Seed stale high effort to ensure live statusLine payload overrides it cleanly
+	_ = os.WriteFile(filepath.Join(pDir, ".active_effort"), []byte("high\n"), 0600)
+
+	payloadJSON := `{
+		"conversation_id": "conv-h4-1",
+		"effort": "xhigh",
+		"model": {
+			"id": "gemini-4-hydrogen-xhigh",
+			"display_name": "Gemini 4 Hydrogen (XHigh)"
+		},
+		"context_window": {
+			"used_percentage": 18.0
+		}
+	}`
+
+	var stdout, stderr bytes.Buffer
+	if err := HandleStatusLine(context.Background(), strings.NewReader(payloadJSON), &stdout, &stderr); err != nil {
+		t.Fatalf("HandleStatusLine returned error: %v", err)
+	}
+
+	outStr := stdout.String()
+	if !strings.Contains(outStr, "gemini-4-hydrogen") || !strings.Contains(outStr, "(xhigh)") {
+		t.Errorf("expected statusline to contain 'gemini-4-hydrogen' and '(xhigh)', got: %q", outStr)
+	}
+	if strings.Contains(outStr, "gemini-4-hydrogen-xhigh") {
+		t.Errorf("expected statusline NOT to duplicate '-xhigh (xhigh)', got: %q", outStr)
+	}
+
+	effData, err := os.ReadFile(filepath.Join(pDir, ".active_effort"))
+	if err != nil || strings.TrimSpace(string(effData)) != "xhigh" {
+		t.Errorf("expected .active_effort to be updated to 'xhigh', got: %q (err=%v)", string(effData), err)
 	}
 }
 

@@ -106,6 +106,7 @@ var commitCmd = &cobra.Command{
 			return err
 		}
 		_ = profile.EnsureGitConfig(profileDir)
+		_ = profile.EnsureGlobalSkills(profileDir)
 
 		// 5. Get compact staged diff & stat
 		stagedDiff, err := profile.GetCompactStagedDiff("")
@@ -249,8 +250,15 @@ func init() {
 	commitCmd.Flags().BoolVar(&commitNoCheck, "no-check", false, "Skip AI code review check")
 	commitCmd.Flags().BoolVar(&commitDryRun, "dry-run", false, "Perform AI review and message generation without executing git commit")
 	commitCmd.Flags().StringVar(&commitModel, "model", "", "Override model for agy commit check (defaults to latest Gemini Flash)")
-	commitCmd.Flags().StringVar(&commitEffort, "effort", "", "Override reasoning effort for agy commit check (defaults to low)")
+	commitCmd.Flags().StringVar(&commitEffort, "effort", "", "Override reasoning effort for agy commit check (defaults to low; supports low|medium|high|xhigh|max)")
 	commitCmd.Flags().StringVar(&commitPrompt, "prompt", "", "Additional custom prompt instructions for commit check")
+
+	_ = commitCmd.RegisterFlagCompletionFunc("model", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return CompleteModelNames()
+	})
+	_ = commitCmd.RegisterFlagCompletionFunc("effort", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return CompleteEffortLevels(commitModel)
+	})
 
 	rootCmd.AddCommand(commitCmd)
 }

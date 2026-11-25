@@ -179,37 +179,61 @@ func FormatCost(cost float64) string {
 }
 
 // ResolveActiveEffort determines the active reasoning effort for a profile and model.
+// Precedence: explicitEffort > embedded effort in modelName > embedded effort in settings.json/.active_model (for matching model) > .active_effort > settings.json["effort"|"reasoning_effort"] > default high.
 func ResolveActiveEffort(profileDir, modelName, explicitEffort string) string {
-	if explicitEffort != "" {
-		return explicitEffort
+	if eff := strings.ToLower(strings.TrimSpace(explicitEffort)); eff != "" {
+		return eff
 	}
+
+	baseModel, embeddedFromArg := SplitModelAndEffort(modelName)
+	if !ModelSupportsEffort(baseModel) {
+		return ""
+	}
+	if embeddedFromArg != "" {
+		return ClampEffortForModel(baseModel, embeddedFromArg)
+	}
+
 	if profileDir != "" {
-		// 1. Check .active_effort cache
-		data, err := os.ReadFile(filepath.Join(profileDir, ".active_effort"))
-		if err == nil && len(strings.TrimSpace(string(data))) > 0 {
-			return strings.TrimSpace(string(data))
+		// Check settings.json["model"] and .active_model for an embedded variant (e.g. "Gemini 4 Hydrogen (XHigh)")
+		// matching the active base model before trusting a potentially stale .active_effort cache.
+		if sModel := ReadSettingsModel(profileDir); sModel != "" {
+			sBase, sEff := SplitModelAndEffort(sModel)
+			if sEff != "" && (baseModel == "" || sBase == baseModel) {
+				return ClampEffortForModel(baseModel, sEff)
+			}
 		}
-		// 2. Check settings.json
+		if data, err := os.ReadFile(filepath.Join(profileDir, ".active_model")); err == nil {
+			mBase, mEff := SplitModelAndEffort(string(data))
+			if mEff != "" && (baseModel == "" || mBase == baseModel) {
+				return ClampEffortForModel(baseModel, mEff)
+			}
+		}
+
+		// Check .active_effort cache
+		if data, err := os.ReadFile(filepath.Join(profileDir, ".active_effort")); err == nil {
+			if eff := strings.ToLower(strings.TrimSpace(string(data))); eff != "" {
+				return ClampEffortForModel(baseModel, eff)
+			}
+		}
+
+		// Check explicit effort keys in settings.json
 		for _, subDir := range []string{"antigravity-cli", "antigravity", "antigravity-ide"} {
 			sPath := filepath.Join(profileDir, ".gemini", subDir, "settings.json")
 			if sData, err := os.ReadFile(sPath); err == nil {
 				var settings map[string]interface{}
 				if json.Unmarshal(sData, &settings) == nil {
 					if eff, ok := settings["effort"].(string); ok && eff != "" {
-						return eff
+						return ClampEffortForModel(baseModel, eff)
 					}
 					if eff, ok := settings["reasoning_effort"].(string); ok && eff != "" {
-						return eff
+						return ClampEffortForModel(baseModel, eff)
 					}
 				}
 			}
 		}
 	}
-	// 3. Default to "high" for models supporting effort
-	if ModelSupportsEffort(modelName) {
-		return "high"
-	}
-	return ""
+
+	return ClampEffortForModel(baseModel, DefaultGeminiEffort)
 }
 
 // HandleStatusLine processes the statusLine input from Antigravity CLI, updates local session cache,
@@ -248,12 +272,19 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		hasCtx = true
 	}
 
-	activeModel := payload.Model.ID
-	if activeModel == "" {
-		activeModel = payload.Model.DisplayName
+	rawModel := payload.Model.ID
+	if rawModel == "" {
+		rawModel = payload.Model.DisplayName
 	}
+	_, embeddedEffort := SplitModelAndEffort(rawModel)
+	if embeddedEffort == "" && payload.Model.DisplayName != "" {
+		_, embeddedEffort = SplitModelAndEffort(payload.Model.DisplayName)
+	}
+	activeModel := rawModel
 	if profileDir != "" {
-		activeModel = ResolveActiveModel(profileDir, activeModel)
+		activeModel = ResolveActiveModel(profileDir, rawModel)
+	} else if activeModel != "" {
+		activeModel = NormalizeModelName(activeModel)
 	}
 
 	var existingState *SessionContextState
@@ -262,12 +293,19 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 	}
 
 	costVal := payload.Cost
-	effortVal := payload.Effort
+	effortVal := strings.ToLower(strings.TrimSpace(payload.Effort))
 	if effortVal == "" {
-		effortVal = payload.ReasoningEffort
+		effortVal = strings.ToLower(strings.TrimSpace(payload.ReasoningEffort))
 	}
-	if effortVal == "" && profileDir != "" {
-		effortVal = ResolveActiveEffort(profileDir, activeModel, "")
+	if effortVal == "" && embeddedEffort != "" && ModelSupportsEffort(activeModel) {
+		effortVal = embeddedEffort
+	}
+	if effortVal == "" {
+		if profileDir != "" {
+			effortVal = ResolveActiveEffort(profileDir, activeModel, "")
+		} else if ModelSupportsEffort(activeModel) {
+			effortVal = DefaultGeminiEffort
+		}
 	}
 	convID := payload.ConversationID
 	if convID == "" {
@@ -356,12 +394,24 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 		}
 	}
 
-	// If active model is provided in payload, update .active_model cache and settings.json only if changed
+	// If active model is provided in payload, update .active_model, .active_effort caches and settings.json only if changed
 	if payload.Model.ID != "" && profileDir != "" {
 		activeModelPath := filepath.Join(profileDir, ".active_model")
 		if curr, err := os.ReadFile(activeModelPath); err != nil || strings.TrimSpace(string(curr)) != payload.Model.ID {
-			_ = WriteFileAtomic(activeModelPath, []byte(payload.Model.ID+"\n"), 0600)
-			SyncModelToSettings(profileDir, payload.Model.ID)
+			_ = WriteFileAtomicNoSync(activeModelPath, []byte(payload.Model.ID+"\n"), 0600)
+		}
+		settingsTarget := payload.Model.ID
+		if effortVal != "" && ModelSupportsEffort(activeModel) {
+			if _, idEff := SplitModelAndEffort(payload.Model.ID); idEff == "" {
+				settingsTarget = FormatModelWithEffort(activeModel, effortVal)
+			}
+		}
+		SyncModelToSettings(profileDir, settingsTarget)
+	}
+	if effortVal != "" && profileDir != "" && ModelSupportsEffort(activeModel) {
+		activeEffortPath := filepath.Join(profileDir, ".active_effort")
+		if currEff, err := os.ReadFile(activeEffortPath); err != nil || strings.TrimSpace(string(currEff)) != effortVal {
+			_ = WriteFileAtomicNoSync(activeEffortPath, []byte(effortVal+"\n"), 0600)
 		}
 	}
 
@@ -383,16 +433,20 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 			} else {
 				if fb.Fraction5H >= 0 {
 					quotaDetails.Fraction5H = fb.Fraction5H
-					quotaDetails.ResetTime5H = fb.ResetTime5H
-					if fb.CompactReset5H != "" {
-						quotaDetails.CompactReset5H = fb.CompactReset5H
+					if !fb.ResetTime5H.IsZero() {
+						quotaDetails.ResetTime5H = fb.ResetTime5H
+						if fb.CompactReset5H != "" {
+							quotaDetails.CompactReset5H = fb.CompactReset5H
+						}
 					}
 				}
 				if fb.FractionWeekly >= 0 {
 					quotaDetails.FractionWeekly = fb.FractionWeekly
-					quotaDetails.ResetTimeWeekly = fb.ResetTimeWeekly
-					if fb.CompactResetWeekly != "" {
-						quotaDetails.CompactResetWeekly = fb.CompactResetWeekly
+					if !fb.ResetTimeWeekly.IsZero() {
+						quotaDetails.ResetTimeWeekly = fb.ResetTimeWeekly
+						if fb.CompactResetWeekly != "" {
+							quotaDetails.CompactResetWeekly = fb.CompactResetWeekly
+						}
 					}
 				}
 				if fb.GroupName != "" {
@@ -437,15 +491,11 @@ func HandleStatusLine(ctx context.Context, stdin io.Reader, stdout, stderr io.Wr
 }
 
 func is3PQuotaKey(key string) bool {
-	k := strings.ToLower(key)
-	return strings.Contains(k, "3p") || strings.Contains(k, "claude") || strings.Contains(k, "sonnet") ||
-		strings.Contains(k, "opus") || strings.Contains(k, "gpt") || strings.Contains(k, "openai") ||
-		strings.Contains(k, "anthropic") || strings.HasPrefix(k, "o1") || strings.HasPrefix(k, "o3")
+	return Is3PModel(key)
 }
 
 func isGeminiQuotaKey(key string) bool {
-	k := strings.ToLower(key)
-	return strings.Contains(k, "gemini")
+	return IsGeminiModel(key)
 }
 
 func parsePayloadQuota(quotaMap map[string]struct {
@@ -468,8 +518,7 @@ func parsePayloadQuota(quotaMap map[string]struct {
 	if len(activeModel) > 0 {
 		modelFilter = strings.ToLower(strings.TrimSpace(activeModel[0]))
 	}
-	is3P := strings.Contains(modelFilter, "claude") || strings.Contains(modelFilter, "sonnet") || strings.Contains(modelFilter, "opus") ||
-		strings.Contains(modelFilter, "gpt") || strings.Contains(modelFilter, "openai") || strings.HasPrefix(modelFilter, "o1") || strings.HasPrefix(modelFilter, "o3")
+	is3P := Is3PModel(modelFilter)
 
 	if is3P {
 		details.GroupName = "Claude and GPT models"
@@ -510,8 +559,8 @@ func parsePayloadQuota(quotaMap map[string]struct {
 		} else if resetSec > 0 {
 			parsedReset = time.Now().Add(time.Duration(resetSec) * time.Second)
 		}
-		isWeekly := strings.Contains(k, "week") || strings.Contains(k, "7d")
-		is5H := strings.Contains(k, "5h") || (strings.Contains(k, "gemini") && !isWeekly) || (strings.Contains(k, "3p") && !isWeekly)
+		is5HWin, isWeekly := classifyQuotaKeyWindow(k)
+		is5H := is5HWin || (strings.Contains(k, "gemini") && !isWeekly) || (strings.Contains(k, "3p") && !isWeekly)
 
 		if isWeekly && details.FractionWeekly < 0 {
 			details.FractionWeekly = frac
@@ -544,6 +593,10 @@ func parsePayloadQuota(quotaMap map[string]struct {
 				processKey(key)
 			}
 		}
+	}
+
+	if details.Fraction5H < 0 && details.FractionWeekly >= 1.0 {
+		details.Fraction5H = 1.0
 	}
 
 	if details.Fraction5H >= 0 || details.FractionWeekly >= 0 {

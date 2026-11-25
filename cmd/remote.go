@@ -85,6 +85,12 @@ func runRemoteStart(cmd *cobra.Command, profileName string) error {
 	}
 
 	extraArgs := EnsureDefaultModelAndEffort(nil)
+	if !profile.IsAuto(targetProfile) {
+		if pDir, dirErr := profile.GetProfileDir(targetProfile); dirErr == nil {
+			activeModel, activeEffort := profile.ResolveActiveModelAndEffort(pDir, "", "")
+			extraArgs = EnsureDefaultModelAndEffortWithOptions(nil, activeModel, activeEffort)
+		}
+	}
 	info, err := profile.StartRemoteDaemon(cmd.Context(), targetProfile, remotePort, remoteName, remoteSkipPermissions, remoteForeground, extraArgs)
 	if err != nil {
 		return err

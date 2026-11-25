@@ -194,6 +194,35 @@ func TestRenderQuotaTable(t *testing.T) {
 	if !strings.Contains(out, "newaccount") || !strings.Contains(out, "100.0% [██████████]") {
 		t.Errorf("expected newaccount to show full 100.0%% quota, got:\n%s", out)
 	}
+
+	// Verify partial weekly-only group (< 1.0) does NOT mirror weekly into 5H QUOTA
+	partialWeeklyOnly := []ProfileQuotaInfo{
+		{
+			ProfileName: "partial",
+			Email:       "partial@example.com",
+			Active:      true,
+			Quota: &QuotaSummary{
+				Groups: []QuotaGroup{
+					{
+						DisplayName: "Gemini Models",
+						Buckets: []QuotaBucket{
+							{
+								Window:            "weekly",
+								RemainingFraction: 0.56,
+								ResetTime:         resetIn3d,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	var pBuf bytes.Buffer
+	RenderQuotaTable(&pBuf, partialWeeklyOnly, "", nil)
+	pOut := pBuf.String()
+	if !strings.Contains(pOut, "N/A") || !strings.Contains(pOut, "56.0%") {
+		t.Errorf("expected N/A for missing 5h when weekly is 56.0%%, got:\n%s", pOut)
+	}
 }
 
 func TestTokenFingerprintedEmailCache(t *testing.T) {
@@ -320,6 +349,128 @@ func TestExtractModelQuotaDetails(t *testing.T) {
 	claudeDetails := ExtractModelQuotaDetails(summary, "claude-3-7-sonnet")
 	if claudeDetails == nil || claudeDetails.Fraction5H != 0.40 || claudeDetails.FractionWeekly != 0.60 {
 		t.Errorf("unexpected claude details: %+v", claudeDetails)
+	}
+
+	// 4. Test Gemini 4 Hydrogen XHigh matching Gemini Models group and preferring dedicated Hydrogen group if present
+	hSummary := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Description: "Models within this group: Gemini 3.8 Flash",
+				Buckets: []QuotaBucket{
+					{BucketID: "gemini-5h", Window: "5h", RemainingFraction: 0.90},
+					{BucketID: "gemini-weekly", Window: "weekly", RemainingFraction: 0.80},
+				},
+			},
+			{
+				DisplayName: "Gemini 4 Hydrogen",
+				Description: "Models within this group: Gemini 4 Hydrogen",
+				Buckets: []QuotaBucket{
+					{BucketID: "hydrogen-5h", Window: "5h", RemainingFraction: 0.55},
+					{BucketID: "hydrogen-weekly", Window: "weekly", RemainingFraction: 0.65},
+				},
+			},
+		},
+	}
+	hDetails := ExtractModelQuotaDetails(hSummary, "gemini-4-hydrogen-xhigh")
+	if hDetails == nil || hDetails.Fraction5H != 0.55 || hDetails.GroupName != "Gemini 4 Hydrogen" {
+		t.Errorf("expected dedicated Gemini 4 Hydrogen group (0.55), got %+v", hDetails)
+	}
+
+	// 5. Test Orchestrator matches Gemini/Hydrogen quota instead of falling back to Claude 3P
+	orchSummary := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Claude Models",
+				Description: "claude-opus-4-6-thinking, 3p",
+				Buckets: []QuotaBucket{
+					{BucketID: "3p-5h", Window: "5h", RemainingFraction: 0.15},
+				},
+			},
+			{
+				DisplayName: "Gemini Models",
+				Description: "Gemini 3.8 Flash",
+				Buckets: []QuotaBucket{
+					{BucketID: "gem-5h", Window: "5h", RemainingFraction: 0.85},
+				},
+			},
+			{
+				DisplayName: "Gemini 4 Hydrogen",
+				Description: "Gemini 4 Hydrogen",
+				Buckets: []QuotaBucket{
+					{BucketID: "hyd-5h", Window: "5h", RemainingFraction: 0.72},
+				},
+			},
+		},
+	}
+	orchDetails := ExtractModelQuotaDetails(orchSummary, "Orchestrator")
+	if orchDetails == nil || orchDetails.Fraction5H != 0.72 || orchDetails.GroupName != "Gemini 4 Hydrogen" {
+		t.Errorf("expected Orchestrator to match Gemini 4 Hydrogen quota (0.72), got %+v", orchDetails)
+	}
+
+	// 6. Test family isolation: Gemini with weekly=0.65 (no 5h bucket) must NOT borrow 3p-5h from Claude
+	isolatedSummary := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Claude and GPT models",
+				Description: "claude-sonnet-4-6, 3p",
+				Buckets: []QuotaBucket{
+					{BucketID: "3p-5h", Window: "5h", RemainingFraction: 0.12},
+					{BucketID: "3p-weekly", Window: "weekly", RemainingFraction: 0.25},
+				},
+			},
+			{
+				DisplayName: "Gemini Models",
+				Description: "Models within this group: Gemini 3.8 Flash",
+				Buckets: []QuotaBucket{
+					{BucketID: "gemini-weekly", Window: "weekly", RemainingFraction: 0.65, ResetTime: now.Add(72 * time.Hour)},
+				},
+			},
+		},
+	}
+	hydPartial := ExtractModelQuotaDetails(isolatedSummary, "gemini-4-hydrogen")
+	if hydPartial == nil || hydPartial.GroupName != "Gemini Models" || hydPartial.FractionWeekly != 0.65 || hydPartial.Fraction5H != -1.0 {
+		t.Errorf("expected Gemini Models weekly=0.65 and Fraction5H=-1 (no 3P bleed), got %+v", hydPartial)
+	}
+
+	// 7. Fresh Gemini account with weekly=1.0 (no 5h bucket) should report 1.0 5H with no timer and not borrow Claude's 0.12
+	isolatedSummary.Groups[1].Buckets[0].RemainingFraction = 1.0
+	freshHyd := ExtractModelQuotaDetails(isolatedSummary, "hydrogen")
+	if freshHyd == nil || freshHyd.GroupName != "Gemini Models" || freshHyd.Fraction5H != 1.0 || freshHyd.FractionWeekly != 1.0 || freshHyd.ResetStr5H != "-" {
+		t.Errorf("expected fresh Gemini 100%% 5H/Weekly with '-' reset, got %+v", freshHyd)
+	}
+
+	// 8. User-Agent must be >= 2.35.0
+	ua := getAntigravityUserAgent()
+	if !strings.HasPrefix(ua, "antigravity/") {
+		t.Errorf("unexpected User-Agent: %q", ua)
+	}
+	ver := strings.Split(strings.TrimPrefix(ua, "antigravity/"), " ")[0]
+	if compareSimpleVersions(ver, minAntigravityQuotaClientVer) < 0 {
+		t.Errorf("User-Agent version %q must be >= %q", ver, minAntigravityQuotaClientVer)
+	}
+
+	// 9. Named Gemini group (score 50) must outrank an unrelated non-3P group (score 20) placed earlier
+	unrelatedFirst := &QuotaSummary{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Experimental Tools",
+				Buckets: []QuotaBucket{
+					{BucketID: "exp-5h", Window: "5h", RemainingFraction: 0.10},
+				},
+			},
+			{
+				DisplayName: "Gemini Models",
+				Description: "Models within this group: Gemini 3.8 Flash",
+				Buckets: []QuotaBucket{
+					{BucketID: "gemini-5h", Window: "5h", RemainingFraction: 0.88},
+				},
+			},
+		},
+	}
+	resGemini := ExtractModelQuotaDetails(unrelatedFirst, "gemini-4-hydrogen")
+	if resGemini == nil || resGemini.GroupName != "Gemini Models" || resGemini.Fraction5H != 0.88 {
+		t.Errorf("expected Gemini Models (0.88) to outrank unrelated non-3P group, got %+v", resGemini)
 	}
 }
 

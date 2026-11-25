@@ -18,6 +18,10 @@ func TestExtractGeminiVersion(t *testing.T) {
 		{"gemini-4.0-flash", GeminiModelVersion{4, 0, 0}, true},
 		{"gemini-2.5-flash", GeminiModelVersion{2, 5, 0}, true},
 		{"gemini-3.1-pro", GeminiModelVersion{3, 1, 0}, true},
+		{"gemini-4-hydrogen", GeminiModelVersion{4, 0, 0}, true},
+		{"gemini-4-hydrogen-xhigh", GeminiModelVersion{4, 0, 0}, true},
+		{"gemini-4-carbon", GeminiModelVersion{4, 0, 0}, true},
+		{"gemini-4-neon", GeminiModelVersion{4, 0, 0}, true},
 		{"claude-sonnet-4-6", GeminiModelVersion{}, false},
 		{"gpt-4o", GeminiModelVersion{}, false},
 	}
@@ -166,6 +170,121 @@ func TestHookProcess_DoesNotSpawnBackgroundRefresh(t *testing.T) {
 	res := GetOrRefreshModels()
 	if res == nil || res.LatestFlash != "gemini-3.8-flash" {
 		t.Errorf("expected GetOrRefreshModels in hook process to return cached models, got %+v", res)
+	}
+}
+
+func TestSplitModelAndEffort(t *testing.T) {
+	tests := []struct {
+		input      string
+		wantBase   string
+		wantEffort string
+	}{
+		{"Gemini 4 Hydrogen (XHigh)", "gemini-4-hydrogen", "xhigh"},
+		{"Gemini 4 Hydrogen (High)", "gemini-4-hydrogen", "high"},
+		{"Gemini 4 Hydrogen (Medium)", "gemini-4-hydrogen", "medium"},
+		{"Gemini 4 Hydrogen (Low)", "gemini-4-hydrogen", "low"},
+		{"gemini-4-hydrogen-xhigh", "gemini-4-hydrogen", "xhigh"},
+		{"gemini-4-hydrogen-max", "gemini-4-hydrogen", "max"},
+		{"gemini-4-hydrogen", "gemini-4-hydrogen", ""},
+		{"Gemini 3.8 Flash (High)", "gemini-3.8-flash", "high"},
+		{"gemini-3.8-flash-high", "gemini-3.8-flash", "high"},
+		{"Claude Opus 4.6 (Thinking)", "claude-opus-4-6-thinking", ""},
+		{"Claude Sonnet 4.6 (Thinking)", "claude-sonnet-4-6", ""},
+		{"GPT-OSS 120B (Medium)", "gpt-oss-120b", "medium"},
+		{"Orchestrator (Neon)", "orchestrator-neon", ""},
+	}
+
+	for _, tt := range tests {
+		gotBase, gotEffort := SplitModelAndEffort(tt.input)
+		if gotBase != tt.wantBase || gotEffort != tt.wantEffort {
+			t.Errorf("SplitModelAndEffort(%q) = (%q, %q), want (%q, %q)", tt.input, gotBase, gotEffort, tt.wantBase, tt.wantEffort)
+		}
+	}
+}
+
+func TestParseAgyModelsOutput_HydrogenAndEfforts(t *testing.T) {
+	sampleOutput := `Fetching available models...
+gemini-4-hydrogen-high	Gemini 4 Hydrogen (High)
+gemini-4-hydrogen-xhigh	Gemini 4 Hydrogen (XHigh)
+gemini-4-hydrogen-medium	Gemini 4 Hydrogen (Medium)
+gemini-4-hydrogen-low	Gemini 4 Hydrogen (Low)
+gemini-3.8-flash-high	Gemini 3.8 Flash (High)
+gemini-3.8-flash-medium	Gemini 3.8 Flash (Medium)
+gemini-3.8-flash-low	Gemini 3.8 Flash (Low)
+claude-sonnet-4-6	Claude Sonnet 4.6 (Thinking)
+claude-opus-4-6-thinking	Claude Opus 4.6 (Thinking)
+gpt-oss-120b-medium	GPT-OSS 120B (Medium)
+`
+
+	dm := ParseAgyModelsOutput(sampleOutput)
+	if dm.SchemaVersion != ModelCacheSchemaVersion {
+		t.Errorf("expected SchemaVersion %d, got %d", ModelCacheSchemaVersion, dm.SchemaVersion)
+	}
+	if dm.LatestFlash != "gemini-3.8-flash" {
+		t.Errorf("expected LatestFlash 'gemini-3.8-flash', got %q", dm.LatestFlash)
+	}
+	if dm.LatestHydrogen != "gemini-4-hydrogen" {
+		t.Errorf("expected LatestHydrogen 'gemini-4-hydrogen', got %q", dm.LatestHydrogen)
+	}
+	effs := dm.ModelEfforts["gemini-4-hydrogen"]
+	wantEffs := []string{"low", "medium", "high", "xhigh"}
+	if len(effs) != len(wantEffs) {
+		t.Fatalf("expected gemini-4-hydrogen efforts %v, got %v", wantEffs, effs)
+	}
+	for i, w := range wantEffs {
+		if effs[i] != w {
+			t.Errorf("effort[%d] = %q, want %q", i, effs[i], w)
+		}
+	}
+}
+
+func TestClampEffortForModel(t *testing.T) {
+	dir1 := t.TempDir()
+	t.Setenv("AGYS_DIR", dir1)
+	t.Cleanup(func() {
+		modelCacheLock.Lock()
+		cachedModels = nil
+		cachedModelsPath = ""
+		modelCacheLock.Unlock()
+	})
+
+	if err := SaveCachedDiscoveredModels(&DiscoveredModels{
+		SchemaVersion:  ModelCacheSchemaVersion,
+		FetchedAt:      time.Now(),
+		LatestFlash:    "gemini-3.8-flash",
+		LatestHydrogen: "gemini-4-hydrogen",
+		AllModels:      []string{"gemini-4-hydrogen", "gemini-3.8-flash"},
+		ModelEfforts: map[string][]string{
+			"gemini-4-hydrogen": {"low", "medium", "high", "xhigh"},
+			"gemini-3.8-flash":  {"low", "medium", "high"},
+		},
+	}); err != nil {
+		t.Fatalf("failed to seed model cache: %v", err)
+	}
+
+	if got := ClampEffortForModel("gemini-4-hydrogen", "xhigh"); got != "xhigh" {
+		t.Errorf("expected xhigh for gemini-4-hydrogen, got %q", got)
+	}
+	if got := ClampEffortForModel("gemini-4-hydrogen", "max"); got != "xhigh" {
+		t.Errorf("expected max clamped to xhigh for gemini-4-hydrogen, got %q", got)
+	}
+	if got := ClampEffortForModel("gemini-3.8-flash", "xhigh"); got != "high" {
+		t.Errorf("expected xhigh clamped to high for gemini-3.8-flash, got %q", got)
+	}
+	if got := ClampEffortForModel("claude-sonnet-4-6", "xhigh"); got != "" {
+		t.Errorf("expected empty effort for claude-sonnet-4-6, got %q", got)
+	}
+	if !ModelSupportsEffort("gemini-4-neon") || !ModelSupportsEffort("gemini-4-argon") {
+		t.Errorf("expected neon and argon to support effort")
+	}
+	if ModelSupportsEffort("Orchestrator (Neon)") {
+		t.Errorf("expected Orchestrator (Neon) to return false for --effort flag")
+	}
+
+	// Verify in-memory cache is isolated by AGYS_DIR path
+	t.Setenv("AGYS_DIR", t.TempDir())
+	if leaked := ReadCachedDiscoveredModels(); leaked != nil {
+		t.Errorf("expected nil cache after switching AGYS_DIR, got %+v", leaked)
 	}
 }
 

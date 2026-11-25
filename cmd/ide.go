@@ -94,6 +94,7 @@ var ideCmd = &cobra.Command{
 		_ = profile.SyncAllTokenLocations(profileDir)
 		_ = profile.EnsureOnboardingCompleted(profileDir)
 		_ = profile.EnsureGitConfig(profileDir)
+		_ = profile.EnsureGlobalSkills(profileDir)
 
 		ideDataDir := filepath.Join(profileDir, "ide-data")
 		_ = os.MkdirAll(ideDataDir, 0755)

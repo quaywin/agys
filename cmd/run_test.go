@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,6 +123,167 @@ func TestEnsureDefaultModelAndEffort(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("Does not inject conflicting --effort for variant-suffixed models like gemini-4-hydrogen-xhigh", func(t *testing.T) {
+		for _, variant := range []string{"gemini-4-hydrogen-xhigh", "Gemini 4 Hydrogen (XHigh)", "gemini-3.8-flash-high"} {
+			res := EnsureDefaultModelAndEffort([]string{"-m", variant})
+			for _, a := range res {
+				if a == "--effort" || strings.HasPrefix(a, "--effort=") {
+					t.Fatalf("expected NO --effort injection for variant %q, got %v", variant, res)
+				}
+			}
+		}
+	})
+
+	t.Run("Resolves hydrogen and pro aliases and preserves xhigh default effort", func(t *testing.T) {
+		_ = profile.SaveCachedDiscoveredModels(&profile.DiscoveredModels{
+			SchemaVersion:  profile.ModelCacheSchemaVersion,
+			FetchedAt:      time.Now(),
+			LatestFlash:    "gemini-3.8-flash",
+			LatestHydrogen: "gemini-4-hydrogen",
+			AllModels:      []string{"gemini-4-hydrogen", "gemini-3.8-flash"},
+			ModelEfforts: map[string][]string{
+				"gemini-4-hydrogen": {"low", "medium", "high", "xhigh"},
+				"gemini-3.8-flash":  {"low", "medium", "high"},
+			},
+		})
+
+		res := EnsureDefaultModelAndEffortWithOptions([]string{"-m", "hydrogen"}, "gemini-4-hydrogen", "xhigh")
+		expected := []string{"--model", "gemini-4-hydrogen", "--effort", "xhigh"}
+		if len(res) != len(expected) {
+			t.Fatalf("expected %v, got %v", expected, res)
+		}
+		for i, v := range expected {
+			if res[i] != v {
+				t.Errorf("at index %d: expected %q, got %q", i, v, res[i])
+			}
+		}
+	})
+
+	t.Run("Clamps cached xhigh effort to high when switching to gemini-3.8-flash", func(t *testing.T) {
+		_ = profile.SaveCachedDiscoveredModels(&profile.DiscoveredModels{
+			SchemaVersion:  profile.ModelCacheSchemaVersion,
+			FetchedAt:      time.Now(),
+			LatestFlash:    "gemini-3.8-flash",
+			LatestHydrogen: "gemini-4-hydrogen",
+			AllModels:      []string{"gemini-4-hydrogen", "gemini-3.8-flash"},
+			ModelEfforts: map[string][]string{
+				"gemini-4-hydrogen": {"low", "medium", "high", "xhigh"},
+				"gemini-3.8-flash":  {"low", "medium", "high"},
+			},
+		})
+
+		res := EnsureDefaultModelAndEffortWithOptions([]string{"--model", "gemini-3.8-flash"}, "gemini-4-hydrogen", "xhigh")
+		expected := []string{"--model", "gemini-3.8-flash", "--effort", "high"}
+		if len(res) != len(expected) {
+			t.Fatalf("expected %v, got %v", expected, res)
+		}
+		for i, v := range expected {
+			if res[i] != v {
+				t.Errorf("at index %d: expected %q, got %q", i, v, res[i])
+			}
+		}
+	})
+}
+
+func hasFlagValue(args []string, flag, val string) bool {
+	for i := 0; i < len(args); i++ {
+		if args[i] == flag+"="+val {
+			return true
+		}
+		if args[i] == flag && i+1 < len(args) && args[i+1] == val {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyFlag(args []string, flags ...string) bool {
+	for _, a := range args {
+		for _, f := range flags {
+			if a == f || strings.HasPrefix(a, f+"=") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestPrepareRunModelAndEffortArgs_EffortOverridePersistence(t *testing.T) {
+	agysDir := t.TempDir()
+	t.Setenv("AGYS_DIR", agysDir)
+
+	if err := profile.SaveCachedDiscoveredModels(&profile.DiscoveredModels{
+		SchemaVersion:  profile.ModelCacheSchemaVersion,
+		FetchedAt:      time.Now(),
+		LatestFlash:    "gemini-3.8-flash",
+		LatestHydrogen: "gemini-4-hydrogen",
+		AllModels:      []string{"gemini-4-hydrogen", "gemini-3.8-flash"},
+		ModelEfforts: map[string][]string{
+			"gemini-4-hydrogen": {"low", "medium", "high", "xhigh"},
+			"gemini-3.8-flash":  {"low", "medium", "high"},
+		},
+	}); err != nil {
+		t.Fatalf("failed to seed model cache: %v", err)
+	}
+
+	profileDir := filepath.Join(agysDir, "profiles", "testprof")
+	cliDir := filepath.Join(profileDir, ".gemini", "antigravity-cli")
+	if err := os.MkdirAll(cliDir, 0755); err != nil {
+		t.Fatalf("failed to create profile dir: %v", err)
+	}
+	settingsPath := filepath.Join(cliDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"Gemini 4 Hydrogen (XHigh)"}`), 0600); err != nil {
+		t.Fatalf("failed to seed settings.json: %v", err)
+	}
+
+	// (a) Initial no-flag run should resolve Hydrogen + xhigh from settings.json
+	args1, _ := prepareRunModelAndEffortArgs(profileDir, []string{"chat"})
+	if !hasFlagValue(args1, "--model", "gemini-4-hydrogen") || !hasFlagValue(args1, "--effort", "xhigh") {
+		t.Fatalf("step (a) expected --model gemini-4-hydrogen and --effort xhigh, got %v", args1)
+	}
+
+	// (b) Explicit --effort low must update .active_model, .active_effort, and settings.json
+	args2, _ := prepareRunModelAndEffortArgs(profileDir, []string{"--effort", "low", "chat"})
+	if !hasFlagValue(args2, "--model", "gemini-4-hydrogen") || !hasFlagValue(args2, "--effort", "low") {
+		t.Fatalf("step (b) expected --model gemini-4-hydrogen and --effort low, got %v", args2)
+	}
+	activeModelBytes, err := os.ReadFile(filepath.Join(profileDir, ".active_model"))
+	if err != nil {
+		t.Fatalf("failed reading .active_model: %v", err)
+	}
+	if strings.TrimSpace(string(activeModelBytes)) != "gemini-4-hydrogen-low" {
+		t.Errorf("step (b) expected .active_model 'gemini-4-hydrogen-low', got %q", strings.TrimSpace(string(activeModelBytes)))
+	}
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("failed reading settings.json: %v", err)
+	}
+	if !strings.Contains(string(settingsBytes), "gemini-4-hydrogen-low") {
+		t.Errorf("step (b) expected settings.json to contain 'gemini-4-hydrogen-low', got %s", string(settingsBytes))
+	}
+
+	// (c) Subsequent no-flag run must keep low (no stale XHigh override from .active_model)
+	args3, _ := prepareRunModelAndEffortArgs(profileDir, []string{"chat"})
+	if !hasFlagValue(args3, "--model", "gemini-4-hydrogen") || !hasFlagValue(args3, "--effort", "low") {
+		t.Fatalf("step (c) expected persisted --effort low, got %v", args3)
+	}
+
+	// (d) Variant-suffixed -m gemini-4-hydrogen-xhigh must NOT append --effort (conflicts in agy)
+	args4, _ := prepareRunModelAndEffortArgs(profileDir, []string{"-m", "gemini-4-hydrogen-xhigh"})
+	if hasAnyFlag(args4, "--effort", "-e") {
+		t.Fatalf("step (d) must not inject --effort alongside variant model, got %v", args4)
+	}
+	effBytes, err := os.ReadFile(filepath.Join(profileDir, ".active_effort"))
+	if err != nil || strings.TrimSpace(string(effBytes)) != "xhigh" {
+		t.Errorf("step (d) expected .active_effort 'xhigh', got %q (err=%v)", strings.TrimSpace(string(effBytes)), err)
+	}
+
+	// (e) Switching to -m gemini-3.8-flash after xhigh must clamp stale xhigh to high
+	args5, _ := prepareRunModelAndEffortArgs(profileDir, []string{"-m", "gemini-3.8-flash"})
+	if (!hasFlagValue(args5, "--model", "gemini-3.8-flash") && !hasFlagValue(args5, "-m", "gemini-3.8-flash")) || !hasFlagValue(args5, "--effort", "high") {
+		t.Fatalf("step (e) expected clamped --effort high for gemini-3.8-flash, got %v", args5)
+	}
 }
 
 func TestRemoteControlArgHandling(t *testing.T) {
@@ -191,6 +353,9 @@ func TestIsInteractiveSession(t *testing.T) {
 		{"auth", "status"},
 		{"config", "get"},
 		{"mcp", "list"},
+		{"plugin", "validate", "--strict", "my-plugin"},
+		{"plugins", "import", "source"},
+		{"install", "--skip-aliases"},
 		{"mic-serve"},
 		{"remote-control", "status"},
 		{"models"},
@@ -391,6 +556,18 @@ func TestNormalizeResumeArgs(t *testing.T) {
 			convID:   "ignored",
 			expected: []string{"--conversation", "custom-789"},
 		},
+		{
+			name:     "-r=explicitID",
+			input:    []string{"-r=custom-456"},
+			convID:   "ignored",
+			expected: []string{"--conversation=custom-456"},
+		},
+		{
+			name:     "-r explicitID positional",
+			input:    []string{"-r", "custom-789"},
+			convID:   "ignored",
+			expected: []string{"--conversation", "custom-789"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -405,5 +582,23 @@ func TestNormalizeResumeArgs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFilterPreservedSessionFlags(t *testing.T) {
+	got := filterPreservedSessionFlags([]string{"-r", "conv-1", "--dangerously-skip-permissions", "-c", "--resume=conv-2", "--model", "gemini-4-hydrogen"})
+	want := []string{"--dangerously-skip-permissions", "--model", "gemini-4-hydrogen"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("at index %d: expected %q, got %q", i, want[i], got[i])
+		}
+	}
+
+	orchArgs := EnsureDefaultModelAndEffortWithOptions(nil, "Orchestrator", "xhigh")
+	if hasAnyFlag(orchArgs, "--effort") || !hasFlagValue(orchArgs, "--model", "Orchestrator") {
+		t.Errorf("expected Orchestrator args without --effort, got %v", orchArgs)
 	}
 }

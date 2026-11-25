@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"bytes"
+	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestCommitCmdFlags(t *testing.T) {
@@ -60,5 +63,58 @@ func TestCommitCmdHelp(t *testing.T) {
 	output := buf.String()
 	if !bytes.Contains([]byte(output), []byte("agys commit [profile_name] [flags]")) {
 		t.Errorf("help output missing usage string, got: %s", output)
+	}
+}
+
+func TestCommitCmdFlagCompletions(t *testing.T) {
+	fnModel, ok := commitCmd.GetFlagCompletionFunc("model")
+	if !ok || fnModel == nil {
+		t.Fatalf("expected completion function registered for commit --model flag")
+	}
+	models, dir := fnModel(commitCmd, nil, "")
+	if dir != cobra.ShellCompDirectiveNoFileComp || len(models) == 0 {
+		t.Errorf("unexpected commit --model completions: dir=%v len=%d", dir, len(models))
+	}
+	foundHydrogen := false
+	for _, m := range models {
+		if strings.HasPrefix(m, "gemini-4-hydrogen\t") {
+			foundHydrogen = true
+			break
+		}
+	}
+	if !foundHydrogen {
+		t.Errorf("expected gemini-4-hydrogen in commit --model completions, got %v", models)
+	}
+
+	fnEffort, ok := commitCmd.GetFlagCompletionFunc("effort")
+	if !ok || fnEffort == nil {
+		t.Fatalf("expected completion function registered for commit --effort flag")
+	}
+
+	prevCommitModel := commitModel
+	t.Cleanup(func() { commitModel = prevCommitModel })
+
+	commitModel = "gemini-3.8-flash"
+	effortsFlash, dir := fnEffort(commitCmd, nil, "")
+	if dir != cobra.ShellCompDirectiveNoFileComp || len(effortsFlash) == 0 {
+		t.Errorf("unexpected commit --effort completions: dir=%v len=%d", dir, len(effortsFlash))
+	}
+	for _, e := range effortsFlash {
+		if strings.HasPrefix(e, "xhigh\t") {
+			t.Errorf("did not expect xhigh completion when commitModel=gemini-3.8-flash, got %v", effortsFlash)
+		}
+	}
+
+	commitModel = "gemini-4-hydrogen"
+	effortsHyd, _ := fnEffort(commitCmd, nil, "")
+	hasXHigh := false
+	for _, e := range effortsHyd {
+		if strings.HasPrefix(e, "xhigh\t") {
+			hasXHigh = true
+			break
+		}
+	}
+	if !hasXHigh {
+		t.Errorf("expected xhigh completion when commitModel=gemini-4-hydrogen, got %v", effortsHyd)
 	}
 }

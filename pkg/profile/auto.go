@@ -25,68 +25,59 @@ func IsAuto(name string) bool {
 }
 
 // Calculate5HQuotaScore extracts the highest remaining 5-hour quota fraction for Gemini models from a QuotaSummary.
-// It prioritizes Gemini model groups over non-Gemini model groups (e.g. Claude/GPT models).
-// Returns -1.0 if no valid 5h quota bucket is found.
+// It prioritizes Gemini model groups over non-Gemini model groups (e.g. Claude/GPT models),
+// falling back to Gemini weekly quota before ever considering 3P/Claude buckets.
+// Returns -1.0 if no valid quota bucket is found.
 func Calculate5HQuotaScore(summary *QuotaSummary) float64 {
 	if summary == nil || len(summary.Groups) == 0 {
 		return -1.0
 	}
 
-	bestGeminiFraction := -1.0
-	bestAnyFraction := -1.0
+	bestGemini5H := -1.0
+	bestGeminiFallback := -1.0
+	bestAny5H := -1.0
+	bestAnyFallback := -1.0
 
-	for _, group := range summary.Groups {
+	for i := range summary.Groups {
+		group := &summary.Groups[i]
+		is3P, isGroupGemini := classifyQuotaGroup(group)
 		gName := strings.ToLower(strings.TrimSpace(group.DisplayName))
 		gDesc := strings.ToLower(strings.TrimSpace(group.Description))
 
 		for _, bucket := range group.Buckets {
-			w := strings.ToLower(strings.TrimSpace(bucket.Window))
+			is5H, _ := classifyQuotaKeyWindow(bucket.Window, bucket.DisplayName, bucket.BucketID)
 			d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
 			b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
+			isGemini := !is3P && (isGroupGemini || IsGeminiModel(gName) || IsGeminiModel(gDesc) || IsGeminiModel(d) || IsGeminiModel(b))
 
-			if w == "5h" || strings.Contains(w, "5h") || strings.Contains(d, "5h") || strings.Contains(b, "5h") {
-				isGemini := strings.Contains(gName, "gemini") || strings.Contains(gDesc, "gemini") || strings.Contains(d, "gemini") || strings.Contains(b, "gemini")
-
-				if bucket.RemainingFraction > bestAnyFraction {
-					bestAnyFraction = bucket.RemainingFraction
+			if is5H {
+				if bucket.RemainingFraction > bestAny5H {
+					bestAny5H = bucket.RemainingFraction
 				}
-				if isGemini && bucket.RemainingFraction > bestGeminiFraction {
-					bestGeminiFraction = bucket.RemainingFraction
+				if isGemini && bucket.RemainingFraction > bestGemini5H {
+					bestGemini5H = bucket.RemainingFraction
+				}
+			} else {
+				if bucket.RemainingFraction > bestAnyFallback {
+					bestAnyFallback = bucket.RemainingFraction
+				}
+				if isGemini && bucket.RemainingFraction > bestGeminiFallback {
+					bestGeminiFallback = bucket.RemainingFraction
 				}
 			}
 		}
 	}
 
-	if bestGeminiFraction >= 0 {
-		return bestGeminiFraction
+	if bestGemini5H >= 0 {
+		return bestGemini5H
 	}
-	if bestAnyFraction >= 0 {
-		return bestAnyFraction
+	if bestGeminiFallback >= 0 {
+		return bestGeminiFallback
 	}
-
-	// Fallback to weekly/available buckets if no 5h bucket exists (e.g., brand new account)
-	for _, group := range summary.Groups {
-		gName := strings.ToLower(strings.TrimSpace(group.DisplayName))
-		gDesc := strings.ToLower(strings.TrimSpace(group.Description))
-
-		for _, bucket := range group.Buckets {
-			d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
-			b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
-			isGemini := strings.Contains(gName, "gemini") || strings.Contains(gDesc, "gemini") || strings.Contains(d, "gemini") || strings.Contains(b, "gemini")
-
-			if bucket.RemainingFraction > bestAnyFraction {
-				bestAnyFraction = bucket.RemainingFraction
-			}
-			if isGemini && bucket.RemainingFraction > bestGeminiFraction {
-				bestGeminiFraction = bucket.RemainingFraction
-			}
-		}
+	if bestAny5H >= 0 {
+		return bestAny5H
 	}
-
-	if bestGeminiFraction >= 0 {
-		return bestGeminiFraction
-	}
-	return bestAnyFraction
+	return bestAnyFallback
 }
 
 // CalculateWeeklyQuotaScore extracts the highest remaining weekly quota fraction for Gemini models from a QuotaSummary.
@@ -100,19 +91,18 @@ func CalculateWeeklyQuotaScore(summary *QuotaSummary) float64 {
 	bestGeminiFraction := -1.0
 	bestAnyFraction := -1.0
 
-	for _, group := range summary.Groups {
+	for i := range summary.Groups {
+		group := &summary.Groups[i]
+		is3P, isGroupGemini := classifyQuotaGroup(group)
 		gName := strings.ToLower(strings.TrimSpace(group.DisplayName))
 		gDesc := strings.ToLower(strings.TrimSpace(group.Description))
 
 		for _, bucket := range group.Buckets {
-			w := strings.ToLower(strings.TrimSpace(bucket.Window))
-			d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
-			b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
-
-			if w == "weekly" || strings.Contains(w, "week") || strings.Contains(w, "7d") ||
-				strings.Contains(d, "week") || strings.Contains(b, "week") || strings.Contains(b, "7d") {
-				isGemini := strings.Contains(gName, "gemini") || strings.Contains(gDesc, "gemini") ||
-					strings.Contains(d, "gemini") || strings.Contains(b, "gemini")
+			_, isWeekly := classifyQuotaKeyWindow(bucket.Window, bucket.DisplayName, bucket.BucketID)
+			if isWeekly {
+				d := strings.ToLower(strings.TrimSpace(bucket.DisplayName))
+				b := strings.ToLower(strings.TrimSpace(bucket.BucketID))
+				isGemini := !is3P && (isGroupGemini || IsGeminiModel(gName) || IsGeminiModel(gDesc) || IsGeminiModel(d) || IsGeminiModel(b))
 
 				if bucket.RemainingFraction > bestAnyFraction {
 					bestAnyFraction = bucket.RemainingFraction

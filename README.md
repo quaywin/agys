@@ -199,7 +199,7 @@ agys run --all -- status
 agys run -a -- status
 ```
 
-> **Smart Model & Effort Defaults**: `agys run` automatically defaults to `--model gemini-3.8-flash --effort high` if no model or reasoning effort is explicitly passed in your arguments. You can override at any time with `-m / --model` or `--effort` (supports `--model latest` or `--model auto` to automatically resolve to the highest model).
+> **Smart Model & Effort Defaults**: `agys run` automatically defaults to `--model gemini-3.8-flash --effort high` when no model or reasoning effort is set, while preserving explicit or saved selections such as **Gemini 4 Hydrogen (`gemini-4-hydrogen`)** and **`--effort xhigh`**. You can override at any time with `-m / --model` or `--effort` (`low|medium|high|xhigh|max`), or use aliases (`latest`, `auto`, `flash`, `hydrogen`, `pro`).
 
 ### 6. Search & Resume Conversation Sessions (`agys resume`)
 List and resume previous conversation sessions by project and profile with interactive prompt search (`/`), workspace grouping (`Ctrl+F`), preserved CLI flags, and workspace-aware fallback:
@@ -419,7 +419,7 @@ agys health
 * 🩺 **Binary Audit**: Detects `agy` installation path, reports installed version, and compares against the latest GitHub release.
 * 🔑 **Credential & Token Health**: Checks OAuth token validity, remaining lifetime, and auto-refresh readiness for all profiles.
 * 🛡️ **macOS Keychain & Sandboxing**: Verifies that profile Keychain symlinks and token isolation are intact.
-* ⚡ **Model Discovery**: Validates cached Flash & Pro models and cache freshness.
+* ⚡ **Model Discovery**: Validates cached Flash, Gemini 4 Flagship (`gemini-4-hydrogen`), Pro models, and supported effort levels.
 * 📡 **Herdr Connectivity**: Verifies active pane context and test-pings UNIX domain socket RPC when running inside Herdr.
 
 ### 16. Profile Utilities: Clone, Export, Import, Rename, Delete
@@ -485,10 +485,10 @@ agys upgrade --force
 
 ### 19. AI Model Discovery & Auto-Detection (`agys models`)
 
-`agys` automatically discovers and selects the highest version in the Gemini Flash model series from `agy` without requiring code updates when Google releases new versions:
+`agys` automatically discovers available models and supported reasoning effort levels (`low`, `medium`, `high`, `xhigh`, `max`) directly from `agy` — including **Gemini 4 Hydrogen (`gemini-4-hydrogen`)** and the Gemini Flash series — without requiring code updates when Google releases new versions:
 
 ```bash
-# Display detected highest Flash & Pro models and cached models
+# Display detected highest Flash & Flagship/Hydrogen models, supported efforts, and cached models
 agys models
 
 # Force an immediate refresh from agy CLI

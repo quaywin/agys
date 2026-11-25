@@ -211,9 +211,6 @@ Examples:
 			}
 		}
 
-		// Ensure default model (gemini-3.8-flash) and reasoning effort (high) if not specified
-		agyArgs = EnsureDefaultModelAndEffort(agyArgs)
-
 		// 1. Start local HTTP proxy and tunnel API requests back to local Mac (bypasses remote IP geo-blocking)
 		proxyPort, cleanupProxy, err := startLocalHTTPProxy()
 		if err != nil {
@@ -245,6 +242,12 @@ Examples:
 		exists, _, err := profile.Exists(targetProfile)
 		if err != nil || !exists {
 			return fmt.Errorf("local profile %q does not exist. Use `agys add %s` to create it first", targetProfile, targetProfile)
+		}
+		if profileDir, dirErr := profile.GetProfileDir(targetProfile); dirErr == nil {
+			activeModel, activeEffort := profile.ResolveActiveModelAndEffort(profileDir, "", "")
+			agyArgs = EnsureDefaultModelAndEffortWithOptions(agyArgs, activeModel, activeEffort)
+		} else {
+			agyArgs = EnsureDefaultModelAndEffort(agyArgs)
 		}
 		fmt.Fprintf(os.Stderr, "[agys] Syncing local profile %q to %s...\n", targetProfile, server)
 		if err := syncProfileToRemote(cmd.Context(), server, targetProfile); err != nil {

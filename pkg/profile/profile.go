@@ -164,6 +164,7 @@ func Create(name string) (string, error) {
 	_ = EnsureKeychain(profileDir)
 	_ = SyncHerdrIntegration(profileDir)
 	_ = EnsureGitConfig(profileDir)
+	_ = EnsureGlobalSkills(profileDir)
 	_ = EnsureOnboardingCompleted(profileDir)
 	return profileDir, nil
 }
@@ -370,6 +371,7 @@ func BuildCmdContext(ctx context.Context, profileDir string, args ...string) *ex
 	_ = EnsureKeychain(profileDir)
 	_ = SyncHerdrIntegration(profileDir)
 	_ = EnsureGitConfig(profileDir)
+	_ = EnsureGlobalSkills(profileDir)
 
 	agyPath := GetAgyPath()
 

@@ -600,6 +600,32 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 	return outStr, nil
 }
 
+// BuildCommitCheckArgs builds `--model` and `--effort` arguments for agy commit checks safely,
+// resolving aliases, skipping effort injection for non-effort or variant-suffixed models, and clamping unsupported efforts.
+func BuildCommitCheckArgs(model string, effort string) []string {
+	if model == "" || model == "latest" || model == "auto" {
+		model = GetLatestGeminiModel()
+	} else if resolvedAlias := ResolveModelAlias(model); resolvedAlias != "" {
+		model = resolvedAlias
+	}
+
+	baseModel, embeddedEffort := SplitModelAndEffort(model)
+	explicitEffort := strings.ToLower(strings.TrimSpace(effort))
+
+	var extraArgs []string
+	if model != "" {
+		extraArgs = append(extraArgs, "--model", model)
+	}
+	if explicitEffort != "" {
+		if ModelSupportsEffort(baseModel) {
+			extraArgs = append(extraArgs, "--effort", explicitEffort)
+		}
+	} else if embeddedEffort == "" && ModelSupportsEffort(baseModel) {
+		extraArgs = append(extraArgs, "--effort", ClampEffortForModel(baseModel, DefaultCommitEffort))
+	}
+	return extraArgs
+}
+
 // RunAgyCommitCheck performs the AI review and/or commit message generation using the specified profile.
 func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []string, diffContent string, diffStat string, userMsg string, noCheck bool, model string, effort string, customPrompt string) (*CommitCheckResult, error) {
 	defer CleanInternalCommitSessions(profileDir)
@@ -649,20 +675,7 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 		promptBuilder.WriteString("COMMIT_MESSAGE:\n<conventional commit title>\n\n- <bullet point 1>\n- <bullet point 2>\n")
 	}
 
-	if model == "" || model == "latest" || model == "auto" {
-		model = GetLatestGeminiModel()
-	}
-	if effort == "" {
-		effort = DefaultCommitEffort
-	}
-
-	var extraArgs []string
-	if model != "" {
-		extraArgs = append(extraArgs, "--model", model)
-	}
-	if effort != "" {
-		extraArgs = append(extraArgs, "--effort", effort)
-	}
+	extraArgs := BuildCommitCheckArgs(model, effort)
 
 	outStr, err := ExecAgyPrompt(ctx, profileDir, promptBuilder.String(), extraArgs...)
 	if err != nil {

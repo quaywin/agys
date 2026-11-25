@@ -85,5 +85,13 @@ func TestSSHCommandModelDefaults(t *testing.T) {
 			t.Errorf("expected custom model to be preserved, got %v", res)
 		}
 	})
+
+	t.Run("Variant suffixed gemini-4-hydrogen-xhigh preserved without conflicting effort", func(t *testing.T) {
+		agyArgs := []string{"--model", "gemini-4-hydrogen-xhigh"}
+		res := EnsureDefaultModelAndEffort(agyArgs)
+		if len(res) != 2 || res[0] != "--model" || res[1] != "gemini-4-hydrogen-xhigh" {
+			t.Errorf("expected variant model without --effort conflict, got %v", res)
+		}
+	})
 }
 
