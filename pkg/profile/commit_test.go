@@ -63,8 +63,8 @@ func TestFormatCompactDiffForPrompt(t *testing.T) {
 }
 
 func TestDefaultCommitConstants(t *testing.T) {
-	if DefaultCommitModel != "gemini-3.8-flash" {
-		t.Errorf("expected DefaultCommitModel to be 'gemini-3.8-flash', got %q", DefaultCommitModel)
+	if DefaultCommitModel != "gpt-oss-120b-medium" {
+		t.Errorf("expected DefaultCommitModel to be 'gpt-oss-120b-medium', got %q", DefaultCommitModel)
 	}
 	if DefaultCommitEffort != "low" {
 		t.Errorf("expected DefaultCommitEffort to be 'low', got %q", DefaultCommitEffort)
@@ -100,11 +100,14 @@ func TestBuildCommitCheckArgs(t *testing.T) {
 		effort string
 		want   []string
 	}{
-		{"default flash and low", "", "", []string{"--model", "gemini-3.8-flash", "--effort", "low"}},
+		{"default gpt-oss-120b-medium omits effort", "", "", []string{"--model", "gpt-oss-120b-medium"}},
+		{"auto alias resolves flash and low", "auto", "", []string{"--model", "gemini-3.8-flash", "--effort", "low"}},
+		{"flash alias defaults to low", "flash", "", []string{"--model", "gemini-3.8-flash", "--effort", "low"}},
 		{"hydrogen alias defaults to low", "hydrogen", "", []string{"--model", "gemini-4-hydrogen", "--effort", "low"}},
 		{"hydrogen with xhigh", "gemini-4-hydrogen", "xhigh", []string{"--model", "gemini-4-hydrogen", "--effort", "xhigh"}},
 		{"variant suffixed avoids conflict", "gemini-4-hydrogen-xhigh", "", []string{"--model", "gemini-4-hydrogen-xhigh"}},
 		{"claude omits effort", "claude-sonnet-4-6", "", []string{"--model", "claude-sonnet-4-6"}},
+		{"gpt-oss ignores effort flag", "gpt-oss-120b", "low", []string{"--model", "gpt-oss-120b"}},
 	}
 
 	for _, tc := range tests {

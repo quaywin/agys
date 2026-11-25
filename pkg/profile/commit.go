@@ -15,7 +15,7 @@ import (
 const (
 	MaxDiffBytesForPrompt = 16000 // 16 KB total limit for compact prompt context
 	MaxPerFileDiffBytes   = 3000  // 3 KB limit per file
-	DefaultCommitModel    = DefaultGeminiModel
+	DefaultCommitModel    = "gpt-oss-120b-medium"
 	DefaultCommitEffort   = "low"
 )
 
@@ -601,9 +601,12 @@ func ExecAgyPrompt(ctx context.Context, profileDir string, prompt string, extraA
 }
 
 // BuildCommitCheckArgs builds `--model` and `--effort` arguments for agy commit checks safely,
-// resolving aliases, skipping effort injection for non-effort or variant-suffixed models, and clamping unsupported efforts.
+// defaulting to gpt-oss-120b-medium (to preserve Gemini quota), resolving aliases,
+// skipping effort injection for non-effort or variant-suffixed models, and clamping unsupported efforts.
 func BuildCommitCheckArgs(model string, effort string) []string {
-	if model == "" || model == "latest" || model == "auto" {
+	if model == "" {
+		model = DefaultCommitModel
+	} else if model == "latest" || model == "auto" {
 		model = GetLatestGeminiModel()
 	} else if resolvedAlias := ResolveModelAlias(model); resolvedAlias != "" {
 		model = resolvedAlias
@@ -678,6 +681,19 @@ func RunAgyCommitCheck(ctx context.Context, profileDir string, stagedFiles []str
 	extraArgs := BuildCommitCheckArgs(model, effort)
 
 	outStr, err := ExecAgyPrompt(ctx, profileDir, promptBuilder.String(), extraArgs...)
+	if err != nil && strings.TrimSpace(model) == "" && ctx.Err() == nil {
+		fallbackModel := GetLatestGeminiModel()
+		if fallbackModel != "" && fallbackModel != DefaultCommitModel {
+			fmt.Fprintf(os.Stderr, "[agys] Default commit model %q failed (%v); falling back to %s...\n", DefaultCommitModel, err, fallbackModel)
+			fallbackArgs := BuildCommitCheckArgs(fallbackModel, effort)
+			fbOut, fbErr := ExecAgyPrompt(ctx, profileDir, promptBuilder.String(), fallbackArgs...)
+			if fbErr == nil {
+				res := ParseCommitCheckResult(fbOut, userMsg)
+				return &res, nil
+			}
+			return nil, fmt.Errorf("%w (fallback %s failed: %v)", err, fallbackModel, fbErr)
+		}
+	}
 	if err != nil {
 		if strings.TrimSpace(outStr) == "" {
 			return nil, err

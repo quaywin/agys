@@ -249,8 +249,8 @@ func init() {
 	commitCmd.Flags().BoolVarP(&commitPush, "push", "p", false, "Automatically push to current git branch after committing")
 	commitCmd.Flags().BoolVar(&commitNoCheck, "no-check", false, "Skip AI code review check")
 	commitCmd.Flags().BoolVar(&commitDryRun, "dry-run", false, "Perform AI review and message generation without executing git commit")
-	commitCmd.Flags().StringVar(&commitModel, "model", "", "Override model for agy commit check (defaults to latest Gemini Flash)")
-	commitCmd.Flags().StringVar(&commitEffort, "effort", "", "Override reasoning effort for agy commit check (defaults to low; supports low|medium|high|xhigh|max)")
+	commitCmd.Flags().StringVar(&commitModel, "model", "", "Override model for agy commit check (defaults to gpt-oss-120b-medium)")
+	commitCmd.Flags().StringVar(&commitEffort, "effort", "", "Override reasoning effort for agy commit check when using Gemini (defaults to low; supports low|medium|high|xhigh|max)")
 	commitCmd.Flags().StringVar(&commitPrompt, "prompt", "", "Additional custom prompt instructions for commit check")
 
 	_ = commitCmd.RegisterFlagCompletionFunc("model", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
